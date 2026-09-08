@@ -128,6 +128,14 @@ Hook installation is always explicit:
 Belay does not install hooks during ordinary `local`, `scan`, `agents`, `mcp`,
 or `doctor` commands.
 
+## Keychain troubleshooting
+
+Belay creates its Local encryption key through macOS Keychain without asking
+for password data. If `/usr/bin/security` prints `password data for new item:`,
+stop Belay instead of entering your login password. That prompt identifies an
+affected pre-hotfix build; update to a build containing the noninteractive
+Keychain creation fix before retrying.
+
 ## Read-only MCP
 
 Belay MCP uses stdio and exposes exactly six read-only tools. Use an absolute

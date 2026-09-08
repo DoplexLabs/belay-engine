@@ -15,6 +15,8 @@ import (
 
 const keychainService = "dev.doplex.belay.local.data-key.v1"
 const keychainCommandTimeout = 5 * time.Second
+const persistedStoreIDPrefix = "store_"
+const persistedStoreIDHexLength = 32
 
 type securityCommandResult struct {
 	stdout   []byte
@@ -100,29 +102,42 @@ func (p *MacOSKeychainProvider) Create(ctx context.Context, storeID string) ([]b
 	if p.goos != "darwin" {
 		return nil, errors.New("macOS Keychain is unavailable on this platform")
 	}
-	if storeID == "" {
-		return nil, errors.New("local store ID is required")
+	if !validPersistedStoreID(storeID) {
+		return nil, errors.New("local store ID has invalid format")
 	}
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(p.random, key); err != nil {
+		zeroBytes(key)
 		return nil, errors.New("generate local data key")
 	}
-	encoded := base64.RawStdEncoding.EncodeToString(key)
+	encoded := make([]byte, base64.RawStdEncoding.EncodedLen(len(key)))
+	base64.RawStdEncoding.Encode(encoded, key)
+	defer zeroBytes(encoded)
+
+	var commandInput bytes.Buffer
+	commandInput.Grow(
+		len("add-generic-password -a  -s  -w \n") +
+			len(storeID) + len(keychainService) + len(encoded),
+	)
+	commandInput.WriteString("add-generic-password -a ")
+	commandInput.WriteString(storeID)
+	commandInput.WriteString(" -s ")
+	commandInput.WriteString(keychainService)
+	commandInput.WriteString(" -w ")
+	commandInput.Write(encoded)
+	commandInput.WriteByte('\n')
+	defer zeroBytes(commandInput.Bytes())
+
 	commandContext, cancel := p.commandContext(ctx)
 	defer cancel()
 	result := p.runner.run(
 		commandContext,
-		strings.NewReader(encoded+"\n"),
-		"add-generic-password",
-		"-a", storeID,
-		"-s", keychainService,
-		"-l", "Belay Local encrypted store "+storeID,
-		"-w",
+		bytes.NewReader(commandInput.Bytes()),
+		"-q",
+		"-i",
 	)
 	if result.err != nil {
-		for index := range key {
-			key[index] = 0
-		}
+		zeroBytes(key)
 		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
 			return nil, errors.New("macOS Keychain command timed out")
 		}
@@ -132,6 +147,20 @@ func (p *MacOSKeychainProvider) Create(ctx context.Context, storeID string) ([]b
 		return nil, errors.New("store local data key in macOS Keychain")
 	}
 	return key, nil
+}
+
+func validPersistedStoreID(storeID string) bool {
+	if len(storeID) != len(persistedStoreIDPrefix)+persistedStoreIDHexLength ||
+		!strings.HasPrefix(storeID, persistedStoreIDPrefix) {
+		return false
+	}
+	for _, character := range storeID[len(persistedStoreIDPrefix):] {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *MacOSKeychainProvider) commandContext(parent context.Context) (context.Context, context.CancelFunc) {
