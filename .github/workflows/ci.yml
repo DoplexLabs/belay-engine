@@ -39,3 +39,6 @@ jobs:
 
       - name: Diff hygiene
         run: git diff --check
+
+      - name: Alpha release-surface checks
+        run: make verify-release-surface
