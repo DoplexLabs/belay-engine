@@ -21,8 +21,9 @@ const (
 )
 
 type Server struct {
-	read *readmodel.Service
-	mcp  *mcp.Server
+	read   *readmodel.Service
+	mcp    *mcp.Server
+	strict *strictToolAdapter
 }
 
 type toolOutput[T any] struct {
@@ -84,7 +85,11 @@ func New(read *readmodel.Service) (*Server, error) {
 		&mcp.Implementation{Name: serverName, Version: serverVersion},
 		&mcp.ServerOptions{Capabilities: capabilities},
 	)
-	server := &Server{read: read, mcp: protocolServer}
+	server := &Server{
+		read:   read,
+		mcp:    protocolServer,
+		strict: newStrictToolAdapter(strictToolDeadline),
+	}
 	server.registerTools()
 	return server, nil
 }
@@ -93,7 +98,7 @@ func (s *Server) RunStdio(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("local MCP server requires a context")
 	}
-	return s.mcp.Run(ctx, &mcp.StdioTransport{})
+	return s.mcp.Run(ctx, &BoundedStdioTransport{})
 }
 
 func (s *Server) registerTools() {
