@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,20 +85,65 @@ func TestEdgeAcceptanceRecordFamiliesAndRouting(t *testing.T) {
 		t.Errorf("import summary counters = %+v", summary)
 	}
 
-	var category, diagnosticCode string
-	if err := store.DB().QueryRowContext(ctx,
-		"SELECT category FROM quarantine").Scan(&category); err != nil {
-		t.Fatalf("query quarantine category: %v", err)
+	quarantines, err := store.Quarantines(ctx)
+	if err != nil {
+		t.Fatalf("Quarantines() error = %v", err)
 	}
-	if category != "enforcement_rejected" {
-		t.Errorf("quarantine category = %q, want enforcement_rejected", category)
+	if len(quarantines) != 1 || quarantines[0].Category != "enforcement_rejected" {
+		t.Errorf("quarantines = %+v, want one enforcement rejection", quarantines)
 	}
-	if err := store.DB().QueryRowContext(ctx,
-		"SELECT code FROM diagnostics").Scan(&diagnosticCode); err != nil {
-		t.Fatalf("query diagnostic code: %v", err)
+	diagnosticCodes, err := store.DiagnosticCodes(ctx)
+	if err != nil {
+		t.Fatalf("DiagnosticCodes() error = %v", err)
 	}
-	if diagnosticCode != "numbat.warn" {
-		t.Errorf("diagnostic code = %q, want numbat.warn", diagnosticCode)
+	if !slices.Equal(diagnosticCodes, []string{"numbat.warn"}) {
+		t.Errorf("diagnostic codes = %q, want numbat.warn", diagnosticCodes)
+	}
+	finding, err := store.GetFinding(ctx, "finding-sanitized-1")
+	if err != nil {
+		t.Fatalf("GetFinding() error = %v", err)
+	}
+	timeline := onlySessionTimeline(t, ctx, store)
+	var citedCanonicalID string
+	for _, event := range timeline {
+		if event.Source.RecordID == "synthetic-e07" {
+			citedCanonicalID = event.EventID
+			break
+		}
+	}
+	if citedCanonicalID == "" ||
+		!slices.Equal(finding.CitedEventIDs, []string{citedCanonicalID}) {
+		t.Errorf(
+			"finding citations = %q, want canonical event ID %q",
+			finding.CitedEventIDs,
+			citedCanonicalID,
+		)
+	}
+}
+
+func TestEdgeAcceptanceUnresolvedFindingCitationIsQuarantined(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+	record := otherRecordFamilies(t)[0].(map[string]any)
+	record["cited_event_ids"] = []string{"missing-upstream-event"}
+
+	report, err := newTestImporter(store).Import(
+		ctx,
+		bytes.NewReader(appendNDJSON(t, nil, record)),
+	)
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if report.FindingsAccepted != 0 || report.Quarantined != 1 {
+		t.Fatalf("report = %+v, want unresolved finding quarantined", report)
+	}
+	quarantines, err := store.Quarantines(ctx)
+	if err != nil {
+		t.Fatalf("Quarantines() error = %v", err)
+	}
+	if len(quarantines) != 1 ||
+		quarantines[0].Category != "unresolved_finding_citation" {
+		t.Fatalf("quarantines = %+v", quarantines)
 	}
 }
 
@@ -177,45 +223,24 @@ func TestEdgeAcceptanceMalformedAndOversizedLinesContinueWithoutPayloadPersisten
 		t.Errorf("events row count = %d, want 1", got)
 	}
 
-	rows, err := store.DB().QueryContext(ctx, `
-		SELECT line_number, category, reason, record_sha256
-		FROM quarantine
-		ORDER BY line_number`)
+	quarantines, err := store.Quarantines(ctx)
 	if err != nil {
-		t.Fatalf("query quarantine: %v", err)
-	}
-	defer rows.Close()
-
-	type quarantineRow struct {
-		line     int64
-		category string
-		reason   string
-		digest   string
-	}
-	var gotRows []quarantineRow
-	for rows.Next() {
-		var row quarantineRow
-		if err := rows.Scan(&row.line, &row.category, &row.reason, &row.digest); err != nil {
-			t.Fatalf("scan quarantine: %v", err)
-		}
-		gotRows = append(gotRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("quarantine rows: %v", err)
+		t.Fatalf("Quarantines() error = %v", err)
 	}
 	wantCategories := []string{"malformed_json", "oversized_record"}
-	if len(gotRows) != len(wantCategories) {
-		t.Fatalf("quarantine rows = %d, want %d", len(gotRows), len(wantCategories))
+	if len(quarantines) != len(wantCategories) {
+		t.Fatalf("quarantine rows = %d, want %d", len(quarantines), len(wantCategories))
 	}
-	for index, row := range gotRows {
-		if row.line != int64(index+1) || row.category != wantCategories[index] {
+	for index, row := range quarantines {
+		if row.LineNumber != int64(index+1) || row.Category != wantCategories[index] {
 			t.Errorf("quarantine row %d = %+v, want line %d category %q",
 				index, row, index+1, wantCategories[index])
 		}
-		if !strings.HasPrefix(row.digest, "sha256:") || len(row.digest) != len("sha256:")+64 {
-			t.Errorf("quarantine digest = %q, want payload-free SHA-256", row.digest)
+		if !strings.HasPrefix(row.RecordSHA256, "sha256:") ||
+			len(row.RecordSHA256) != len("sha256:")+64 {
+			t.Errorf("quarantine digest = %q, want payload-free SHA-256", row.RecordSHA256)
 		}
-		storedMetadata := row.category + row.reason + row.digest
+		storedMetadata := row.Category + row.Reason + row.RecordSHA256
 		for _, canary := range []string{malformedCanary, oversizedCanary} {
 			if strings.Contains(storedMetadata, canary) {
 				t.Errorf("quarantine metadata leaked %q", canary)
@@ -250,16 +275,15 @@ func TestEdgeAcceptanceEnforcementIsRejected(t *testing.T) {
 		t.Errorf("import_runs row count = %d, want 1", got)
 	}
 
-	var category, reason, digest string
-	if err := store.DB().QueryRowContext(ctx, `
-		SELECT category, reason, record_sha256
-		FROM quarantine`).Scan(&category, &reason, &digest); err != nil {
-		t.Fatalf("query quarantine: %v", err)
+	quarantines, err := store.Quarantines(ctx)
+	if err != nil {
+		t.Fatalf("Quarantines() error = %v", err)
 	}
-	if category != "enforcement_rejected" ||
-		reason != "Belay V1 does not accept enforcement records" ||
-		!strings.HasPrefix(digest, "sha256:") {
-		t.Errorf("enforcement quarantine = (%q, %q, %q)", category, reason, digest)
+	if len(quarantines) != 1 ||
+		quarantines[0].Category != "enforcement_rejected" ||
+		quarantines[0].Reason != "Belay V1 does not accept enforcement records" ||
+		!strings.HasPrefix(quarantines[0].RecordSHA256, "sha256:") {
+		t.Errorf("enforcement quarantines = %+v", quarantines)
 	}
 }
 
@@ -274,34 +298,6 @@ func TestEdgeAcceptancePrivacyCanariesNeverReachCanonicalOrSQLite(t *testing.T) 
 	}
 	if report.EventsAccepted != 18 || report.Quarantined != 0 {
 		t.Fatalf("report = %+v, want all privacy records accepted", report)
-	}
-
-	rows, err := store.DB().QueryContext(ctx,
-		"SELECT canonical_json FROM events ORDER BY source_sequence")
-	if err != nil {
-		t.Fatalf("query canonical JSON: %v", err)
-	}
-	var canonicalBodies [][]byte
-	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			rows.Close()
-			t.Fatalf("scan canonical JSON: %v", err)
-		}
-		canonicalBodies = append(canonicalBodies, append([]byte(nil), body...))
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("close canonical rows: %v", err)
-	}
-	if len(canonicalBodies) != 18 {
-		t.Fatalf("canonical JSON rows = %d, want 18", len(canonicalBodies))
-	}
-	for index, body := range canonicalBodies {
-		for _, canary := range prohibited {
-			if bytes.Contains(body, []byte(canary)) {
-				t.Errorf("canonical JSON row %d leaked prohibited canary %q", index+1, canary)
-			}
-		}
 	}
 
 	timeline := onlySessionTimeline(t, ctx, store)
@@ -419,7 +415,7 @@ func newTestImporter(store *local.Store) *pipeline.Importer {
 func openTestStore(t *testing.T) (*local.Store, string) {
 	t.Helper()
 	databasePath := filepath.Join(t.TempDir(), "belay-local.sqlite")
-	store, err := local.Open(databasePath)
+	store, err := local.Open(databasePath, acceptanceKeyProvider{})
 	if err != nil {
 		t.Fatalf("local.Open() error = %v", err)
 	}
@@ -427,6 +423,16 @@ func openTestStore(t *testing.T) (*local.Store, string) {
 		_ = store.Close()
 	})
 	return store, databasePath
+}
+
+type acceptanceKeyProvider struct{}
+
+func (acceptanceKeyProvider) Load(context.Context, string) ([]byte, error) {
+	return bytes.Repeat([]byte{0x5a}, 32), nil
+}
+
+func (acceptanceKeyProvider) Create(context.Context, string) ([]byte, error) {
+	return nil, errors.New("acceptance key provider must not create keys")
 }
 
 func allEventTypesFixture(t *testing.T) []byte {

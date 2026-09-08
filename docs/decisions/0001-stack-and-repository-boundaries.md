@@ -41,9 +41,10 @@ with Local.
 
 - Use SQLite for Local indexes and control state. Immutable minimized events
   remain logically append-only.
-- Prototype encrypted event payloads using an OS-keystore-backed data key and
-  application-layer authenticated encryption. Do not commit to SQLCipher or a
-  CGO dependency until packaging tests compare the tradeoffs.
+- Encrypt Local event/finding payload blobs with application-layer AES-256-GCM
+  and an OS-keystore-backed data key while leaving only minimized index fields
+  plaintext. Keep the pure-Go SQLite driver; do not introduce SQLCipher or a
+  CGO dependency.
 - Use Postgres for Teams events, control state, jobs, and projections.
 - Define canonical contracts in JSON Schema and OpenAPI. Generate Go and
   TypeScript types where practical; generated code is never the source of truth.

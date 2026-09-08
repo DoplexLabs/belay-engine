@@ -35,6 +35,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runSessions(ctx, args[1:], stdout, stderr)
 	case "timeline":
 		return runTimeline(ctx, args[1:], stdout, stderr)
+	case "prune":
+		return runPrune(ctx, args[1:], stdout, stderr)
 	case "verify-numbat":
 		return runVerifyNumbat(ctx, args[1:], stderr)
 	case "help", "-h", "--help":
@@ -70,7 +72,7 @@ func runImport(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		defer file.Close()
 		input = file
 	}
-	store, err := local.Open(*dbPath)
+	store, err := openLocalStore(*dbPath)
 	if err != nil {
 		return err
 	}
@@ -93,7 +95,7 @@ func runSessions(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if *dbPath == "" {
 		return errors.New("--db is required")
 	}
-	store, err := local.Open(*dbPath)
+	store, err := openLocalStore(*dbPath)
 	if err != nil {
 		return err
 	}
@@ -117,7 +119,7 @@ func runTimeline(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if *dbPath == "" || *sessionID == "" {
 		return errors.New("--db and --session are required")
 	}
-	store, err := local.Open(*dbPath)
+	store, err := openLocalStore(*dbPath)
 	if err != nil {
 		return err
 	}
@@ -127,6 +129,44 @@ func runTimeline(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 	return writeJSON(stdout, response)
+}
+
+func runPrune(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("prune", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dbPath := flags.String("db", "", "path to the Belay Local SQLite database")
+	maxAge := flags.Duration("max-age", 0, "delete payloads older than this age")
+	maxEvents := flags.Int("max-events", 0, "retain at most this many canonical events")
+	maxBytes := flags.Int64("max-bytes", 0, "retain at most this many encrypted payload bytes")
+	apply := flags.Bool("apply", false, "apply the reported destructive pruning plan")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *dbPath == "" {
+		return errors.New("--db is required")
+	}
+	policy := local.RetentionPolicy{
+		MaxAge:          *maxAge,
+		MaxEventCount:   *maxEvents,
+		MaxPayloadBytes: *maxBytes,
+	}
+	store, err := openLocalStore(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if !*apply {
+		diagnostics, err := store.RetentionDiagnostics(ctx, policy, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, diagnostics)
+	}
+	result, err := store.Prune(ctx, policy, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, result)
 }
 
 func runVerifyNumbat(ctx context.Context, args []string, stderr io.Writer) error {
@@ -150,6 +190,10 @@ func runVerifyNumbat(ctx context.Context, args []string, stderr io.Writer) error
 	})
 }
 
+func openLocalStore(path string) (*local.Store, error) {
+	return local.Open(path, local.NewMacOSKeychainProvider())
+}
+
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
@@ -163,5 +207,6 @@ Commands:
   import          import strict Numbat 0.3.0 NDJSON into Belay Local
   sessions        list Local session summaries
   timeline        get one Local session timeline
+  prune           inspect retention bounds; deletion requires --apply
   verify-numbat   verify a pinned Numbat binary checksum and version marker`)
 }

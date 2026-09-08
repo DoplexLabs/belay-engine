@@ -4,11 +4,13 @@ package local
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"path/filepath"
@@ -24,7 +26,15 @@ import (
 var migrationFiles embed.FS
 
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	cipher    *payloadCipher
+	storeID   string
+	mutations *mutationAuthorizer
+}
+
+type OpenOptions struct {
+	KeyProvider KeyProvider
+	Random      io.Reader
 }
 
 type Finding struct {
@@ -59,7 +69,23 @@ type Quarantine struct {
 	RecordSHA256 string
 }
 
-func Open(path string) (*Store, error) {
+var ErrUnresolvedCitation = errors.New("finding citation could not be resolved")
+
+func Open(path string, keyProvider KeyProvider) (*Store, error) {
+	return OpenWithOptions(path, OpenOptions{KeyProvider: keyProvider})
+}
+
+func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
+	if options.KeyProvider == nil {
+		return nil, errors.New("local key provider is required")
+	}
+	if options.Random == nil {
+		options.Random = rand.Reader
+	}
+	mutations, err := newMutationAuthorizer()
+	if err != nil {
+		return nil, err
+	}
 	dsn, err := sqliteDSN(path)
 	if err != nil {
 		return nil, err
@@ -73,8 +99,27 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("connect local database: %w", err)
 	}
-	store := &Store{db: db}
+	if _, err := db.Exec("PRAGMA secure_delete = ON"); err != nil {
+		_ = db.Close()
+		return nil, errors.New("enable secure local deletion")
+	}
+	store := &Store{db: db, mutations: mutations}
 	if err := store.migrate(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.installMutationTriggers(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.initializeEncryptedPayloads(
+		context.Background(),
+		options.KeyProvider,
+		options.Random,
+	); err != nil {
+		if store.cipher != nil {
+			store.cipher.close()
+		}
 		_ = db.Close()
 		return nil, err
 	}
@@ -102,18 +147,26 @@ func sqliteDSN(path string) (string, error) {
 	query.Set("_foreign_keys", "on")
 	query.Set("_journal_mode", "WAL")
 	query.Set("_synchronous", "FULL")
+	query.Set("_txlock", "exclusive")
 	databaseURL.RawQuery = query.Encode()
 	return databaseURL.String(), nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
-
-func (s *Store) DB() *sql.DB { return s.db }
+func (s *Store) Close() error {
+	if s.cipher != nil {
+		s.cipher.close()
+	}
+	return s.db.Close()
+}
 
 func (s *Store) AppendEvent(ctx context.Context, event model.Event) (bool, error) {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return false, fmt.Errorf("encode canonical event: %w", err)
+	}
+	body, err = s.cipher.seal("event", event.EventID, "canonical_json", body)
+	if err != nil {
+		return false, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `
@@ -121,8 +174,8 @@ func (s *Store) AppendEvent(ctx context.Context, event model.Event) (bool, error
 			event_id, source_deduplication_key, schema_version, installation_id,
 			session_key, occurred_at, observed_at, source_sequence, event_type,
 			actor, action, outcome, source_agent, source_kind, source_record_id,
-			source_run_id, historical, canonical_json, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			source_run_id, historical, canonical_json, canonical_encoding, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_deduplication_key) DO NOTHING`,
 		event.EventID,
 		event.Source.DeduplicationKey,
@@ -142,6 +195,7 @@ func (s *Store) AppendEvent(ctx context.Context, event model.Event) (bool, error
 		event.Source.RunID,
 		boolInt(event.Historical.IsHistorical),
 		body,
+		payloadEncodingAESGCM,
 		now,
 	)
 	if err != nil {
@@ -199,16 +253,28 @@ func (s *Store) RecordImportSummary(ctx context.Context, summary ImportSummary) 
 }
 
 func (s *Store) RecordFinding(ctx context.Context, finding Finding) (bool, error) {
+	if finding.SourceRunID == "" || finding.SessionKey == "" || len(finding.CitedEventIDs) == 0 {
+		return false, ErrUnresolvedCitation
+	}
 	cited, err := json.Marshal(finding.CitedEventIDs)
 	if err != nil {
 		return false, err
 	}
-	result, err := s.db.ExecContext(ctx, `
+	cited, err = s.cipher.seal("finding", finding.FindingID, "cited_event_ids_json", cited)
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("begin finding persistence")
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO findings (
 			finding_id, source_run_id, session_key, detected_at, rule_id,
 			rule_version, severity, source_agent, confidence,
-			cited_event_ids_json, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cited_event_ids_json, cited_event_ids_encoding, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(finding_id) DO NOTHING`,
 		finding.FindingID,
 		finding.SourceRunID,
@@ -220,13 +286,94 @@ func (s *Store) RecordFinding(ctx context.Context, finding Finding) (bool, error
 		finding.SourceAgent,
 		finding.Confidence,
 		cited,
+		payloadEncodingAESGCM,
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return false, fmt.Errorf("record finding: %w", err)
 	}
 	inserted, err := result.RowsAffected()
-	return inserted == 1, err
+	if err != nil {
+		return false, errors.New("inspect finding persistence")
+	}
+	if inserted == 0 {
+		if err := tx.Commit(); err != nil {
+			return false, errors.New("complete duplicate finding persistence")
+		}
+		return false, nil
+	}
+	for _, eventID := range finding.CitedEventIDs {
+		var matching int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM events
+			WHERE event_id = ? AND source_run_id = ? AND session_key = ?`,
+			eventID,
+			finding.SourceRunID,
+			finding.SessionKey,
+		).Scan(&matching); err != nil {
+			return false, errors.New("validate canonical finding citation")
+		}
+		if matching != 1 {
+			return false, ErrUnresolvedCitation
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO finding_event_citations (finding_id, event_id)
+			VALUES (?, ?)`,
+			finding.FindingID,
+			eventID,
+		); err != nil {
+			return false, errors.New("persist canonical finding citation")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("commit finding persistence")
+	}
+	return true, nil
+}
+
+func (s *Store) ResolveCanonicalEventIDs(
+	ctx context.Context,
+	sourceRunID string,
+	sessionKey string,
+	sourceRecordIDs []string,
+) ([]string, error) {
+	if sourceRunID == "" || sessionKey == "" || len(sourceRecordIDs) == 0 {
+		return nil, ErrUnresolvedCitation
+	}
+	resolved := make([]string, 0, len(sourceRecordIDs))
+	for _, sourceRecordID := range sourceRecordIDs {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT event_id
+			FROM events
+			WHERE source_run_id = ? AND session_key = ? AND source_record_id = ?
+			ORDER BY event_id
+			LIMIT 2`,
+			sourceRunID,
+			sessionKey,
+			sourceRecordID,
+		)
+		if err != nil {
+			return nil, errors.New("resolve canonical finding citation")
+		}
+		var matches []string
+		for rows.Next() {
+			var eventID string
+			if err := rows.Scan(&eventID); err != nil {
+				rows.Close()
+				return nil, errors.New("resolve canonical finding citation")
+			}
+			matches = append(matches, eventID)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, errors.New("resolve canonical finding citation")
+		}
+		if len(matches) != 1 {
+			return nil, ErrUnresolvedCitation
+		}
+		resolved = append(resolved, matches[0])
+	}
+	return resolved, nil
 }
 
 func (s *Store) RecordQuarantine(ctx context.Context, quarantine Quarantine) error {
@@ -318,7 +465,7 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit 
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT canonical_json
+		SELECT event_id, canonical_json, canonical_encoding
 		FROM events
 		WHERE session_key = ?
 		ORDER BY source_sequence ASC, occurred_at ASC, event_id ASC
@@ -333,8 +480,13 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit 
 
 	var events []model.Event
 	for rows.Next() {
+		var eventID, encoding string
 		var body []byte
-		if err := rows.Scan(&body); err != nil {
+		if err := rows.Scan(&eventID, &body, &encoding); err != nil {
+			return nil, time.Time{}, err
+		}
+		body, err = s.cipher.open("event", eventID, "canonical_json", encoding, body)
+		if err != nil {
 			return nil, time.Time{}, err
 		}
 		var event model.Event
@@ -348,6 +500,55 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit 
 	}
 	dataThrough, err := s.dataThrough(ctx)
 	return events, dataThrough, err
+}
+
+func (s *Store) GetFinding(ctx context.Context, findingID string) (Finding, error) {
+	var result Finding
+	var sessionKey sql.NullString
+	var detectedAt, encoding string
+	var cited []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT finding_id, source_run_id, session_key, detected_at, rule_id,
+			rule_version, severity, source_agent, confidence,
+			cited_event_ids_json, cited_event_ids_encoding
+		FROM findings
+		WHERE finding_id = ?`,
+		findingID,
+	).Scan(
+		&result.FindingID,
+		&result.SourceRunID,
+		&sessionKey,
+		&detectedAt,
+		&result.RuleID,
+		&result.RuleVersion,
+		&result.Severity,
+		&result.SourceAgent,
+		&result.Confidence,
+		&cited,
+		&encoding,
+	)
+	if err != nil {
+		return Finding{}, err
+	}
+	result.SessionKey = sessionKey.String
+	result.DetectedAt, err = time.Parse(time.RFC3339Nano, detectedAt)
+	if err != nil {
+		return Finding{}, errors.New("decode stored finding timestamp")
+	}
+	cited, err = s.cipher.open(
+		"finding",
+		findingID,
+		"cited_event_ids_json",
+		encoding,
+		cited,
+	)
+	if err != nil {
+		return Finding{}, err
+	}
+	if err := json.Unmarshal(cited, &result.CitedEventIDs); err != nil {
+		return Finding{}, errors.New("decode stored finding payload")
+	}
+	return result, nil
 }
 
 func (s *Store) ImportRun(ctx context.Context, runID string) (ImportSummary, error) {
@@ -372,10 +573,60 @@ func (s *Store) ImportRun(ctx context.Context, runID string) (ImportSummary, err
 	return result, err
 }
 
+func (s *Store) Quarantines(ctx context.Context) ([]Quarantine, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(source_run_id, ''), line_number, category, reason, record_sha256
+		FROM quarantine
+		ORDER BY id`)
+	if err != nil {
+		return nil, errors.New("list quarantine diagnostics")
+	}
+	defer rows.Close()
+	var result []Quarantine
+	for rows.Next() {
+		var quarantine Quarantine
+		if err := rows.Scan(
+			&quarantine.SourceRunID,
+			&quarantine.LineNumber,
+			&quarantine.Category,
+			&quarantine.Reason,
+			&quarantine.RecordSHA256,
+		); err != nil {
+			return nil, errors.New("read quarantine diagnostic")
+		}
+		result = append(result, quarantine)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("list quarantine diagnostics")
+	}
+	return result, nil
+}
+
+func (s *Store) DiagnosticCodes(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT code FROM diagnostics ORDER BY id")
+	if err != nil {
+		return nil, errors.New("list diagnostic codes")
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, errors.New("read diagnostic code")
+		}
+		result = append(result, code)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("list diagnostic codes")
+	}
+	return result, nil
+}
+
 func (s *Store) Count(ctx context.Context, table string) (int, error) {
 	allowed := map[string]bool{
 		"events": true, "findings": true, "import_runs": true,
-		"quarantine": true, "diagnostics": true,
+		"quarantine": true, "diagnostics": true, "local_store_metadata": true,
+		"finding_event_citations": true,
 	}
 	if !allowed[table] {
 		return 0, errors.New("unsupported count table")

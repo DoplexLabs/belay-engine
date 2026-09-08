@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
@@ -190,6 +189,25 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 		if value.SessionID != "" {
 			sessionKey = numbatmap.SessionKey(value.SourceAgent, value.SessionID, "")
 		}
+		canonicalEventIDs, err := i.store.ResolveCanonicalEventIDs(
+			ctx,
+			value.RunID,
+			sessionKey,
+			value.CitedEventIDs,
+		)
+		if errors.Is(err, local.ErrUnresolvedCitation) {
+			report.Quarantined++
+			return i.store.RecordQuarantine(ctx, local.Quarantine{
+				SourceRunID:  value.RunID,
+				LineNumber:   line,
+				Category:     "unresolved_finding_citation",
+				Reason:       "finding citation did not resolve to one canonical event",
+				RecordSHA256: digest,
+			})
+		}
+		if err != nil {
+			return err
+		}
 		inserted, err := i.store.RecordFinding(ctx, local.Finding{
 			FindingID:     value.FindingID,
 			SourceRunID:   value.RunID,
@@ -200,7 +218,7 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 			Severity:      value.Severity,
 			SourceAgent:   value.SourceAgent,
 			Confidence:    value.Confidence,
-			CitedEventIDs: append([]string(nil), value.CitedEventIDs...),
+			CitedEventIDs: canonicalEventIDs,
 		})
 		if err != nil {
 			return err
@@ -303,5 +321,3 @@ func readBoundedLine(reader *bufio.Reader, limit int) (boundedLine, error) {
 func writeDigest(digest hash.Hash, fragment []byte) {
 	_, _ = digest.Write(fragment)
 }
-
-var _ = strings.TrimSpace

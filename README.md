@@ -62,14 +62,16 @@ Start with:
 - [`docs/implementation/implementation-plan.md`](docs/implementation/implementation-plan.md)
 - [`docs/implementation/numbat-adapter-spike.md`](docs/implementation/numbat-adapter-spike.md)
 - [`docs/decisions/0001-stack-and-repository-boundaries.md`](docs/decisions/0001-stack-and-repository-boundaries.md)
+- [`docs/storage/local-storage-lifecycle.md`](docs/storage/local-storage-lifecycle.md)
 - [`docs/contracts/event-envelope-v1.md`](docs/contracts/event-envelope-v1.md)
 - [`docs/contracts/transmitted-fields-v1.md`](docs/contracts/transmitted-fields-v1.md)
 - [`docs/contracts/teams-ingest-v1.md`](docs/contracts/teams-ingest-v1.md)
 - [`docs/contracts/read-api-v1.md`](docs/contracts/read-api-v1.md)
 - [`docs/contracts/mcp-v1.md`](docs/contracts/mcp-v1.md)
 
-No production code should be added until the Numbat adapter spike confirms the
-actual upstream interfaces and the event-envelope contract is marked frozen.
+The M0 foundation now includes strict Numbat ingestion, encrypted Local
+persistence, explicit Local retention primitives, and the Teams ingest
+contracts. It is not yet a production release.
 
 ## Non-negotiable implementation rules
 

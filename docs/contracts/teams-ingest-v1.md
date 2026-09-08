@@ -114,19 +114,38 @@ server resolves both from the credential.
 - Event size: 16 KiB
 - Timestamp skew: 5 minutes for live requests
 - Nonce replay window: 10 minutes
+- Authenticated admission rate: 60 attempts per credential per fixed 60-second
+  Postgres window
 
-These are safe starting values, not launch promises.
+These are safe starting values, not launch promises. The M0 admission rate is
+configurable: the maximum attempt count must be between 1 and 1,000, and the
+fixed window must be between 1 and 3,600 seconds. Fixed windows can permit a
+boundary burst of up to twice the configured count.
 
 ## Validation order
 
-1. Reject unsupported encoding or oversized compressed body.
-2. Resolve active credential.
-3. Verify timestamp, nonce, digest, and signature.
-4. Enforce decompressed-size and event-count limits.
-5. Validate batch and event schemas.
-6. Enforce transmitted-field policy.
-7. Insert batch, new events, and projection job in one transaction.
-8. Return acknowledgement only after durable commit.
+1. Reject an unsupported media type or a body larger than the compressed-size
+   limit.
+2. Resolve the credential and its workspace and machine scope, enforce active
+   and entitled state, validate timestamp skew and nonce syntax, verify the
+   digest of the compressed request bytes, and verify the signature.
+3. In a durable Postgres admission transaction, obtain one
+   Postgres-authoritative timestamp and enforce the per-credential rate limit
+   before nonce replay protection. An over-limit request returns `429` without
+   reserving its nonce. An active nonce replay is rejected. A successful
+   admission commits its rate accounting and nonce reservation.
+4. After successful admission, accept only identity or gzip content encoding,
+   decompress if necessary, and enforce the decompressed-size limit.
+5. Parse JSON, validate the closed batch and event schemas, enforce event-count
+   and serialized event-size limits, and enforce the transmitted-field policy.
+6. In a separate transaction, check batch idempotency and atomically insert
+   the batch, new events, and projection job.
+7. Return an acknowledgement only after the persistence transaction commits.
+
+Admission is intentionally durable before payload decoding and validation. A
+successfully admitted request therefore consumes its rate attempt and nonce
+even when decompression, JSON parsing, schema validation, or the later
+persistence transaction fails.
 
 ## Responses
 
@@ -160,9 +179,10 @@ number of already-present events. For every acknowledgement, `accepted` plus
 - `413` compressed/decompressed/event limits exceeded
 - `415` unsupported content encoding/type
 - `422` bounded batch, event, or transmitted-field validation failure
-- `429` rate limit
+- `429` authenticated credential rate limit; includes `Retry-After`
 - `500` internal server error
 - `503` temporary ingest dependency failure; the client may retry the same body
+  and IDs with fresh authentication attempt headers
 
 Errors use `application/problem+json`, include a request ID, and never echo
 event payloads. The bounded response follows the current API's RFC 9457-style
@@ -178,12 +198,37 @@ shape:
 }
 ```
 
+The `429` body has the same payload-free shape and uses problem type
+`urn:belay:problem:ingest-rate-limit`. Its `Retry-After` response header is the
+whole number of seconds, with a minimum of one, until the
+Postgres-authoritative fixed window resets. Over-limit attempts increment a
+bounded aggregate rejection counter; they do not reserve a nonce or create a
+per-attempt audit row.
+
 ## Idempotency
 
 - `batch_id` is unique per credential with a stored content digest.
 - Event uniqueness is `(workspace_id, machine_id, event_id)`.
 - Reusing a batch ID with different content is a conflict and security audit
   event.
+- Admission is scoped by workspace and credential. Rate-limit state is one
+  fixed-window row per credential, and nonce state is keyed by credential and
+  nonce.
+- Rate enforcement occurs before nonce enforcement. Authenticated attempts
+  within the limit count even when they later fail nonce, payload, or
+  persistence checks.
+- A nonce is active while its stored `seen_at` is later than the
+  Postgres admission time minus 10 minutes. At the exact 10-minute boundary it
+  may be atomically reclaimed. Concurrent use of one nonce admits at most one
+  request.
+- Active nonce replays and over-limit attempts update saturating aggregate
+  counters rather than writing an unbounded audit record per attempt.
+- Each nonce-processed admission performs opportunistic cleanup of at most 100
+  expired nonce rows.
+- Admission and payload persistence are separate transactions. Successful
+  admission remains committed if payload validation or persistence fails.
+  For a new valid batch, the batch row, event rows, and projection job commit
+  atomically in the persistence transaction.
 
 ## Retry semantics
 
@@ -194,15 +239,42 @@ ordering, and `client_watermark`.
 Each attempt generates a fresh `Belay-Timestamp`, a never-before-used
 `Belay-Nonce`, and a fresh `Belay-Signature` over the new timestamp and nonce
 plus the unchanged content digest. A client must never reuse a prior timestamp,
-nonce, or signature.
+nonce, or signature. This rule also applies after validation failure,
+persistence failure, `429`, and `503`: the body, IDs, ordering, watermark, and
+digest stay fixed while all three authentication attempt values are replaced.
 
 ## Acceptance tests
 
-1. Duplicate replay inserts zero duplicate rows.
-2. Cross-workspace identity supplied in a body cannot override credential scope.
-3. Invalid signature, digest, nonce replay, timestamp, and revoked credential
-   each fail before payload persistence.
-4. A database failure yields no acknowledgement and the same batch can retry.
-5. Logs, traces, and error responses contain no event body.
-6. Request, acknowledgement, and problem examples validate against their
-   published schemas with the canonical event schema registered by absolute ID.
+1. Unsupported media type and compressed-size violations fail before
+   authentication or admission.
+2. Cross-workspace identity supplied in a body cannot override credential
+   scope.
+3. Invalid signature, digest, timestamp, and revoked credential fail before
+   admission or payload persistence.
+4. The candidate rate defaults and configuration bounds are enforced.
+   Per-credential fixed windows use Postgres time, reset at the exact boundary,
+   and remain isolated across credentials.
+5. The first attempt over the configured limit returns a payload-free `429`
+   with `Retry-After`, reserves no nonce, writes no event, batch, job, or
+   per-attempt audit row, and increments only a bounded aggregate rejection
+   counter.
+6. Active nonce replay is rejected, concurrent use admits at most one request,
+   the exact 10-minute boundary permits atomic reuse, application clock skew
+   cannot advance expiry, and replay accounting is bounded and payload-free.
+7. Opportunistic nonce cleanup removes no more than 100 expired rows in one
+   nonce-processed admission.
+8. A signed invalid gzip or schema-invalid body commits admission before
+   failing payload validation; replaying its nonce is rejected before decoding
+   again.
+9. A persistence transaction failure commits no batch, event, or job but
+   preserves admission. Retrying the same body, IDs, and digest with fresh
+   timestamp, nonce, and signature can succeed.
+10. Duplicate replay with fresh authentication inserts zero duplicate rows,
+    while batch ID reuse with a different content digest returns `409`.
+11. Batch, new events, and projection job are atomic, and no acknowledgement is
+    returned before their durable commit.
+12. Logs, traces, problem responses, rate-limit state, nonce state, and
+    admission counters contain no event body.
+13. Request, acknowledgement, and problem examples validate against their
+    published schemas with the canonical event schema registered by absolute
+    ID.
