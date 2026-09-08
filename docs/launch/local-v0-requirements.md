@@ -120,6 +120,16 @@ Required routes:
 The embedded browser is a client of these routes and never reads SQLite
 directly. Event-derived strings render as text, never HTML.
 
+For the Local preview, session-list and session-event responses include
+`has_more`, `returned_count`, and the effective bounded `limit`.
+`next_cursor` remains `null`; production cursor pagination is still required.
+The browser safely expands bounded limits up to 100 sessions and 500 events,
+then explicitly discloses when additional rows remain.
+
+Session projections without observed `session.end` terminal evidence report
+`incomplete`, never success. This is a projection state and does not change the
+canonical event outcome enum.
+
 ## MCP
 
 Required read-only tools:
@@ -134,6 +144,11 @@ Required read-only tools:
 Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
 modify an agent, record a fix, or register recurrence.
+
+Local preview `list_sessions` recalculates `returned_count`, `limit`, and
+`has_more` after filtering. It conservatively reports `has_more=true` when its
+underlying bounded page may contain unread rows. Cursor paging remains
+unavailable in the preview.
 
 ## Launch acceptance
 

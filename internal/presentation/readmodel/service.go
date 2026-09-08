@@ -11,6 +11,13 @@ import (
 
 const SchemaVersion = "belay.read.v1"
 
+const (
+	defaultSessionLimit  = 20
+	maxSessionLimit      = 100
+	defaultTimelineLimit = 100
+	maxTimelineLimit     = 500
+)
+
 type Repository interface {
 	ListSessions(context.Context, int) ([]model.SessionSummary, time.Time, error)
 	GetSession(context.Context, string) (model.SessionSummary, time.Time, error)
@@ -28,6 +35,9 @@ type SessionList struct {
 	SchemaVersion string                 `json:"schema_version"`
 	Data          []model.SessionSummary `json:"data"`
 	NextCursor    *string                `json:"next_cursor"`
+	HasMore       bool                   `json:"has_more"`
+	ReturnedCount int                    `json:"returned_count"`
+	Limit         int                    `json:"limit"`
 	DataThrough   time.Time              `json:"data_through"`
 }
 
@@ -36,6 +46,9 @@ type SessionTimeline struct {
 	SessionID     string        `json:"session_id"`
 	Data          []model.Event `json:"data"`
 	NextCursor    *string       `json:"next_cursor"`
+	HasMore       bool          `json:"has_more"`
+	ReturnedCount int           `json:"returned_count"`
+	Limit         int           `json:"limit"`
 	DataThrough   time.Time     `json:"data_through"`
 }
 
@@ -71,10 +84,15 @@ func New(repository Repository) *Service {
 }
 
 func (s *Service) ListSessions(ctx context.Context, limit int) (SessionList, error) {
-	data, dataThrough, err := s.repository.ListSessions(ctx, limit)
+	limit = boundedLimit(limit, defaultSessionLimit, maxSessionLimit)
+	data, dataThrough, err := s.repository.ListSessions(ctx, limit+1)
+	data, hasMore := boundedPage(data, limit)
 	return SessionList{
 		SchemaVersion: SchemaVersion,
 		Data:          data,
+		HasMore:       hasMore,
+		ReturnedCount: len(data),
+		Limit:         limit,
 		DataThrough:   dataThrough,
 	}, err
 }
@@ -89,13 +107,35 @@ func (s *Service) GetSession(ctx context.Context, sessionID string) (SessionDeta
 }
 
 func (s *Service) GetSessionTimeline(ctx context.Context, sessionID string, limit int) (SessionTimeline, error) {
-	data, dataThrough, err := s.repository.GetSessionTimeline(ctx, sessionID, limit)
+	limit = boundedLimit(limit, defaultTimelineLimit, maxTimelineLimit)
+	data, dataThrough, err := s.repository.GetSessionTimeline(ctx, sessionID, limit+1)
+	data, hasMore := boundedPage(data, limit)
 	return SessionTimeline{
 		SchemaVersion: SchemaVersion,
 		SessionID:     sessionID,
 		Data:          data,
+		HasMore:       hasMore,
+		ReturnedCount: len(data),
+		Limit:         limit,
 		DataThrough:   dataThrough,
 	}, err
+}
+
+func boundedLimit(value, fallback, maximum int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func boundedPage[T any](data []T, limit int) ([]T, bool) {
+	if len(data) <= limit {
+		return data, false
+	}
+	return data[:limit], true
 }
 
 func (s *Service) QueryActivity(ctx context.Context, filter model.ActivityFilter) (ActivityList, error) {

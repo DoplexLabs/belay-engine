@@ -75,6 +75,11 @@
 
           <div class="session-list" id="session-list" aria-live="polite"></div>
 
+          <div class="pagination-bar" id="sessions-pagination" hidden>
+            <p id="sessions-page-status"></p>
+            <button id="sessions-load-more" type="button">Load more</button>
+          </div>
+
           <div class="panel-state" id="sessions-loading">
             <span class="spinner" aria-hidden="true"></span>
             <p>Loading local sessions…</p>
@@ -151,6 +156,11 @@
             </div>
 
             <div class="event-list" id="event-list" aria-live="polite"></div>
+
+            <div class="pagination-bar timeline-pagination" id="events-pagination" hidden>
+              <p id="events-page-status"></p>
+              <button id="events-load-more" type="button">Load more events</button>
+            </div>
 
             <div class="panel-state timeline-loading" id="timeline-loading" hidden>
               <span class="spinner" aria-hidden="true"></span>

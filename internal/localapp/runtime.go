@@ -153,6 +153,22 @@ func ManageHooks(
 		{agent: numbat.AgentClaude, spool: paths.ClaudeSpool},
 	}
 	results := make([]HookResult, 0, len(targets))
+	if action == "install" {
+		discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		inventory, _, err := client.Discover(discoveryCtx)
+		cancel()
+		if err != nil {
+			return results, errors.New("hook target discovery failed")
+		}
+		detected := targets[:0]
+		for _, item := range targets {
+			row, present := inventory.LaunchTargets[item.agent]
+			if present && row.Detected {
+				detected = append(detected, item)
+			}
+		}
+		targets = detected
+	}
 	var hookErrors []error
 	for _, item := range targets {
 		result := HookResult{Agent: item.agent.String(), Action: action, ExitCode: -1}
