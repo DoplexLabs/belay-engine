@@ -128,6 +128,15 @@ Hook installation is always explicit:
 Belay does not install hooks during ordinary `local`, `scan`, `agents`, `mcp`,
 or `doctor` commands.
 
+### Reading event outcomes
+
+The pinned artifact feed may not report an outcome for every event. In the
+Local browser, only explicitly reported `Succeeded`, `Failed`, or `Interrupted`
+event outcomes receive prominent status badges. Source-unreported event
+outcomes remain honest and visible as subdued
+`Outcome · Not reported by source` metadata. Session-level outcome badges,
+including `Incomplete` and `Unknown`, are unchanged.
+
 ## Keychain troubleshooting
 
 Belay creates its Local encryption key through macOS Keychain without asking

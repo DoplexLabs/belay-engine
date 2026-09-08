@@ -421,18 +421,22 @@
     const actor = readableLabel(observation.actor, "");
     const title = actor ? `${action} · ${actor}` : action;
     const eventTitle = createElement("strong", "", title);
-    const outcomeBadge = createElement(
-      "span",
-      "status-badge",
-      displayOutcome(outcome),
-    );
-    outcomeBadge.dataset.tone = outcome;
     const type = createElement(
       "span",
       "event-type",
       readText(observation.type) || "event",
     );
-    heading.append(eventTitle, outcomeBadge, type);
+    heading.append(eventTitle);
+    if (isExplicitEventOutcome(outcome)) {
+      const outcomeBadge = createElement(
+        "span",
+        "status-badge",
+        displayOutcome(outcome),
+      );
+      outcomeBadge.dataset.tone = outcome;
+      heading.append(outcomeBadge);
+    }
+    heading.append(type);
     card.append(heading);
 
     const summary = readText(observation.summary);
@@ -446,6 +450,9 @@
     appendMetadata(metadata, "Resource", resource.name || resource.kind);
     appendMetadata(metadata, "Coverage", coverage.depth);
     appendMetadata(metadata, "Confidence", coverage.confidence);
+    if (outcome === "unknown") {
+      metadata.push("Outcome · Not reported by source");
+    }
 
     if (historical.is_historical) {
       appendMetadata(
@@ -662,6 +669,10 @@
     return ["succeeded", "failed", "interrupted", "incomplete"].includes(outcome)
       ? outcome
       : "unknown";
+  }
+
+  function isExplicitEventOutcome(outcome) {
+    return ["succeeded", "failed", "interrupted"].includes(outcome);
   }
 
   function displayOutcome(outcome) {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,4 +206,66 @@ func TestSessionAndTimelineResponsesExposeTruncation(t *testing.T) {
 	if timelinePage.NextCursor != nil {
 		t.Fatalf("timeline next_cursor = %q, want nil until cursor paging is implemented", *timelinePage.NextCursor)
 	}
+}
+
+func TestBrowserEventOutcomePresentationContract(t *testing.T) {
+	body, err := fs.ReadFile(assetFiles, "assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	eventRow := sourceSection(t, source, "  function createEventRow(event) {", "  function appendMetadata(")
+	sessionCard := sourceSection(t, source, "  function createSessionCard(session) {", "  async function selectSession(")
+	sessionHeader := sourceSection(t, source, "  function renderSessionHeader(session) {", "  function renderEvents(")
+
+	for _, required := range []string{
+		`if (isExplicitEventOutcome(outcome)) {`,
+		`"status-badge"`,
+		`if (outcome === "unknown") {`,
+		`metadata.push("Outcome · Not reported by source");`,
+	} {
+		if !strings.Contains(eventRow, required) {
+			t.Fatalf("event-row rendering is missing %q", required)
+		}
+	}
+	if strings.Index(eventRow, `if (isExplicitEventOutcome(outcome)) {`) >
+		strings.Index(eventRow, `"status-badge"`) {
+		t.Error("event outcome badge is not guarded by the explicit-outcome check")
+	}
+	if strings.Count(eventRow, `"status-badge"`) != 1 {
+		t.Error("event rows must have exactly one conditionally rendered outcome badge")
+	}
+	if strings.Index(eventRow, `if (outcome === "unknown") {`) >
+		strings.Index(eventRow, `metadata.push("Outcome · Not reported by source");`) {
+		t.Error("source-unreported metadata is not guarded by the unknown-outcome check")
+	}
+	if !strings.Contains(source,
+		`return ["succeeded", "failed", "interrupted"].includes(outcome);`) {
+		t.Error("explicit event outcome allowlist changed")
+	}
+
+	if !strings.Contains(sessionCard, `"status-badge"`) ||
+		!strings.Contains(sessionCard, `displayOutcome(outcome)`) {
+		t.Error("session-card outcome badge rendering changed")
+	}
+	if !strings.Contains(sessionHeader,
+		`elements.selectedOutcome.textContent = displayOutcome(outcome);`) {
+		t.Error("session-detail outcome badge rendering changed")
+	}
+	if strings.Contains(source, "innerHTML") {
+		t.Error("browser asset must render event-derived content as text, never HTML")
+	}
+}
+
+func sourceSection(t *testing.T, source, start, end string) string {
+	t.Helper()
+	startIndex := strings.Index(source, start)
+	if startIndex < 0 {
+		t.Fatalf("browser source is missing section start %q", start)
+	}
+	endIndex := strings.Index(source[startIndex:], end)
+	if endIndex < 0 {
+		t.Fatalf("browser source is missing section end %q", end)
+	}
+	return source[startIndex : startIndex+endIndex]
 }
