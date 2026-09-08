@@ -25,6 +25,7 @@ type issueHTTPRepository struct {
 	eventQuery      model.EventLookupQuery
 	issueErr        error
 	issueAbsent     bool
+	issueSummary    *model.IssueSummary
 	now             time.Time
 }
 
@@ -76,15 +77,20 @@ func (repository *issueHTTPRepository) QueryIssues(
 	if query.Filter.IssueID != "" {
 		issueID = query.Filter.IssueID
 	}
+	summary := model.IssueSummary{
+		IssueID:        issueID,
+		FingerprintID:  httpTestFingerprintID("b"),
+		Severity:       "high",
+		TitleCode:      "issue.explicit_command_failure",
+		SessionCount:   2,
+		LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
+	}
+	if repository.issueSummary != nil {
+		summary = *repository.issueSummary
+		summary.IssueID = issueID
+	}
 	return model.IssuePage{
-		Data: []model.IssueSummary{{
-			IssueID:        issueID,
-			FingerprintID:  httpTestFingerprintID("b"),
-			Severity:       "high",
-			TitleCode:      "issue.explicit_command_failure",
-			SessionCount:   2,
-			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
-		}},
+		Data: []model.IssueSummary{summary},
 		Analysis: model.IssueAnalysisCoverage{
 			CurrentSessions: 1,
 			Complete:        true,
@@ -95,6 +101,53 @@ func (repository *issueHTTPRepository) QueryIssues(
 		IssuedAt:            issuedAt,
 		HasMore:             query.Filter.IssueID == "",
 	}, nil
+}
+
+func TestIssueHTTPReturnsFixedSourceSignalCatalog(t *testing.T) {
+	sourceSignalCode := "tamper.guardrails_off"
+	repository := &issueHTTPRepository{
+		issueSummary: &model.IssueSummary{
+			FingerprintID:    httpTestFingerprintID("b"),
+			Origin:           "numbat",
+			TitleCode:        "issue.numbat_finding",
+			SourceSignalCode: &sourceSignalCode,
+			Severity:         "high",
+			SessionCount:     1,
+			LastObservedAt:   time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
+		},
+	}
+	server, err := New(readmodel.New(
+		repository,
+		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
+	), "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := issueHTTPRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/"+httpTestIssueID("a")+"/occurrences?limit=1",
+		true,
+	)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var detail readmodel.IssueDetail
+	if err := json.NewDecoder(response.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Catalog.CatalogVersion != readmodel.IssueCatalogVersion ||
+		detail.Catalog.DisplayTitle != "Agent safety confirmations may be disabled" ||
+		detail.Catalog.NextEvidenceAction != "review_agent_permissions" ||
+		detail.Catalog.SourceSignalCode == nil ||
+		*detail.Catalog.SourceSignalCode != sourceSignalCode ||
+		detail.Catalog.SourceSignalCatalogVersion != readmodel.SourceSignalCatalogVersion ||
+		detail.Catalog.SourceSignalCatalogStatus != "known" {
+		t.Fatalf("catalog = %+v", detail.Catalog)
+	}
 }
 
 func issueHTTPPageMetadata(
@@ -271,6 +324,9 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 		repository.issueQuery.Snapshot != 31 ||
 		repository.occurrenceQuery.Snapshot != 31 ||
 		detail.Catalog.TitleCode != "issue.explicit_command_failure" ||
+		detail.Catalog.DisplayTitle != "Command failed" ||
+		detail.Catalog.SourceSignalCode != nil ||
+		detail.Catalog.SourceSignalCatalogStatus != "not_applicable" ||
 		detail.GlobalAnalysisCoverage.CurrentSessions != 1 ||
 		!repository.issueQuery.IssuedAt.Equal(now) ||
 		!repository.occurrenceQuery.IssuedAt.Equal(now) {

@@ -41,9 +41,9 @@ func TestFixBrowserShellAndDisclosureContract(t *testing.T) {
 			t.Errorf("P0-04 disclosure is missing %q", disclosure)
 		}
 	}
-	if strings.Index(index, `id="fix-attempts-heading"`) >
-		strings.Index(index, `id="matching-sessions-heading"`) {
-		t.Error("fix-attempt history must appear above matching sessions")
+	if strings.Index(index, `id="matching-sessions-heading"`) >
+		strings.Index(index, `id="fix-attempts-heading"`) {
+		t.Error("value-first issue detail must show matching evidence before fix-attempt history")
 	}
 	if strings.Contains(index, " checked") {
 		t.Error("fix/retraction dialog must not preselect a radio choice")

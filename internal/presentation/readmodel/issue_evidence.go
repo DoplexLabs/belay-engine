@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	IssueCatalogVersion      = "belay.issue-explanations.v1"
-	maxEvidenceResultBytes   = 2 << 20
-	evidenceSnapshotScope    = "current_ingestion"
-	evidenceMissingSemantics = "unavailable_from_selected_retained_session"
+	IssueCatalogVersion             = "belay.issue-explanations.v1"
+	SourceSignalCatalogVersion      = "belay.source-signals.v1"
+	maxEvidenceResultBytes          = 2 << 20
+	evidenceSnapshotScope           = "current_ingestion"
+	evidenceMissingSemantics        = "unavailable_from_selected_retained_session"
+	numbatGuardrailsOffSourceSignal = "tamper.guardrails_off"
 )
 
 var ErrEvidenceResultTooLarge = errors.New("event evidence result exceeds the bounded read limit")
@@ -27,12 +29,16 @@ type IssueSelection struct {
 }
 
 type IssueCatalogMetadata struct {
-	CatalogVersion       string `json:"catalog_version"`
-	CatalogStatus        string `json:"catalog_status"`
-	TitleCode            string `json:"title_code"`
-	ObservationStatement string `json:"observation_statement"`
-	Caveat               string `json:"caveat"`
-	NextEvidenceAction   string `json:"next_evidence_action"`
+	CatalogVersion             string  `json:"catalog_version"`
+	CatalogStatus              string  `json:"catalog_status"`
+	TitleCode                  string  `json:"title_code"`
+	DisplayTitle               string  `json:"display_title"`
+	ObservationStatement       string  `json:"observation_statement"`
+	Caveat                     string  `json:"caveat"`
+	NextEvidenceAction         string  `json:"next_evidence_action"`
+	SourceSignalCode           *string `json:"source_signal_code"`
+	SourceSignalCatalogVersion string  `json:"source_signal_catalog_version"`
+	SourceSignalCatalogStatus  string  `json:"source_signal_catalog_status"`
 }
 
 type EventEvidenceLookupRequest struct {
@@ -134,43 +140,77 @@ func normalizedIssueSelection(request IssueListRequest) IssueSelection {
 	}
 }
 
-func issueCatalog(titleCode string) IssueCatalogMetadata {
+func issueCatalog(issue model.IssueSummary) IssueCatalogMetadata {
+	titleCode := issue.TitleCode
 	result := IssueCatalogMetadata{
-		CatalogVersion: IssueCatalogVersion,
-		CatalogStatus:  "known",
-		TitleCode:      titleCode,
+		CatalogVersion:             IssueCatalogVersion,
+		CatalogStatus:              "known",
+		TitleCode:                  titleCode,
+		SourceSignalCatalogVersion: SourceSignalCatalogVersion,
+		SourceSignalCatalogStatus:  "not_applicable",
 	}
 	switch titleCode {
 	case "issue.explicit_command_failure":
+		result.DisplayTitle = "Command failed"
 		result.ObservationStatement = "The source explicitly reported a failed command result."
 		result.Caveat = "A reported command failure does not by itself establish root cause or whether a later attempt succeeded."
 		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.repeated_command_attempts":
+		result.DisplayTitle = "Command repeatedly attempted"
 		result.ObservationStatement = "The same private command signature was observed multiple times in one bounded interval."
 		result.Caveat = "Repeated attempts do not by themselves establish a stall, incorrect behavior, or shared root cause."
 		result.NextEvidenceAction = "inspect_matching_sessions"
 	case "issue.explicit_permission_denial":
+		result.DisplayTitle = "Permission denied"
 		result.ObservationStatement = "The source explicitly reported a denied permission event."
 		result.Caveat = "A denied permission may reflect an intentional policy boundary and does not by itself establish a defect."
 		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.verification_not_observed":
+		result.DisplayTitle = "Verification evidence not observed"
 		result.ObservationStatement = "A supported live session ended without the required verification evidence."
 		result.Caveat = "Evidence not observed under supported retained coverage is not proof that verification did not occur elsewhere."
 		result.NextEvidenceAction = "inspect_verification_events"
 	case "issue.unresolved_verification_failure_at_completion":
+		result.DisplayTitle = "Verification still failed at session end"
 		result.ObservationStatement = "A verification command explicitly failed and no later successful verification was observed before session end."
 		result.Caveat = "This statement is bounded to the retained evidence for that session and does not establish the current system state."
 		result.NextEvidenceAction = "inspect_verification_events"
 	case "issue.numbat_finding":
-		result.ObservationStatement = "A retained upstream Numbat finding was reported."
-		result.Caveat = "Belay preserves this upstream positive finding without inferring additional absence, cause, or remediation claims."
-		result.NextEvidenceAction = "inspect_cited_events"
+		result = numbatIssueCatalog(result, issue)
 	default:
 		result.CatalogStatus = "unknown"
+		result.DisplayTitle = "Detected issue"
 		result.ObservationStatement = "A configured deterministic detector reported retained evidence."
 		result.Caveat = "No fixed Belay explanation is available for this title code."
 		result.NextEvidenceAction = "inspect_cited_events"
 	}
+	return result
+}
+
+func numbatIssueCatalog(
+	result IssueCatalogMetadata,
+	issue model.IssueSummary,
+) IssueCatalogMetadata {
+	result.DisplayTitle = "Upstream Numbat finding"
+	result.ObservationStatement = "A configured Numbat rule reported retained evidence."
+	result.Caveat = "Belay does not interpret this source rule and does not infer cause, impact, or remediation from its identifier."
+	result.NextEvidenceAction = "inspect_cited_events"
+	result.SourceSignalCatalogStatus = "unknown"
+	if strings.EqualFold(issue.Origin, "numbat") &&
+		issue.SourceSignalCode != nil &&
+		model.IsSafeSourceSignalCode(*issue.SourceSignalCode) {
+		sourceSignalCode := *issue.SourceSignalCode
+		result.SourceSignalCode = &sourceSignalCode
+	}
+	if result.SourceSignalCode == nil ||
+		*result.SourceSignalCode != numbatGuardrailsOffSourceSignal {
+		return result
+	}
+	result.DisplayTitle = "Agent safety confirmations may be disabled"
+	result.ObservationStatement = "Numbat reported retained configuration evidence associated with disabled agent guardrails."
+	result.Caveat = "This does not prove malicious tampering, identify who changed the configuration, or establish that an unsafe action occurred."
+	result.NextEvidenceAction = "review_agent_permissions"
+	result.SourceSignalCatalogStatus = "known"
 	return result
 }
 

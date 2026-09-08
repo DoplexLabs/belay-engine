@@ -17,31 +17,49 @@
     "issue.explicit_command_failure": Object.freeze({
       title: "Command failed",
       explanation: "The source explicitly reported a failed command result.",
+      action: "Inspect failed command evidence",
     }),
     "issue.repeated_command_attempts": Object.freeze({
       title: "Command repeatedly attempted",
       explanation:
         "The same private command signature was observed multiple times in one bounded interval.",
+      action: "Inspect matching sessions",
       experimental: true,
     }),
     "issue.explicit_permission_denial": Object.freeze({
       title: "Permission denied",
       explanation: "The source explicitly reported a denied permission event.",
+      action: "Inspect permission evidence",
     }),
     "issue.verification_not_observed": Object.freeze({
       title: "Verification evidence not observed",
       explanation:
         "A supported live session ended without the required verification evidence.",
+      action: "Inspect verification evidence",
       evidenceGap: true,
     }),
     "issue.unresolved_verification_failure_at_completion": Object.freeze({
       title: "Verification still failed at session end",
       explanation:
         "A verification command explicitly failed and no later successful verification was observed before session end.",
+      action: "Inspect verification evidence",
     }),
     "issue.numbat_finding": Object.freeze({
-      title: "Numbat finding",
-      explanation: "A retained upstream Numbat finding was reported.",
+      title: "Upstream Numbat finding",
+      explanation: "A configured Numbat rule reported retained evidence.",
+      caveat:
+        "Belay does not interpret this source rule and does not infer cause, impact, or remediation from its identifier.",
+      action: "Inspect cited evidence",
+    }),
+  });
+  const sourceSignalCatalog = Object.freeze({
+    "numbat/tamper.guardrails_off": Object.freeze({
+      title: "Agent safety confirmations may be disabled",
+      explanation:
+        "Numbat reported retained configuration evidence associated with disabled agent guardrails.",
+      caveat:
+        "This does not prove malicious tampering, identify who changed the configuration, or establish that an unsafe action occurred.",
+      action: "Review cited configuration evidence",
     }),
   });
   const analysisQualifiers = Object.freeze({
@@ -204,6 +222,9 @@
     occurrenceHasMore: false,
     occurrenceStatus: "idle",
     occurrenceRequestGeneration: 0,
+    issueEvidencePreview: createIssueEvidencePreview(),
+    issueEvidencePreviewRequestGeneration: 0,
+    issueEvidencePreviewController: null,
     fixEligibility: null,
     fixEligibilityStatus: "idle",
     fixEligibilityRequestGeneration: 0,
@@ -265,6 +286,11 @@
     sessionsView: document.querySelector("#sessions-view"),
     attentionListPane: document.querySelector("#attention-list-pane"),
     attentionDetailPane: document.querySelector("#attention-detail-pane"),
+    attentionScroll: document.querySelector(".attention-scroll"),
+    stableIssuesSection: document.querySelector("#stable-issues-section"),
+    evidenceGapsSection: document.querySelector("#evidence-gaps-section"),
+    fixMonitoringSection: document.querySelector("#fix-monitoring-section"),
+    coveragePanel: document.querySelector("#coverage-panel"),
     attentionCount: document.querySelector("#attention-count"),
     attentionRefreshNotice: document.querySelector("#attention-refresh-notice"),
     coverageCurrent: document.querySelector("#coverage-current"),
@@ -374,8 +400,22 @@
     ),
     issueExplanation: document.querySelector("#issue-explanation"),
     issueScopeDisclosure: document.querySelector("#issue-scope-disclosure"),
+    issueNextAction: document.querySelector("#issue-next-action"),
     issueExplanationSection: document.querySelector(
       "#issue-explanation-section",
+    ),
+    issueEvidencePreview: document.querySelector("#issue-evidence-preview"),
+    issueEvidencePreviewCount: document.querySelector(
+      "#issue-evidence-preview-count",
+    ),
+    issueEvidencePreviewDisclosure: document.querySelector(
+      "#issue-evidence-preview-disclosure",
+    ),
+    issueEvidencePreviewList: document.querySelector(
+      "#issue-evidence-preview-list",
+    ),
+    issueEvidencePreviewAll: document.querySelector(
+      "#issue-evidence-preview-all",
     ),
     issueMetadata: document.querySelector("#issue-metadata"),
     fingerprintPanel: document.querySelector("#fingerprint-panel"),
@@ -438,6 +478,9 @@
     overviewState: document.querySelector("#overview-state"),
     overviewQuality: document.querySelector("#overview-quality"),
     activityGrid: document.querySelector("#activity-grid"),
+    needsAttentionSummary: document.querySelector("#needs-attention-summary"),
+    observedWorkSummary: document.querySelector("#observed-work-summary"),
+    sessionHighlights: document.querySelector("#session-highlights"),
     resourceList: document.querySelector("#resource-list"),
     resourceDisclosure: document.querySelector("#resource-disclosure"),
     findingList: document.querySelector("#finding-list"),
@@ -505,6 +548,7 @@
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
+  prepareValueFirstAttentionLayout();
   renderFixDialogChoices();
   renderFixMonitoringFilters();
   bindEvents();
@@ -537,6 +581,51 @@
       error: null,
       requestGeneration: 0,
     };
+  }
+
+  function createIssueEvidencePreview() {
+    return {
+      issueID: "",
+      occurrenceID: "",
+      sessionID: "",
+      status: "idle",
+      events: [],
+      requestedCount: 0,
+      foundCount: 0,
+      missingCount: 0,
+      missingEventIDs: [],
+      availableEventIDs: [],
+      expanded: false,
+      error: "",
+    };
+  }
+
+  function prepareValueFirstAttentionLayout() {
+    const analysisDisclosure = createElement(
+      "details",
+      "attention-disclosure",
+    );
+    analysisDisclosure.id = "analysis-disclosure";
+    analysisDisclosure.append(
+      createElement("summary", "", "Analysis status and coverage"),
+      elements.coveragePanel,
+    );
+    const filterDisclosure = createElement(
+      "details",
+      "attention-disclosure",
+    );
+    filterDisclosure.id = "attention-filter-disclosure";
+    filterDisclosure.append(
+      createElement("summary", "", "Filter Attention"),
+      elements.attentionFilters,
+    );
+    elements.attentionScroll.replaceChildren(
+      elements.stableIssuesSection,
+      elements.evidenceGapsSection,
+      elements.fixMonitoringSection,
+      analysisDisclosure,
+      filterDisclosure,
+    );
   }
 
   function bindEvents() {
@@ -613,6 +702,14 @@
       resetAndLoadFixMonitoring();
     });
     elements.occurrencesLoadMore.addEventListener("click", loadMoreOccurrences);
+    elements.issueEvidencePreviewAll.addEventListener("click", () => {
+      const preview = state.issueEvidencePreview;
+      const occurrence = state.occurrences.find(
+        (value) =>
+          readText(value.occurrence_id) === readText(preview.occurrenceID),
+      );
+      if (occurrence) void loadIssueEvidencePreview(occurrence, true);
+    });
     elements.recordFixAttempt.addEventListener("click", openFixAttemptDialog);
     elements.fixHistoryLoadMore.addEventListener(
       "click",
@@ -1341,6 +1438,23 @@
     elements.fixMonitoringStatus.textContent = bucket.error || "";
     elements.fixMonitoringStatus.dataset.tone =
       bucket.status === "error" ? "error" : "status";
+    elements.fixMonitoringSection.hidden =
+      bucket.status === "ready" &&
+      bucket.data.length === 0 &&
+      !fixMonitoringFiltersActive();
+  }
+
+  function fixMonitoringFiltersActive() {
+    const filters = state.fixMonitoringFilters;
+    return Boolean(
+      filters.state ||
+        filters.changeKind ||
+        filters.severity ||
+        filters.harness ||
+        filters.issueID ||
+        filters.recordedAfter ||
+        filters.includeRetracted,
+    );
   }
 
   function createFixMonitoringCard(summary) {
@@ -1494,6 +1608,7 @@
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
     state.occurrenceStatus = "idle";
+    resetIssueEvidencePreview();
     resetFixIssueState();
     state.fixEligibilityStatus = "loading";
     elements.attentionWelcome.hidden = true;
@@ -1841,7 +1956,7 @@
     );
     severity.dataset.tone = severityTone(issue.severity);
     const title = createElement("span", "issue-card-title");
-    const catalog = issueCatalogEntry(issue.title_code);
+    const catalog = issueDisplayCatalog(issue);
     title.append(
       createElement("strong", "", catalog.title),
       createElement(
@@ -1878,6 +1993,13 @@
     button.append(top, meta);
     const caveat = issueCaveat(issue);
     if (caveat) button.append(createElement("span", "issue-card-caveat", caveat));
+    button.append(
+      createElement(
+        "span",
+        "issue-card-action",
+        catalog.action || "Inspect retained evidence",
+      ),
+    );
     if (catalog.experimental || issue.experimental === true) {
       button.append(
         createElement("span", "experimental-label", "Experimental signal"),
@@ -1916,6 +2038,7 @@
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
     state.occurrenceStatus = "loading";
+    resetIssueEvidencePreview();
     resetFixIssueState();
     elements.attentionWelcome.hidden = true;
     elements.issueDetail.hidden = false;
@@ -2013,6 +2136,9 @@
       state.occurrenceHasMore = pagination.hasMore;
       state.occurrenceStatus = "ready";
       renderIssueDetail();
+      if (!append && state.occurrences.length > 0) {
+        void loadIssueEvidencePreview(state.occurrences[0], false);
+      }
       return true;
     } catch (error) {
       if (
@@ -2043,6 +2169,151 @@
     void loadIssueDetail(true, "");
   }
 
+  function resetIssueEvidencePreview() {
+    state.issueEvidencePreviewRequestGeneration += 1;
+    if (state.issueEvidencePreviewController) {
+      state.issueEvidencePreviewController.abort();
+      state.issueEvidencePreviewController = null;
+    }
+    state.issueEvidencePreview = createIssueEvidencePreview();
+    renderIssueEvidencePreview();
+  }
+
+  async function loadIssueEvidencePreview(occurrence, expanded) {
+    const issueID = state.selectedIssueID;
+    const sessionID = readText(occurrence && occurrence.session_id);
+    const occurrenceID = readText(occurrence && occurrence.occurrence_id);
+    const availableEventIDs = occurrenceEventIDs(occurrence);
+    const eventIDs = availableEventIDs.slice(
+      0,
+      expanded ? pageLimits.events.maximum / 10 : 3,
+    );
+    if (state.issueEvidencePreviewController) {
+      state.issueEvidencePreviewController.abort();
+      state.issueEvidencePreviewController = null;
+    }
+    const generation = ++state.issueEvidencePreviewRequestGeneration;
+    state.issueEvidencePreview = {
+      ...createIssueEvidencePreview(),
+      issueID,
+      occurrenceID,
+      sessionID,
+      status: eventIDs.length ? "loading" : "ready",
+      requestedCount: eventIDs.length,
+      availableEventIDs,
+      expanded,
+    };
+    renderIssueEvidencePreview();
+    if (!issueID || !sessionID || eventIDs.length === 0) return;
+
+    const controller = new AbortController();
+    state.issueEvidencePreviewController = controller;
+    const parameters = new URLSearchParams();
+    eventIDs.forEach((eventID) => parameters.append("event_id", eventID));
+    try {
+      const response = await apiGet(
+        `/v1/sessions/${encodeURIComponent(sessionID)}/events/lookup?${parameters.toString()}`,
+        controller.signal,
+      );
+      if (
+        generation !== state.issueEvidencePreviewRequestGeneration ||
+        issueID !== state.selectedIssueID ||
+        occurrenceID !== state.issueEvidencePreview.occurrenceID ||
+        controller !== state.issueEvidencePreviewController
+      ) {
+        return;
+      }
+      const events = Array.isArray(response.data) ? response.data : [];
+      state.issueEvidencePreview = {
+        ...state.issueEvidencePreview,
+        status: "ready",
+        events,
+        requestedCount:
+          toFiniteNumber(response.requested_count) || eventIDs.length,
+        foundCount: toFiniteNumber(response.found_count) || events.length,
+        missingCount: Number.isFinite(Number(response.missing_count))
+          ? toFiniteNumber(response.missing_count)
+          : Math.max(0, eventIDs.length - events.length),
+        missingEventIDs: Array.isArray(response.missing_event_ids)
+          ? response.missing_event_ids.map(readText).filter(Boolean)
+          : [],
+      };
+      renderIssueEvidencePreview();
+    } catch (error) {
+      if (
+        generation !== state.issueEvidencePreviewRequestGeneration ||
+        issueID !== state.selectedIssueID ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      if (isCursorExpired(error)) {
+        resetIssueEvidencePreview();
+        await refreshAttentionAfterExpiry();
+        return;
+      }
+      state.issueEvidencePreview.status = "error";
+      state.issueEvidencePreview.error =
+        error instanceof Error
+          ? error.message
+          : "Cited evidence could not be loaded.";
+      renderIssueEvidencePreview();
+    } finally {
+      if (state.issueEvidencePreviewController === controller) {
+        state.issueEvidencePreviewController = null;
+      }
+    }
+  }
+
+  function renderIssueEvidencePreview() {
+    const preview = state.issueEvidencePreview;
+    if (!elements.issueEvidencePreviewList) return;
+    const fragment = document.createDocumentFragment();
+    if (preview.status === "loading") {
+      fragment.append(
+        createElement("p", "overview-empty", "Loading cited events…"),
+      );
+    } else if (preview.status === "error") {
+      fragment.append(
+        createElement(
+          "p",
+          "overview-empty",
+          preview.error || "Cited evidence could not be loaded.",
+        ),
+      );
+    } else if (preview.status === "ready" && preview.events.length) {
+      preview.events.forEach((event) => {
+        fragment.append(createLookupEvent(event));
+      });
+    } else if (preview.status === "ready") {
+      fragment.append(
+        createElement(
+          "p",
+          "overview-empty",
+          preview.requestedCount
+            ? "None of the requested cited events remains in this retained session."
+            : "This occurrence did not supply a retained cited event ID.",
+        ),
+      );
+    }
+    elements.issueEvidencePreviewList.replaceChildren(fragment);
+    elements.issueEvidencePreviewCount.textContent =
+      preview.status === "ready"
+        ? `${preview.foundCount}/${preview.requestedCount}`
+        : "—";
+    const retentionText =
+      "Event hydration uses current Local retention, not the frozen issue snapshot.";
+    elements.issueEvidencePreviewDisclosure.textContent =
+      preview.status === "ready"
+        ? `${preview.foundCount} of ${preview.requestedCount} requested cited events retained; ${preview.missingCount} missing. ${retentionText}`
+        : retentionText;
+    elements.issueEvidencePreviewAll.hidden =
+      preview.status === "idle" ||
+      preview.status === "loading" ||
+      preview.expanded ||
+      preview.availableEventIDs.length <= 3;
+  }
+
   function renderIssueDetail() {
     const issue = state.selectedIssue || {};
     const catalog =
@@ -2065,6 +2336,11 @@
     elements.issueDetailKind.textContent = kind;
     elements.issueDetailHeading.textContent = catalog.title;
     elements.issueExplanation.textContent = catalog.explanation;
+    elements.issueNextAction.textContent = historyOnly
+      ? "Inspect retained attempt history."
+      : currentProjectionPending
+        ? "Wait for the current issue projection before inspecting matching evidence."
+        : issueNextActionLabel(catalog.nextEvidenceAction);
     const status = normalizeAnalysisStatus(issue.analysis_status);
     const coverageQualifier = globalCoverageQualifier(
       state.selectedGlobalAnalysisCoverage,
@@ -2101,7 +2377,10 @@
     elements.copyIssueFingerprint.disabled = !readText(issue.fingerprint_id);
     elements.fingerprintPanel.hidden = historyOnly || currentProjectionPending;
     elements.matchingSection.hidden = historyOnly || currentProjectionPending;
+    elements.issueEvidencePreview.hidden =
+      historyOnly || currentProjectionPending;
     renderIssueMetadata(issue);
+    renderIssueEvidencePreview();
     renderFixAttempts();
     if (!historyOnly && !currentProjectionPending) renderOccurrences();
   }
@@ -2121,10 +2400,26 @@
     const catalog = metadata || fallbackIssueCatalog(issue);
     return {
       ...display,
+      title: readText(catalog.display_title) || display.title,
       explanation:
         readText(catalog.observation_statement) || display.explanation,
       caveat: readText(catalog.caveat),
+      nextEvidenceAction:
+        readText(catalog.next_evidence_action) || "inspect_cited_events",
     };
+  }
+
+  function issueNextActionLabel(action) {
+    const labels = {
+      inspect_cited_events: "Next: inspect the cited retained events.",
+      inspect_matching_sessions:
+        "Next: compare the exact matching sessions.",
+      inspect_verification_events:
+        "Next: inspect the retained verification evidence.",
+      review_agent_permissions:
+        "Next: review the cited configuration evidence and the agent's permission settings.",
+    };
+    return labels[action] || labels.inspect_cited_events;
   }
 
   function monitoringAttemptSubjectIssue(attempt) {
@@ -2154,6 +2449,10 @@
         evidenceCompletenessLabel(issue.evidence_complete),
       ],
     ];
+    const sourceSignalCode = safeSourceSignalCode(issue.source_signal_code);
+    if (sourceSignalCode) {
+      metadata.push(["Source rule ID", sourceSignalCode]);
+    }
     const fragment = document.createDocumentFragment();
     metadata.forEach(([label, value]) => {
       const row = createElement("div");
@@ -2543,6 +2842,12 @@
           eligibility.eligible === true &&
           Boolean(eligibility.actionToken) &&
           catalogReady));
+    const serverReportedIneligible =
+      state.fixEligibilityStatus === "ready" &&
+      eligibility.eligible !== true &&
+      !canResume;
+    elements.recordFixAttempt.hidden =
+      monitoringCurrentIssueUnavailable || serverReportedIneligible;
     elements.recordFixAttempt.disabled = !canRecord;
     elements.recordFixAttempt.textContent = canResume
       ? "Resume fix attempt"
@@ -4335,6 +4640,7 @@
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
     state.occurrenceStatus = "idle";
+    resetIssueEvidencePreview();
     resetFixIssueState();
     state.issueReturnFocus = null;
     document.body.classList.remove("is-attention-detail-open");
@@ -4440,8 +4746,31 @@
         title: "Detected issue",
         explanation:
           "A configured deterministic detector reported retained evidence.",
+        action: "Inspect retained evidence",
       }
     );
+  }
+
+  function issueDisplayCatalog(issue) {
+    const base = issueCatalogEntry(issue && issue.title_code);
+    if (
+      readText(issue && issue.title_code) !== "issue.numbat_finding" ||
+      readText(issue && issue.origin).toLowerCase() !== "numbat"
+    ) {
+      return base;
+    }
+    const sourceSignalCode = safeSourceSignalCode(
+      issue && issue.source_signal_code,
+    );
+    return (
+      sourceSignalCatalog[`numbat/${sourceSignalCode}`] ||
+      issueCatalog["issue.numbat_finding"]
+    );
+  }
+
+  function safeSourceSignalCode(value) {
+    const code = readText(value);
+    return /^[a-z0-9][a-z0-9_.-]{0,63}$/.test(code) ? code : "";
   }
 
   function issueRecurrenceLabel(issue) {
@@ -4549,24 +4878,40 @@
       catalog_version: readText(value.catalog_version),
       catalog_status: readText(value.catalog_status).toLowerCase(),
       title_code: readText(value.title_code),
+      display_title: readText(value.display_title),
       observation_statement: readText(value.observation_statement),
       caveat: readText(value.caveat),
       next_evidence_action: readText(value.next_evidence_action),
+      source_signal_code: safeSourceSignalCode(value.source_signal_code) || null,
+      source_signal_catalog_version: readText(
+        value.source_signal_catalog_version,
+      ),
+      source_signal_catalog_status: readText(
+        value.source_signal_catalog_status,
+      ).toLowerCase(),
     };
     const issueTitleCode = readText(issue && issue.title_code);
     const actions = new Set([
       "inspect_cited_events",
       "inspect_matching_sessions",
       "inspect_verification_events",
+      "review_agent_permissions",
     ]);
     if (
       catalog.catalog_version !== "belay.issue-explanations.v1" ||
       !["known", "unknown"].includes(catalog.catalog_status) ||
       !catalog.title_code ||
       catalog.title_code !== issueTitleCode ||
+      !catalog.display_title ||
       !catalog.observation_statement ||
       !catalog.caveat ||
-      !actions.has(catalog.next_evidence_action)
+      !actions.has(catalog.next_evidence_action) ||
+      catalog.source_signal_catalog_version !== "belay.source-signals.v1" ||
+      !["known", "unknown", "not_applicable"].includes(
+        catalog.source_signal_catalog_status,
+      ) ||
+      (catalog.source_signal_catalog_status === "known" &&
+        !catalog.source_signal_code)
     ) {
       throw new Error("Local API returned invalid issue catalog metadata.");
     }
@@ -4575,15 +4920,27 @@
 
   function fallbackIssueCatalog(issue) {
     const titleCode = readText(issue && issue.title_code);
-    const display = issueCatalogEntry(titleCode);
+    const display = issueDisplayCatalog(issue);
+    const sourceSignalCode = safeSourceSignalCode(
+      issue && issue.source_signal_code,
+    );
     return {
       catalog_version: "browser-fallback",
       catalog_status:
         display.title === "Detected issue" ? "unknown" : "known",
       title_code: titleCode,
+      display_title: display.title,
       observation_statement: display.explanation,
-      caveat: "",
+      caveat: display.caveat || "",
       next_evidence_action: "inspect_cited_events",
+      source_signal_code: sourceSignalCode || null,
+      source_signal_catalog_version: "belay.source-signals.v1",
+      source_signal_catalog_status:
+        titleCode === "issue.numbat_finding"
+          ? sourceSignalCode === "tamper.guardrails_off"
+            ? "known"
+            : "unknown"
+          : "not_applicable",
     };
   }
 
@@ -5339,7 +5696,149 @@
     } else {
       elements.resourceDisclosure.textContent = "";
     }
+    renderSessionStory(overview);
     renderFindingList();
+  }
+
+  function renderSessionStory(overview) {
+    const attention = [];
+    if (overview.failures > 0) {
+      attention.push(
+        `${formatNumber(overview.failures)} explicit ${
+          overview.failures === 1 ? "failure" : "failures"
+        }`,
+      );
+    }
+    const deniedPermissions = state.events.filter(isDeniedPermissionEvent).length;
+    if (deniedPermissions > 0) {
+      attention.push(
+        `${formatNumber(deniedPermissions)} denied ${
+          deniedPermissions === 1 ? "permission" : "permissions"
+        } in loaded events`,
+      );
+    }
+    if (overview.findings > 0) {
+      attention.push(
+        `${formatNumber(overview.findings)} configured-rule ${
+          overview.findings === 1 ? "finding" : "findings"
+        }`,
+      );
+    }
+    const sessionOutcome = normalizeOutcome(
+      state.selectedSessionDetail && state.selectedSessionDetail.outcome,
+    );
+    if (sessionOutcome === "interrupted") {
+      attention.push("The source explicitly reported an interrupted session");
+    }
+    elements.needsAttentionSummary.replaceChildren(
+      createStoryList(
+        attention,
+        "No explicit failure, denied permission, interruption, or configured-rule finding is shown in the available overview.",
+      ),
+    );
+
+    const work = [
+      ["command", overview.commands],
+      ["tool", overview.tools],
+      ["file operation", overview.files],
+      ["network indicator", overview.network],
+      ["permission event", overview.permissions],
+    ]
+      .filter(([, count]) => count > 0)
+      .map(
+        ([label, count]) =>
+          `${formatNumber(count)} ${label}${count === 1 ? "" : "s"}`,
+      );
+    elements.observedWorkSummary.replaceChildren(
+      createStoryList(work, "No supported work metadata was reported."),
+    );
+
+    const highlights = selectSessionHighlights(state.events);
+    const fragment = document.createDocumentFragment();
+    highlights.forEach((event) => {
+      const observation = isRecord(event.observation) ? event.observation : {};
+      const descriptor = eventDescriptor(observation);
+      const item = createElement("li", "session-highlight");
+      const heading = createElement("div");
+      heading.append(
+        createElement("strong", "", descriptor.label),
+        createElement(
+          "time",
+          "",
+          formatClockTime(parseDate(event.occurred_at)) || "Time unavailable",
+        ),
+      );
+      item.append(heading);
+      if (descriptor.detail) {
+        item.append(createElement("p", "", descriptor.detail));
+      }
+      fragment.append(item);
+    });
+    if (!highlights.length) {
+      fragment.append(
+        createElement(
+          "li",
+          "overview-empty",
+          state.events.length
+            ? "No launch-priority highlight was present in the loaded events."
+            : "Timeline events are still loading.",
+        ),
+      );
+    }
+    elements.sessionHighlights.replaceChildren(fragment);
+  }
+
+  function createStoryList(values, emptyMessage) {
+    if (!values.length) {
+      return createElement("p", "overview-empty", emptyMessage);
+    }
+    const list = createElement("ul", "story-list");
+    values.forEach((value) => list.append(createElement("li", "", value)));
+    return list;
+  }
+
+  function selectSessionHighlights(events) {
+    const cited = citedFindingMap();
+    const candidates = events
+      .map((event, index) => ({
+        event,
+        index,
+        priority: sessionHighlightPriority(event, cited),
+      }))
+      .filter((candidate) => candidate.priority < 100);
+    candidates.sort(
+      (left, right) =>
+        left.priority - right.priority || left.index - right.index,
+    );
+    return candidates
+      .slice(0, 5)
+      .sort((left, right) => left.index - right.index)
+      .map((candidate) => candidate.event);
+  }
+
+  function sessionHighlightPriority(event, cited) {
+    const observation = isRecord(event.observation) ? event.observation : {};
+    const type = readText(observation.type).toLowerCase();
+    const outcome = normalizeOutcome(observation.outcome);
+    if (["failed", "interrupted"].includes(outcome)) return 0;
+    if (isDeniedPermissionEvent(event)) return 1;
+    if (cited.has(readText(event.event_id))) return 2;
+    if (type === "command.result") return 3;
+    if (type === "command.exec") return 4;
+    if (["file.write", "file.create", "file.delete"].includes(type)) return 5;
+    if (type === "tool.call") return 6;
+    return 100;
+  }
+
+  function isDeniedPermissionEvent(event) {
+    const observation = isRecord(event.observation) ? event.observation : {};
+    const type = readText(observation.type).toLowerCase();
+    if (!type.startsWith("permission.")) return false;
+    if (normalizeOutcome(observation.outcome) === "failed") return true;
+    const details = isRecord(observation.details) ? observation.details : {};
+    return [details.decision, details.approval_decision]
+      .map((value) => readText(value).toLowerCase())
+      .some((value) => ["denied", "rejected"].includes(value));
   }
 
   function buildOverview() {
@@ -5565,6 +6064,7 @@
       state.findings.forEach((finding) => {
         const item = createElement("article", "finding-item");
         const severity = readText(finding.severity) || "reported";
+        const display = findingDisplayCatalog(finding);
         const heading = createElement("div");
         const badge = createElement("span", "finding-badge", readableLabel(severity));
         badge.dataset.tone = severityTone(severity);
@@ -5573,7 +6073,7 @@
           createElement(
             "strong",
             "",
-            readText(finding.rule_id) || "Configured rule",
+            display.title,
           ),
         );
         item.append(heading);
@@ -5589,6 +6089,15 @@
             }`,
           ),
         );
+        const sourceRuleID = safeSourceSignalCode(finding.rule_id);
+        if (sourceRuleID) {
+          const details = createElement("details", "evidence-details");
+          details.append(
+            createElement("summary", "", "Technical details"),
+            createElement("p", "", `Source rule ID · ${sourceRuleID}`),
+          );
+          item.append(details);
+        }
         fragment.append(item);
       });
       if (state.findingsStatus === "loading" || state.findingsMayHaveMore) {
@@ -5631,6 +6140,15 @@
     elements.findingsPageStatus.textContent = state.findingHasMore
       ? `Loaded ${state.findings.length} findings; more are available.`
       : `Loaded ${state.findings.length} returned findings.`;
+  }
+
+  function findingDisplayCatalog(finding) {
+    const sourceSignalCode = safeSourceSignalCode(finding && finding.rule_id);
+    return (
+      sourceSignalCatalog[`numbat/${sourceSignalCode}`] || {
+        title: "Configured Numbat rule finding",
+      }
+    );
   }
 
   function renderEvents() {
@@ -5711,13 +6229,6 @@
         ),
       );
     }
-    heading.append(
-      createElement(
-        "span",
-        "event-type",
-        readText(observation.type) || "event",
-      ),
-    );
     card.append(heading);
     if (descriptor.detail) {
       card.append(createElement("p", "event-summary", descriptor.detail));
@@ -5734,11 +6245,12 @@
     if (findings.length) {
       const findingRefs = createElement("div", "event-findings");
       findings.forEach((finding) => {
+        const display = findingDisplayCatalog(finding);
         findingRefs.append(
           createElement(
             "span",
             "",
-            `Cited by ${readText(finding.rule_id) || "configured rule"}`,
+            `Cited by ${display.title}`,
           ),
         );
       });
@@ -5751,15 +6263,22 @@
 
   function createEvidenceDetails(event) {
     const observation = isRecord(event.observation) ? event.observation : {};
-    const source = isRecord(event.source) ? event.source : {};
     const coverage = isRecord(event.coverage) ? event.coverage : {};
+    const redaction = isRecord(event.redaction) ? event.redaction : {};
     const historical = isRecord(event.historical) ? event.historical : {};
+    const resource = isRecord(observation.resource) ? observation.resource : {};
+    const descriptor = eventDescriptor(observation);
     const details = createElement("details", "evidence-details");
     details.append(createElement("summary", "", "Evidence"));
     const list = createElement("dl");
     appendEvidence(list, "Event ID", event.event_id);
-    appendEvidence(list, "Harness", source.agent);
-    appendEvidence(list, "Source", source.kind);
+    appendEvidence(list, "Occurred", formatFullDate(parseDate(event.occurred_at)));
+    appendEvidence(list, "Action", descriptor.label);
+    appendEvidence(list, "Event type", observation.type);
+    appendEvidence(list, "Outcome", observation.outcome);
+    appendEvidence(list, "Safe summary", observation.summary);
+    appendEvidence(list, "Resource kind", resource.kind);
+    appendEvidence(list, "Resource name", resource.name);
     appendEvidence(list, "Coverage", coverage.depth);
     appendEvidence(list, "Confidence", coverage.confidence);
     if (historical.is_historical) {
@@ -5774,6 +6293,11 @@
     if (observation.exit_code !== undefined && observation.exit_code !== null) {
       appendEvidence(list, "Exit code", observation.exit_code);
     }
+    if (observation.duration_ms !== undefined && observation.duration_ms !== null) {
+      appendEvidence(list, "Duration (ms)", observation.duration_ms);
+    }
+    appendEvidence(list, "Fields removed", redaction.fields_removed);
+    appendEvidence(list, "Secrets removed", redaction.secrets_removed);
     details.append(list);
     return details;
   }
@@ -5789,7 +6313,6 @@
   function eventDescriptor(observation) {
     const type = readText(observation.type).toLocaleLowerCase();
     const resource = isRecord(observation.resource) ? observation.resource : {};
-    const details = isRecord(observation.details) ? observation.details : {};
     const resourceName = readText(resource.name);
     const summary = readText(observation.summary);
     const labels = {
@@ -5811,11 +6334,11 @@
       "reasoning.start": "Reasoning lifecycle started",
       "reasoning.end": "Reasoning lifecycle ended",
     };
-    let label = labels[type] || readableLabel(observation.action, "Activity");
-    if (type.startsWith("tool.") && readText(details.mcp_tool)) {
-      label = `${label} · ${readText(details.mcp_tool)}`;
-    }
-    return { label, detail: resourceName || summary };
+    const label = labels[type] || readableLabel(observation.action, "Activity");
+    const detail = type.startsWith("command.")
+      ? summary || resourceName
+      : resourceName || summary;
+    return { label, detail };
   }
 
   function isSignalEvent(event, cited) {
@@ -5954,8 +6477,8 @@
     }
   }
 
-  async function apiGet(path) {
-    return apiRequest(path, "GET", null, null, null);
+  async function apiGet(path, signal) {
+    return apiRequest(path, "GET", null, null, null, signal);
   }
 
   async function apiMutation(path, body, idempotencyKey, intent) {
@@ -6015,12 +6538,12 @@
       credentials: "omit",
       headers,
     };
+    if (signal) request.signal = signal;
     if (method === "POST") {
       headers["Content-Type"] = "application/json";
       headers["Idempotency-Key"] = idempotencyKey;
       headers["X-Belay-Intent"] = intent;
       request.body = JSON.stringify(body);
-      request.signal = signal;
     }
     const response = await fetch(`${state.apiBase}${path}`, {
       ...request,

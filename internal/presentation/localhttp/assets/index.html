@@ -73,7 +73,11 @@
               <span class="count-pill" id="attention-count">—</span>
             </div>
 
-            <section class="coverage-panel" aria-labelledby="coverage-heading">
+            <section
+              class="coverage-panel"
+              id="coverage-panel"
+              aria-labelledby="coverage-heading"
+            >
               <div class="coverage-heading-row">
                 <div>
                   <p class="eyebrow">Analysis coverage</p>
@@ -342,6 +346,7 @@
 
               <section
                 class="attention-section"
+                id="stable-issues-section"
                 aria-labelledby="stable-issues-heading"
               >
                 <div class="attention-section-heading">
@@ -370,6 +375,7 @@
 
               <section
                 class="attention-section evidence-gap-section"
+                id="evidence-gaps-section"
                 aria-labelledby="evidence-gaps-heading"
               >
                 <div class="attention-section-heading">
@@ -465,20 +471,81 @@
                   <h3 id="why-heading">Why this needs attention</h3>
                   <p id="issue-explanation"></p>
                   <p class="section-disclosure" id="issue-scope-disclosure"></p>
+                  <p class="issue-next-action" id="issue-next-action"></p>
                 </section>
 
-                <dl class="issue-metadata" id="issue-metadata"></dl>
+                <section
+                  class="issue-evidence-preview"
+                  id="issue-evidence-preview"
+                  aria-labelledby="issue-evidence-preview-heading"
+                >
+                  <div class="evidence-preview-heading">
+                    <div>
+                      <p class="eyebrow">Cited evidence</p>
+                      <h3 id="issue-evidence-preview-heading">What supports this observation</h3>
+                    </div>
+                    <span class="count-pill" id="issue-evidence-preview-count">—</span>
+                  </div>
+                  <p
+                    class="section-disclosure"
+                    id="issue-evidence-preview-disclosure"
+                  >
+                    Loading retained cited evidence…
+                  </p>
+                  <div
+                    class="issue-evidence-preview-list"
+                    id="issue-evidence-preview-list"
+                    aria-live="polite"
+                  ></div>
+                  <button
+                    class="secondary-button"
+                    id="issue-evidence-preview-all"
+                    type="button"
+                    hidden
+                  >
+                    Inspect all cited evidence
+                  </button>
+                </section>
 
                 <section
-                  class="fingerprint-panel"
-                  id="fingerprint-panel"
-                  aria-labelledby="fingerprint-heading"
+                  class="matching-section"
+                  id="matching-section"
+                  aria-labelledby="matching-sessions-heading"
                 >
-                  <div>
-                    <h3 id="fingerprint-heading">Opaque exact-match identifier</h3>
-                    <code id="issue-fingerprint"></code>
+                  <div class="matching-heading">
+                    <div>
+                      <p class="eyebrow">Observed pattern</p>
+                      <h3 id="matching-sessions-heading">Matching sessions</h3>
+                    </div>
+                    <span class="count-pill" id="occurrence-count">—</span>
                   </div>
-                  <button id="copy-issue-fingerprint" type="button">Copy</button>
+                  <p class="section-disclosure">
+                    These sessions share the exact private fingerprint within a
+                    compatible scope. They are not semantic matches.
+                  </p>
+                  <div
+                    class="occurrence-list"
+                    id="occurrence-list"
+                    aria-live="polite"
+                  ></div>
+                  <div
+                    class="panel-state compact-state"
+                    id="occurrences-loading"
+                    hidden
+                  >
+                    <span class="spinner" aria-hidden="true"></span>
+                    <p>Loading matching sessions…</p>
+                  </div>
+                  <div
+                    class="pagination-bar"
+                    id="occurrences-pagination"
+                    hidden
+                  >
+                    <p id="occurrences-page-status"></p>
+                    <button id="occurrences-load-more" type="button">
+                      Load more matches
+                    </button>
+                  </div>
                 </section>
 
                 <section
@@ -567,46 +634,21 @@
                   </div>
                 </section>
 
-                <section
-                  class="matching-section"
-                  id="matching-section"
-                  aria-labelledby="matching-sessions-heading"
-                >
-                  <div class="matching-heading">
+                <details class="technical-details" id="issue-technical-details">
+                  <summary>Technical details</summary>
+                  <dl class="issue-metadata" id="issue-metadata"></dl>
+                  <section
+                    class="fingerprint-panel"
+                    id="fingerprint-panel"
+                    aria-labelledby="fingerprint-heading"
+                  >
                     <div>
-                      <p class="eyebrow">Deterministic matches</p>
-                      <h3 id="matching-sessions-heading">Matching sessions</h3>
+                      <h3 id="fingerprint-heading">Opaque exact-match identifier</h3>
+                      <code id="issue-fingerprint"></code>
                     </div>
-                    <span class="count-pill" id="occurrence-count">—</span>
-                  </div>
-                  <p class="section-disclosure">
-                    These sessions share the exact opaque fingerprint within a
-                    compatible private scope. They are not semantic matches.
-                  </p>
-                  <div
-                    class="occurrence-list"
-                    id="occurrence-list"
-                    aria-live="polite"
-                  ></div>
-                  <div
-                    class="panel-state compact-state"
-                    id="occurrences-loading"
-                    hidden
-                  >
-                    <span class="spinner" aria-hidden="true"></span>
-                    <p>Loading matching sessions…</p>
-                  </div>
-                  <div
-                    class="pagination-bar"
-                    id="occurrences-pagination"
-                    hidden
-                  >
-                    <p id="occurrences-page-status"></p>
-                    <button id="occurrences-load-more" type="button">
-                      Load more matches
-                    </button>
-                  </div>
-                </section>
+                    <button id="copy-issue-fingerprint" type="button">Copy</button>
+                  </section>
+                </details>
               </div>
             </div>
           </section>
@@ -789,29 +831,42 @@
                 </span>
               </summary>
               <div class="overview-body">
-                <p id="overview-quality"></p>
-                <dl class="activity-grid" id="activity-grid"></dl>
-                <div class="overview-detail-grid">
-                  <section aria-labelledby="resources-heading">
-                    <h4 id="resources-heading">Resources touched</h4>
-                    <div class="resource-list" id="resource-list"></div>
-                    <p class="overview-caveat" id="resource-disclosure"></p>
-                  </section>
-                  <section aria-labelledby="findings-heading">
-                    <h4 id="findings-heading">Findings</h4>
-                    <div class="finding-list" id="finding-list"></div>
-                    <div
-                      class="finding-pagination"
-                      id="findings-pagination"
-                      hidden
-                    >
-                      <p id="findings-page-status"></p>
-                      <button id="findings-load-more" type="button">
-                        Load more findings
-                      </button>
-                    </div>
-                  </section>
-                </div>
+                <section class="story-section story-attention" aria-labelledby="needs-attention-heading">
+                  <h4 id="needs-attention-heading">Needs attention</h4>
+                  <div id="needs-attention-summary"></div>
+                  <div class="finding-list" id="finding-list"></div>
+                  <div
+                    class="finding-pagination"
+                    id="findings-pagination"
+                    hidden
+                  >
+                    <p id="findings-page-status"></p>
+                    <button id="findings-load-more" type="button">
+                      Load more findings
+                    </button>
+                  </div>
+                </section>
+                <section class="story-section" aria-labelledby="observed-work-heading">
+                  <h4 id="observed-work-heading">Work observed</h4>
+                  <div id="observed-work-summary"></div>
+                </section>
+                <section class="story-section" aria-labelledby="highlights-heading">
+                  <h4 id="highlights-heading">Key sequence</h4>
+                  <p class="overview-caveat">
+                    Highlights from the currently loaded retained events.
+                  </p>
+                  <ol class="session-highlights" id="session-highlights"></ol>
+                </section>
+                <section class="story-section" aria-labelledby="resources-heading">
+                  <h4 id="resources-heading">Resources touched</h4>
+                  <div class="resource-list" id="resource-list"></div>
+                  <p class="overview-caveat" id="resource-disclosure"></p>
+                </section>
+                <details class="session-technical">
+                  <summary>Counts and analysis details</summary>
+                  <p id="overview-quality"></p>
+                  <dl class="activity-grid" id="activity-grid"></dl>
+                </details>
               </div>
             </details>
 

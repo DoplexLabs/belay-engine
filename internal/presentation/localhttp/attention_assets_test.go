@@ -71,8 +71,8 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 			"A verification command explicitly failed and no later successful verification was observed before session end.",
 		},
 		"issue.numbat_finding": {
-			"Numbat finding",
-			"A retained upstream Numbat finding was reported.",
+			"Upstream Numbat finding",
+			"A configured Numbat rule reported retained evidence.",
 		},
 	}
 	for code, values := range catalog {
@@ -331,6 +331,8 @@ func TestAttentionBrowserUsesCursorOnlyContinuationAndAdditiveMetadata(t *testin
 		`function readGlobalAnalysisCoverage(value, fallback)`,
 		`function globalCoverageQualifier(coverage)`,
 		`"belay.issue-explanations.v1"`,
+		`"belay.source-signals.v1"`,
+		`"review_agent_permissions"`,
 		`"inspect_cited_events"`,
 		`"inspect_matching_sessions"`,
 		`"inspect_verification_events"`,
@@ -342,6 +344,183 @@ func TestAttentionBrowserUsesCursorOnlyContinuationAndAdditiveMetadata(t *testin
 		if !strings.Contains(app, required) {
 			t.Errorf("browser metadata/cursor consistency contract is missing %q", required)
 		}
+	}
+}
+
+func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
+	index := readBrowserAsset(t, "assets/index.html")
+	app := readBrowserAsset(t, "assets/app.js")
+	styles := readBrowserAsset(t, "assets/styles.css")
+
+	for _, required := range []string{
+		`id="stable-issues-section"`,
+		`id="evidence-gaps-section"`,
+		`id="fix-monitoring-section"`,
+		`id="issue-evidence-preview"`,
+		`id="issue-evidence-preview-all"`,
+		`id="issue-technical-details"`,
+		`<summary>Technical details</summary>`,
+		`id="needs-attention-summary"`,
+		`id="observed-work-summary"`,
+		`id="session-highlights"`,
+		`Highlights from the currently loaded retained events.`,
+	} {
+		if !strings.Contains(index, required) {
+			t.Errorf("value-first browser shell is missing %q", required)
+		}
+	}
+
+	layout := browserSourceBlock(
+		t,
+		app,
+		"  function prepareValueFirstAttentionLayout() {",
+		"  function bindEvents() {",
+	)
+	for _, required := range []string{
+		`elements.stableIssuesSection,`,
+		`elements.evidenceGapsSection,`,
+		`elements.fixMonitoringSection,`,
+		`analysisDisclosure,`,
+		`filterDisclosure,`,
+	} {
+		if !strings.Contains(layout, required) {
+			t.Errorf("first-viewport Attention order is missing %q", required)
+		}
+	}
+	if issues, gaps, monitoring := strings.Index(layout, "elements.stableIssuesSection"), strings.Index(layout, "elements.evidenceGapsSection"), strings.Index(layout, "elements.fixMonitoringSection"); issues < 0 || gaps < issues || monitoring < gaps {
+		t.Error("Attention sections are not ordered Issues, Evidence gaps, After attempts")
+	}
+
+	preview := browserSourceBlock(
+		t,
+		app,
+		"  async function loadIssueEvidencePreview(",
+		"  function renderIssueEvidencePreview() {",
+	)
+	for _, required := range []string{
+		`expanded ? pageLimits.events.maximum / 10 : 3`,
+		`const generation = ++state.issueEvidencePreviewRequestGeneration;`,
+		`generation !== state.issueEvidencePreviewRequestGeneration`,
+		`issueID !== state.selectedIssueID`,
+		`occurrenceID !== state.issueEvidencePreview.occurrenceID`,
+		`eventIDs.forEach((eventID) => parameters.append("event_id", eventID));`,
+	} {
+		if !strings.Contains(preview, required) {
+			t.Errorf("bounded cancellable evidence preview is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`state.issueEvidencePreviewRequestGeneration += 1;`,
+		`state.issueEvidencePreview = createIssueEvidencePreview();`,
+		`resetIssueEvidencePreview();`,
+		`Event hydration uses current Local retention, not the frozen issue snapshot.`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("evidence preview reset/disclosure is missing %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		`elements.recordFixAttempt.hidden =`,
+		`serverReportedIneligible`,
+		`renderFixHistory();`,
+		`selectSessionHighlights(state.events)`,
+		`.slice(0, 5)`,
+		`left.priority - right.priority || left.index - right.index`,
+		`.sort((left, right) => left.index - right.index)`,
+		`type.startsWith("command.")`,
+		`? summary || resourceName`,
+		`: resourceName || summary`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("value-first behavior is missing %q", required)
+		}
+	}
+	if strings.Contains(
+		browserSourceBlock(
+			t,
+			app,
+			"  function createEventRow(",
+			"  function createEvidenceDetails(",
+		),
+		`"event-type"`,
+	) {
+		t.Error("raw event type remains in the primary timeline heading")
+	}
+
+	for _, required := range []string{
+		`.attention-disclosure`,
+		`.issue-evidence-preview`,
+		`.technical-details`,
+		`.session-highlights`,
+		`max-height: none;`,
+		`.event-scroll,`,
+		`overflow: visible;`,
+	} {
+		if !strings.Contains(styles, required) {
+			t.Errorf("value-first accessibility/mobile style is missing %q", required)
+		}
+	}
+}
+
+func TestAttentionEvidencePreview410FullyResetsState(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	reset := browserSourceBlock(
+		t,
+		app,
+		"  function resetIssueEvidencePreview() {",
+		"  async function loadIssueEvidencePreview(",
+	)
+	preview := browserSourceBlock(
+		t,
+		app,
+		"  async function loadIssueEvidencePreview(",
+		"  function renderIssueEvidencePreview() {",
+	)
+
+	for _, required := range []string{
+		`issueEvidencePreviewController: null,`,
+		`state.issueEvidencePreviewController.abort();`,
+		`state.issueEvidencePreviewController = null;`,
+		`state.issueEvidencePreview = createIssueEvidencePreview();`,
+		`renderIssueEvidencePreview();`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("evidence-preview reset contract is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`state.issueEvidencePreviewRequestGeneration += 1;`,
+		`state.issueEvidencePreviewController.abort();`,
+		`state.issueEvidencePreviewController = null;`,
+		`state.issueEvidencePreview = createIssueEvidencePreview();`,
+		`renderIssueEvidencePreview();`,
+	} {
+		if !strings.Contains(reset, required) {
+			t.Errorf("evidence-preview reset does not clear %q", required)
+		}
+	}
+	for _, required := range []string{
+		`const controller = new AbortController();`,
+		`state.issueEvidencePreviewController = controller;`,
+		`controller.signal,`,
+		`controller !== state.issueEvidencePreviewController`,
+		`controller.signal.aborted`,
+		`if (isCursorExpired(error)) {`,
+		`resetIssueEvidencePreview();`,
+		`await refreshAttentionAfterExpiry();`,
+	} {
+		if !strings.Contains(preview, required) {
+			t.Errorf("evidence-preview 410 recovery is missing %q", required)
+		}
+	}
+	expiry := strings.Index(preview, `if (isCursorExpired(error)) {`)
+	staleError := strings.Index(
+		preview,
+		`state.issueEvidencePreview.status = "error";`,
+	)
+	if expiry < 0 || staleError < 0 || expiry > staleError {
+		t.Error("evidence-preview 410 must reset and return before stale error state is rendered")
 	}
 }
 

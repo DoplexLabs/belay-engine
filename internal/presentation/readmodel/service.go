@@ -966,7 +966,7 @@ func (s *Service) GetIssue(
 			Issue:       summary,
 			Occurrences: nonNil(occurrences),
 		},
-		Catalog:                issueCatalog(summary.TitleCode),
+		Catalog:                issueCatalog(summary),
 		GlobalAnalysisCoverage: summaryPage.Analysis,
 		ViewCursor:             viewCursor,
 		NextCursor:             nextCursor,

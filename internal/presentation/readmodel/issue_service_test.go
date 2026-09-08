@@ -649,6 +649,94 @@ func TestExactEventLookupValidatesDeduplicatesAndReturnsNonNilSlices(t *testing.
 	}
 }
 
+func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
+	tamper := numbatGuardrailsOffSourceSignal
+	unknown := "custom.rule"
+	tests := []struct {
+		name                    string
+		issue                   model.IssueSummary
+		wantTitle               string
+		wantAction              string
+		wantCatalogStatus       string
+		wantSourceCatalogStatus string
+		wantSourceCode          *string
+	}{
+		{
+			name: "known Numbat source signal",
+			issue: model.IssueSummary{
+				TitleCode:        "issue.numbat_finding",
+				Origin:           "numbat",
+				SourceSignalCode: &tamper,
+			},
+			wantTitle:               "Agent safety confirmations may be disabled",
+			wantAction:              "review_agent_permissions",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "known",
+			wantSourceCode:          &tamper,
+		},
+		{
+			name: "unknown safe Numbat source signal",
+			issue: model.IssueSummary{
+				TitleCode:        "issue.numbat_finding",
+				Origin:           "numbat",
+				SourceSignalCode: &unknown,
+			},
+			wantTitle:               "Upstream Numbat finding",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "unknown",
+			wantSourceCode:          &unknown,
+		},
+		{
+			name: "missing source signal",
+			issue: model.IssueSummary{
+				TitleCode: "issue.numbat_finding",
+				Origin:    "numbat",
+			},
+			wantTitle:               "Upstream Numbat finding",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "unknown",
+		},
+		{
+			name: "non Numbat catalog",
+			issue: model.IssueSummary{
+				TitleCode: "issue.explicit_command_failure",
+				Origin:    "belay",
+			},
+			wantTitle:               "Command failed",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := issueCatalog(test.issue)
+			if catalog.CatalogVersion != IssueCatalogVersion ||
+				catalog.SourceSignalCatalogVersion != SourceSignalCatalogVersion ||
+				catalog.DisplayTitle != test.wantTitle ||
+				catalog.NextEvidenceAction != test.wantAction ||
+				catalog.CatalogStatus != test.wantCatalogStatus ||
+				catalog.SourceSignalCatalogStatus != test.wantSourceCatalogStatus {
+				t.Fatalf("catalog = %+v", catalog)
+			}
+			if test.wantSourceCode == nil {
+				if catalog.SourceSignalCode != nil {
+					t.Fatalf("source signal = %q, want null", *catalog.SourceSignalCode)
+				}
+			} else if catalog.SourceSignalCode == nil ||
+				*catalog.SourceSignalCode != *test.wantSourceCode {
+				t.Fatalf("source signal = %v, want %q", catalog.SourceSignalCode, *test.wantSourceCode)
+			}
+			if catalog.ObservationStatement == "" || catalog.Caveat == "" {
+				t.Fatalf("catalog narrative is incomplete: %+v", catalog)
+			}
+		})
+	}
+}
+
 func testIssueID(character string) string {
 	return "iss_" + strings.Repeat(character, 52)
 }

@@ -548,6 +548,33 @@ select:focus-visible {
   padding: 0 9px 16px;
 }
 
+.attention-disclosure {
+  margin-top: 9px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(11, 13, 16, 0.3);
+}
+
+.attention-disclosure > summary,
+.technical-details > summary,
+.session-technical > summary {
+  min-height: 44px;
+  padding: 12px 13px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.attention-disclosure .coverage-panel {
+  margin: 0 12px 12px;
+}
+
+.attention-disclosure .attention-filters {
+  border-bottom: 0;
+}
+
 .attention-section {
   margin-top: 9px;
   overflow: hidden;
@@ -651,6 +678,14 @@ select:focus-visible {
   color: var(--warning);
   font-size: 9px;
   line-height: 1.45;
+}
+
+.issue-card-action {
+  display: block;
+  margin-top: 9px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
 }
 
 .issue-code {
@@ -796,6 +831,7 @@ select:focus-visible {
 }
 
 .issue-explanation,
+.issue-evidence-preview,
 .fingerprint-panel,
 .fix-attempts-section,
 .matching-section {
@@ -807,11 +843,58 @@ select:focus-visible {
 }
 
 .issue-explanation h3,
+.issue-evidence-preview h3,
 .fingerprint-panel h3,
 .fix-attempts-section h3,
 .matching-section h3 {
   margin: 0;
   font-size: 14px;
+}
+
+.issue-next-action {
+  color: var(--accent) !important;
+  font-weight: 720;
+}
+
+.issue-evidence-preview,
+.technical-details {
+  max-width: 920px;
+  margin-top: 12px;
+}
+
+.evidence-preview-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.issue-evidence-preview > .section-disclosure {
+  margin: 9px 0 12px;
+}
+
+.issue-evidence-preview-list {
+  display: grid;
+  gap: 5px;
+}
+
+.issue-evidence-preview > .secondary-button {
+  margin-top: 12px;
+}
+
+.technical-details {
+  padding: 0 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(17, 20, 25, 0.42);
+}
+
+.technical-details > summary {
+  margin: 0 -18px;
+}
+
+.technical-details .fingerprint-panel {
+  padding: 12px;
 }
 
 .issue-explanation > p:not(.analysis-qualifier) {
@@ -1963,6 +2046,84 @@ h1 {
   margin: 13px 0;
 }
 
+.story-section {
+  margin-top: 13px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(17, 20, 25, 0.65);
+}
+
+.story-section:first-child {
+  margin-top: 12px;
+}
+
+.story-section h4 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.story-attention {
+  border-color: rgba(244, 199, 104, 0.2);
+}
+
+.story-list,
+.session-highlights {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 19px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.session-highlights {
+  list-style: none;
+  padding-left: 0;
+}
+
+.session-highlight {
+  padding: 9px 10px;
+  border-left: 2px solid var(--line-strong);
+  background: var(--bg);
+}
+
+.session-highlight div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-highlight strong {
+  font-size: 11px;
+}
+
+.session-highlight time,
+.session-highlight p {
+  color: var(--subtle);
+  font-size: 9px;
+}
+
+.session-highlight p {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.session-technical {
+  margin-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.session-technical > summary {
+  padding-right: 0;
+  padding-left: 0;
+}
+
 .activity-grid div {
   min-width: 0;
   padding: 8px;
@@ -2724,6 +2885,12 @@ h1 {
     transition: transform 180ms ease;
   }
 
+  .timeline-panel {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
   body.is-timeline-open .timeline-panel,
   body.is-attention-detail-open .attention-detail-panel {
     transform: translateX(0);
@@ -2840,7 +3007,8 @@ h1 {
   }
 
   .session-overview {
-    max-height: 38vh;
+    max-height: none;
+    overflow: visible;
   }
 
   .overview-state {
@@ -2897,8 +3065,20 @@ h1 {
   }
 
   .event-card {
-    max-height: 55vh;
-    overflow: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .timeline-view {
+    display: block;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .event-scroll,
+  .event-list {
+    height: auto;
+    overflow: visible;
   }
 
   .event-rail::before {
