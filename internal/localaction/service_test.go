@@ -16,6 +16,7 @@ const (
 	otherTestIssueID = "iss_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testAnnotationID = "fxa_cccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	testKey          = "12345678-1234-4234-9234-123456789abc"
+	testCursorEpoch  = "ice_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 type actionTestRepository struct {
@@ -93,10 +94,12 @@ func TestPrepareFixAttemptIssuesSnapshotBoundToken(t *testing.T) {
 	now := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
 	repository := &actionTestRepository{
 		eligibility: model.FixEligibility{
-			Eligible: true,
-			Reason:   model.FixEligibilityEligible,
-			IssueID:  testIssueID,
-			Snapshot: 41,
+			Eligible:            true,
+			Reason:              model.FixEligibilityEligible,
+			IssueID:             testIssueID,
+			CursorEpoch:         testCursorEpoch,
+			Snapshot:            41,
+			RetentionGeneration: 7,
 		},
 	}
 	tokens := &actionTestTokens{}
@@ -111,7 +114,12 @@ func TestPrepareFixAttemptIssuesSnapshotBoundToken(t *testing.T) {
 	result, err := service.PrepareFixAttempt(
 		context.Background(),
 		strings.ToUpper(testIssueID),
-		model.IssueViewClaims{Snapshot: 41, IssuedAt: now},
+		model.IssueViewClaims{
+			CursorEpoch:         testCursorEpoch,
+			Snapshot:            41,
+			RetentionGeneration: 7,
+			IssuedAt:            now,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -125,26 +133,37 @@ func TestPrepareFixAttemptIssuesSnapshotBoundToken(t *testing.T) {
 		t.Fatalf("eligibility = %+v", result)
 	}
 	if repository.eligibilityQuery.IssueID != testIssueID ||
+		repository.eligibilityQuery.CursorEpoch != testCursorEpoch ||
 		repository.eligibilityQuery.Snapshot != 41 ||
+		repository.eligibilityQuery.RetentionGeneration != 7 ||
 		!repository.eligibilityQuery.IssuedAt.Equal(now) {
 		t.Fatalf("eligibility query = %+v", repository.eligibilityQuery)
 	}
 	if tokens.issued.IssueID != testIssueID ||
+		tokens.issued.CursorEpoch != testCursorEpoch ||
 		tokens.issued.Snapshot != 41 ||
+		tokens.issued.RetentionGeneration != 7 ||
 		!tokens.issued.IssuedAt.Equal(now) ||
 		!tokens.issued.ExpiresAt.Equal(now.Add(actionTokenLifetime)) {
 		t.Fatalf("issued claims = %+v", tokens.issued)
 	}
 
 	repository.eligibility = model.FixEligibility{
-		Reason:   model.FixEligibilityEvidenceGap,
-		IssueID:  testIssueID,
-		Snapshot: 41,
+		Reason:              model.FixEligibilityEvidenceGap,
+		IssueID:             testIssueID,
+		CursorEpoch:         testCursorEpoch,
+		Snapshot:            41,
+		RetentionGeneration: 7,
 	}
 	result, err = service.PrepareFixAttempt(
 		context.Background(),
 		testIssueID,
-		model.IssueViewClaims{Snapshot: 41, IssuedAt: now},
+		model.IssueViewClaims{
+			CursorEpoch:         testCursorEpoch,
+			Snapshot:            41,
+			RetentionGeneration: 7,
+			IssuedAt:            now,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -172,9 +191,18 @@ func TestPrepareFixAttemptValidatesFreshnessAndMapsErrors(t *testing.T) {
 		want   error
 	}{
 		{"malformed issue", "PRIVATE", model.IssueViewClaims{Snapshot: 1, IssuedAt: now}, ErrInvalidRequest},
-		{"zero snapshot", testIssueID, model.IssueViewClaims{IssuedAt: now}, ErrInvalidRequest},
-		{"future", testIssueID, model.IssueViewClaims{Snapshot: 1, IssuedAt: now.Add(time.Second)}, ErrInvalidRequest},
-		{"expired", testIssueID, model.IssueViewClaims{Snapshot: 1, IssuedAt: now.Add(-actionTokenLifetime - time.Nanosecond)}, ErrCursorExpired},
+		{"zero snapshot", testIssueID, model.IssueViewClaims{
+			CursorEpoch: testCursorEpoch, RetentionGeneration: 1, IssuedAt: now,
+		}, ErrInvalidRequest},
+		{"future", testIssueID, model.IssueViewClaims{
+			CursorEpoch: testCursorEpoch, Snapshot: 1,
+			RetentionGeneration: 1, IssuedAt: now.Add(time.Second),
+		}, ErrInvalidRequest},
+		{"expired", testIssueID, model.IssueViewClaims{
+			CursorEpoch: testCursorEpoch, Snapshot: 1,
+			RetentionGeneration: 1,
+			IssuedAt:            now.Add(-actionTokenLifetime - time.Nanosecond),
+		}, ErrCursorExpired},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := service.PrepareFixAttempt(context.Background(), test.issue, test.claims)
@@ -187,7 +215,12 @@ func TestPrepareFixAttemptValidatesFreshnessAndMapsErrors(t *testing.T) {
 	if _, err := service.PrepareFixAttempt(
 		context.Background(),
 		testIssueID,
-		model.IssueViewClaims{Snapshot: 1, IssuedAt: now},
+		model.IssueViewClaims{
+			CursorEpoch:         testCursorEpoch,
+			Snapshot:            1,
+			RetentionGeneration: 1,
+			IssuedAt:            now,
+		},
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("not-found error = %v", err)
 	}
@@ -195,7 +228,12 @@ func TestPrepareFixAttemptValidatesFreshnessAndMapsErrors(t *testing.T) {
 	if _, err := service.PrepareFixAttempt(
 		context.Background(),
 		testIssueID,
-		model.IssueViewClaims{Snapshot: 1, IssuedAt: now},
+		model.IssueViewClaims{
+			CursorEpoch:         testCursorEpoch,
+			Snapshot:            1,
+			RetentionGeneration: 1,
+			IssuedAt:            now,
+		},
 	); !errors.Is(err, ErrCursorExpired) {
 		t.Fatalf("expiry error = %v", err)
 	}
@@ -263,6 +301,16 @@ func TestRecordAuthenticatesAndBindsBeforeRepositoryReplay(t *testing.T) {
 	}
 	if repository.recordCalls != 1 {
 		t.Fatal("unauthenticated token reached repository replay")
+	}
+	tokens.decodeErr = local.ErrFixActionTokenExpired
+	if _, err := service.RecordFixAttempt(
+		context.Background(),
+		testIssueID,
+		"stale-token",
+		model.FixChangeCode,
+		testKey,
+	); !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("stale token error = %v", err)
 	}
 }
 

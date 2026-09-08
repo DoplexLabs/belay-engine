@@ -15,9 +15,22 @@ import (
 
 const maxFixActionTokenBytes = 2048
 
-var ErrFixActionTokenInvalid = errors.New("fix action token is invalid")
+var (
+	ErrFixActionTokenInvalid = errors.New("fix action token is invalid")
+	ErrFixActionTokenExpired = errors.New("fix action token has expired")
+)
 
 type fixActionTokenPayload struct {
+	Version             string `json:"v"`
+	CursorEpoch         string `json:"x"`
+	IssueID             string `json:"i"`
+	Snapshot            int64  `json:"s"`
+	RetentionGeneration int64  `json:"r"`
+	IssuedAt            string `json:"a"`
+	ExpiresAt           string `json:"e"`
+}
+
+type fixActionTokenPayloadV1 struct {
 	Version   string `json:"v"`
 	IssueID   string `json:"i"`
 	Snapshot  int64  `json:"s"`
@@ -31,12 +44,21 @@ func (s *Store) IssueFixActionToken(claims model.FixActionClaims) (string, error
 	if !validFixActionClaims(claims) {
 		return "", ErrFixActionTokenInvalid
 	}
+	epoch, err := s.currentIssueCursorEpoch()
+	if err != nil {
+		return "", err
+	}
+	if claims.CursorEpoch != epoch {
+		return "", ErrFixActionTokenExpired
+	}
 	body, err := json.Marshal(fixActionTokenPayload{
-		Version:   claims.Version,
-		IssueID:   claims.IssueID,
-		Snapshot:  claims.Snapshot,
-		IssuedAt:  formatProjectionTime(claims.IssuedAt),
-		ExpiresAt: formatProjectionTime(claims.ExpiresAt),
+		Version:             claims.Version,
+		CursorEpoch:         claims.CursorEpoch,
+		IssueID:             claims.IssueID,
+		Snapshot:            claims.Snapshot,
+		RetentionGeneration: claims.RetentionGeneration,
+		IssuedAt:            formatProjectionTime(claims.IssuedAt),
+		ExpiresAt:           formatProjectionTime(claims.ExpiresAt),
 	})
 	if err != nil {
 		return "", errors.New("encode fix action token")
@@ -74,6 +96,24 @@ func (s *Store) DecodeFixActionToken(token string) (model.FixActionClaims, error
 		return model.FixActionClaims{}, ErrFixActionTokenInvalid
 	}
 
+	var version struct {
+		Version string `json:"v"`
+	}
+	if err := json.Unmarshal(body, &version); err != nil {
+		return model.FixActionClaims{}, ErrFixActionTokenInvalid
+	}
+	if version.Version == model.FixActionTokenVersionV1 {
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		var legacy fixActionTokenPayloadV1
+		if err := decoder.Decode(&legacy); err != nil {
+			return model.FixActionClaims{}, ErrFixActionTokenInvalid
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return model.FixActionClaims{}, ErrFixActionTokenInvalid
+		}
+		return model.FixActionClaims{}, ErrFixActionTokenExpired
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var payload fixActionTokenPayload
@@ -92,22 +132,33 @@ func (s *Store) DecodeFixActionToken(token string) (model.FixActionClaims, error
 		return model.FixActionClaims{}, ErrFixActionTokenInvalid
 	}
 	claims := model.FixActionClaims{
-		Version:   payload.Version,
-		IssueID:   payload.IssueID,
-		Snapshot:  payload.Snapshot,
-		IssuedAt:  issuedAt,
-		ExpiresAt: expiresAt,
+		Version:             payload.Version,
+		CursorEpoch:         payload.CursorEpoch,
+		IssueID:             payload.IssueID,
+		Snapshot:            payload.Snapshot,
+		RetentionGeneration: payload.RetentionGeneration,
+		IssuedAt:            issuedAt,
+		ExpiresAt:           expiresAt,
 	}
 	if !validFixActionClaims(claims) {
 		return model.FixActionClaims{}, ErrFixActionTokenInvalid
+	}
+	epoch, err := s.currentIssueCursorEpoch()
+	if err != nil {
+		return model.FixActionClaims{}, err
+	}
+	if claims.CursorEpoch != epoch {
+		return model.FixActionClaims{}, ErrFixActionTokenExpired
 	}
 	return claims, nil
 }
 
 func validFixActionClaims(claims model.FixActionClaims) bool {
 	return claims.Version == model.FixActionTokenVersion &&
+		claims.CursorEpoch != "" &&
 		validIssueID(claims.IssueID) &&
 		claims.Snapshot > 0 &&
+		claims.RetentionGeneration > 0 &&
 		!claims.IssuedAt.IsZero() &&
 		!claims.ExpiresAt.IsZero() &&
 		claims.ExpiresAt.After(claims.IssuedAt) &&

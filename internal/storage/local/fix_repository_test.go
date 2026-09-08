@@ -25,6 +25,8 @@ type fixTestFixture struct {
 	sessionID   string
 	eventIDs    []string
 	snapshot    int64
+	cursorEpoch string
+	retention   int64
 }
 
 func TestFixAnnotationCreateReplayConflictAndProjectionIsolation(t *testing.T) {
@@ -149,6 +151,36 @@ func TestFixAnnotationCreateReplayConflictAndProjectionIsolation(t *testing.T) {
 	}
 }
 
+func TestFixActionEpochAndRetentionAreCheckedBeforeReplay(t *testing.T) {
+	ctx := context.Background()
+	fixture := newFixTestFixture(
+		t, 1, model.ScopeResolved, "belay", "command_failure", false,
+	)
+	input := fixture.input("00000000-0000-4000-8000-000000000099")
+	if _, err := fixture.store.RecordFixAnnotation(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+
+	staleEpoch := input
+	staleEpoch.Claims.CursorEpoch =
+		"ice_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := fixture.store.RecordFixAnnotation(ctx, staleEpoch); !errors.Is(
+		err,
+		model.ErrIssueSnapshotExpired,
+	) {
+		t.Fatalf("stale epoch replay error = %v", err)
+	}
+
+	staleRetention := input
+	staleRetention.Claims.RetentionGeneration++
+	if _, err := fixture.store.RecordFixAnnotation(ctx, staleRetention); !errors.Is(
+		err,
+		model.ErrIssueSnapshotExpired,
+	) {
+		t.Fatalf("stale retention replay error = %v", err)
+	}
+}
+
 func TestFixAnnotationExpiryBoundary(t *testing.T) {
 	ctx := context.Background()
 
@@ -261,9 +293,11 @@ func TestFixEligibilityAggregateFirstAndLatestAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	eligibility, err := store.EvaluateFixEligibility(ctx, model.FixEligibilityQuery{
-		IssueID:  issueID,
-		Snapshot: page.Snapshot,
-		IssuedAt: now,
+		IssueID:             issueID,
+		CursorEpoch:         mustIssueCursorEpoch(t, store),
+		Snapshot:            page.Snapshot,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,9 +318,11 @@ func TestFixEligibilityAggregateFirstAndLatestAnchor(t *testing.T) {
 	eligible, err := currentOnly.store.EvaluateFixEligibility(
 		ctx,
 		model.FixEligibilityQuery{
-			IssueID:  currentOnly.issueID,
-			Snapshot: currentOnly.snapshot,
-			IssuedAt: *currentOnly.now,
+			IssueID:             currentOnly.issueID,
+			CursorEpoch:         currentOnly.cursorEpoch,
+			Snapshot:            currentOnly.snapshot,
+			RetentionGeneration: currentOnly.retention,
+			IssuedAt:            *currentOnly.now,
 		},
 	)
 	if err != nil || !eligible.Eligible {
@@ -368,11 +404,13 @@ func TestFixAnnotationSelectsLatestVisibleOccurrence(t *testing.T) {
 	}
 	result, err := store.RecordFixAnnotation(ctx, FixAnnotationInput{
 		Claims: model.FixActionClaims{
-			Version:   model.FixActionTokenVersion,
-			IssueID:   issueID,
-			Snapshot:  snapshot,
-			IssuedAt:  now,
-			ExpiresAt: now.Add(issueCursorLifetime),
+			Version:             model.FixActionTokenVersion,
+			CursorEpoch:         mustIssueCursorEpoch(t, store),
+			IssueID:             issueID,
+			Snapshot:            snapshot,
+			RetentionGeneration: mustRetentionGeneration(t, store),
+			IssuedAt:            now,
+			ExpiresAt:           now.Add(issueCursorLifetime),
 		},
 		ChangeKind:     model.FixChangeCode,
 		RecordedVia:    model.FixRecordedViaLocalUI,
@@ -447,9 +485,11 @@ func TestFixEligibilityRejectsUnsupportedIssueStates(t *testing.T) {
 			got, err := fixture.store.EvaluateFixEligibility(
 				context.Background(),
 				model.FixEligibilityQuery{
-					IssueID:  fixture.issueID,
-					Snapshot: fixture.snapshot,
-					IssuedAt: *fixture.now,
+					IssueID:             fixture.issueID,
+					CursorEpoch:         fixture.cursorEpoch,
+					Snapshot:            fixture.snapshot,
+					RetentionGeneration: fixture.retention,
+					IssuedAt:            *fixture.now,
 				},
 			)
 			if err != nil {
@@ -489,9 +529,11 @@ func TestFixEligibilityReturnsNotFoundWhenNoOccurrenceIsVisible(t *testing.T) {
 	_, err = fixture.store.EvaluateFixEligibility(
 		context.Background(),
 		model.FixEligibilityQuery{
-			IssueID:  absentIssueID,
-			Snapshot: fixture.snapshot,
-			IssuedAt: *fixture.now,
+			IssueID:             absentIssueID,
+			CursorEpoch:         fixture.cursorEpoch,
+			Snapshot:            fixture.snapshot,
+			RetentionGeneration: fixture.retention,
+			IssuedAt:            *fixture.now,
 		},
 	)
 	if !errors.Is(err, ErrFixIssueNotFound) {
@@ -1209,17 +1251,42 @@ func newFixTestFixtureAt(
 		sessionID:   sessionID,
 		eventIDs:    eventIDs,
 		snapshot:    commit.ProjectionGeneration,
+		cursorEpoch: mustIssueCursorEpoch(t, store),
+		retention:   mustRetentionGeneration(t, store),
 	}
 }
 
 func (fixture fixTestFixture) claims() model.FixActionClaims {
 	return model.FixActionClaims{
-		Version:   model.FixActionTokenVersion,
-		IssueID:   fixture.issueID,
-		Snapshot:  fixture.snapshot,
-		IssuedAt:  *fixture.now,
-		ExpiresAt: fixture.now.Add(issueCursorLifetime),
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         fixture.cursorEpoch,
+		IssueID:             fixture.issueID,
+		Snapshot:            fixture.snapshot,
+		RetentionGeneration: fixture.retention,
+		IssuedAt:            *fixture.now,
+		ExpiresAt:           fixture.now.Add(issueCursorLifetime),
 	}
+}
+
+func mustIssueCursorEpoch(t *testing.T, store *Store) string {
+	t.Helper()
+	epoch, err := store.currentIssueCursorEpoch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return epoch
+}
+
+func mustRetentionGeneration(t *testing.T, store *Store) int64 {
+	t.Helper()
+	var generation int64
+	if err := store.db.QueryRow(`
+		SELECT retention_generation
+		FROM issue_projection_metadata WHERE singleton = 1`,
+	).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	return generation
 }
 
 func (fixture fixTestFixture) input(key string) FixAnnotationInput {

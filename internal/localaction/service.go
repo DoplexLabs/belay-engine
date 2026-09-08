@@ -126,7 +126,9 @@ func (s *Service) PrepareFixAttempt(
 	issueID = normalizeIssueID(issueID)
 	view.IssuedAt = view.IssuedAt.UTC()
 	if !issueIDPattern.MatchString(issueID) ||
+		view.CursorEpoch == "" ||
 		view.Snapshot <= 0 ||
+		view.RetentionGeneration <= 0 ||
 		view.IssuedAt.IsZero() {
 		return FixEligibility{}, ErrInvalidRequest
 	}
@@ -141,9 +143,11 @@ func (s *Service) PrepareFixAttempt(
 	eligibility, err := s.repository.EvaluateFixEligibility(
 		ctx,
 		model.FixEligibilityQuery{
-			IssueID:  issueID,
-			Snapshot: view.Snapshot,
-			IssuedAt: view.IssuedAt,
+			IssueID:             issueID,
+			CursorEpoch:         view.CursorEpoch,
+			Snapshot:            view.Snapshot,
+			RetentionGeneration: view.RetentionGeneration,
+			IssuedAt:            view.IssuedAt,
 		},
 	)
 	if err != nil {
@@ -158,16 +162,21 @@ func (s *Service) PrepareFixAttempt(
 		return result, nil
 	}
 	claims := model.FixActionClaims{
-		Version:   model.FixActionTokenVersion,
-		IssueID:   issueID,
-		Snapshot:  eligibility.Snapshot,
-		IssuedAt:  view.IssuedAt,
-		ExpiresAt: expiresAt,
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         eligibility.CursorEpoch,
+		IssueID:             issueID,
+		Snapshot:            eligibility.Snapshot,
+		RetentionGeneration: eligibility.RetentionGeneration,
+		IssuedAt:            view.IssuedAt,
+		ExpiresAt:           expiresAt,
 	}
 	token, err := s.tokens.IssueFixActionToken(claims)
 	if err != nil {
 		if errors.Is(err, local.ErrFixActionTokenInvalid) {
 			return FixEligibility{}, ErrInvalidRequest
+		}
+		if errors.Is(err, local.ErrFixActionTokenExpired) {
+			return FixEligibility{}, ErrCursorExpired
 		}
 		return FixEligibility{}, err
 	}
@@ -200,6 +209,9 @@ func (s *Service) RecordFixAttempt(
 	if err != nil {
 		if errors.Is(err, local.ErrFixActionTokenInvalid) {
 			return FixAttemptResult{}, ErrInvalidRequest
+		}
+		if errors.Is(err, local.ErrFixActionTokenExpired) {
+			return FixAttemptResult{}, ErrCursorExpired
 		}
 		return FixAttemptResult{}, err
 	}

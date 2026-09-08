@@ -3,6 +3,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -135,5 +136,49 @@ func TestLookupSessionEventsRejectsInvalidAndOversizedRequests(t *testing.T) {
 		missingOnly.FoundCount != 0 ||
 		missingOnly.MissingCount != 1 {
 		t.Fatalf("missing-only lookup = %+v", missingOnly)
+	}
+}
+
+func TestVisitSessionEventsStreamsInCanonicalOrderAndStopsOnVisitorError(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	base := time.Date(2026, 9, 8, 22, 0, 0, 0, time.UTC)
+	events := []model.Event{
+		storageTestEvent("00000000-0000-7000-8000-000000000921", "visitor-session", 2, base.Add(time.Second)),
+		storageTestEvent("00000000-0000-7000-8000-000000000920", "visitor-session", 1, base),
+	}
+	for _, event := range events {
+		if inserted, err := store.AppendEvent(ctx, event); err != nil || !inserted {
+			t.Fatalf("AppendEvent() = %t, %v", inserted, err)
+		}
+	}
+	var visited []string
+	summary, err := store.VisitSessionEvents(ctx, model.EventLookupQuery{
+		SessionID: "visitor-session",
+		EventIDs:  []string{events[0].EventID, events[1].EventID},
+	}, func(event model.Event) error {
+		visited = append(visited, event.EventID)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.FoundCount != 2 ||
+		len(visited) != 2 ||
+		visited[0] != events[1].EventID ||
+		visited[1] != events[0].EventID {
+		t.Fatalf("visitor order/summary = %v/%+v", visited, summary)
+	}
+
+	stop := errors.New("stop visitor")
+	calls := 0
+	if _, err := store.VisitSessionEvents(ctx, model.EventLookupQuery{
+		SessionID: "visitor-session",
+		EventIDs:  []string{events[0].EventID, events[1].EventID},
+	}, func(model.Event) error {
+		calls++
+		return stop
+	}); !errors.Is(err, stop) || calls != 1 {
+		t.Fatalf("visitor stop = calls %d, error %v", calls, err)
 	}
 }

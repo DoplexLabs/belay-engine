@@ -4,7 +4,8 @@ import "time"
 
 const (
 	FixSchemaVersion        = "belay.fix.v1"
-	FixActionTokenVersion   = "belay.fix-action.v1"
+	FixActionTokenVersion   = "belay.fix-action.v2"
+	FixActionTokenVersionV1 = "belay.fix-action.v1"
 	FixChangeCatalogVersion = "fix-change.v1"
 	FixRecordedViaLocalUI   = "local_ui"
 
@@ -72,29 +73,37 @@ func (reason FixRetractionReason) Valid() bool {
 }
 
 type IssueViewClaims struct {
-	Snapshot int64     `json:"snapshot"`
-	IssuedAt time.Time `json:"issued_at"`
+	CursorEpoch         string    `json:"cursor_epoch"`
+	Snapshot            int64     `json:"snapshot"`
+	RetentionGeneration int64     `json:"retention_generation"`
+	IssuedAt            time.Time `json:"issued_at"`
 }
 
 type FixActionClaims struct {
-	Version   string    `json:"version"`
-	IssueID   string    `json:"issue_id"`
-	Snapshot  int64     `json:"snapshot"`
-	IssuedAt  time.Time `json:"issued_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Version             string    `json:"version"`
+	CursorEpoch         string    `json:"cursor_epoch"`
+	IssueID             string    `json:"issue_id"`
+	Snapshot            int64     `json:"snapshot"`
+	RetentionGeneration int64     `json:"retention_generation"`
+	IssuedAt            time.Time `json:"issued_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
 }
 
 type FixEligibilityQuery struct {
-	IssueID  string
-	Snapshot int64
-	IssuedAt time.Time
+	IssueID             string
+	CursorEpoch         string
+	Snapshot            int64
+	RetentionGeneration int64
+	IssuedAt            time.Time
 }
 
 type FixEligibility struct {
-	Eligible bool   `json:"eligible"`
-	Reason   string `json:"reason"`
-	IssueID  string `json:"issue_id"`
-	Snapshot int64  `json:"snapshot"`
+	Eligible            bool   `json:"eligible"`
+	Reason              string `json:"reason"`
+	IssueID             string `json:"issue_id"`
+	CursorEpoch         string `json:"cursor_epoch"`
+	Snapshot            int64  `json:"snapshot"`
+	RetentionGeneration int64  `json:"retention_generation"`
 }
 
 type FixAnnotation struct {

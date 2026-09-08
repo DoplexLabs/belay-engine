@@ -110,6 +110,12 @@ func (s *Store) EvaluateFixEligibility(
 		return model.FixEligibility{}, errors.New("begin fix eligibility read")
 	}
 	defer tx.Rollback()
+	epoch, retentionGeneration, err := s.validateFixEpochTx(
+		ctx, tx, query.CursorEpoch, query.RetentionGeneration,
+	)
+	if err != nil {
+		return model.FixEligibility{}, err
+	}
 	snapshot, err := s.issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
 	if err != nil {
 		return model.FixEligibility{}, err
@@ -121,7 +127,9 @@ func (s *Store) EvaluateFixEligibility(
 	if err := tx.Commit(); err != nil {
 		return model.FixEligibility{}, errors.New("complete fix eligibility read")
 	}
+	eligibility.CursorEpoch = epoch
 	eligibility.Snapshot = snapshot
+	eligibility.RetentionGeneration = retentionGeneration
 	return eligibility, nil
 }
 
@@ -152,6 +160,14 @@ func (s *Store) RecordFixAnnotation(
 		return FixAnnotationResult{}, errors.New("begin fix annotation persistence")
 	}
 	defer tx.Rollback()
+	if _, _, err := s.validateFixEpochTx(
+		ctx,
+		tx,
+		input.Claims.CursorEpoch,
+		input.Claims.RetentionGeneration,
+	); err != nil {
+		return FixAnnotationResult{}, err
+	}
 	existing, err := s.readFixAnnotationByIDTx(ctx, tx, annotationID)
 	switch {
 	case err == nil:
@@ -327,6 +343,33 @@ func (s *Store) RecordFixAnnotation(
 		return FixAnnotationResult{}, errors.New("commit fix annotation persistence")
 	}
 	return FixAnnotationResult{Annotation: annotation}, nil
+}
+
+func (s *Store) validateFixEpochTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	claimedEpoch string,
+	claimedRetentionGeneration int64,
+) (string, int64, error) {
+	if claimedEpoch == "" || claimedRetentionGeneration < 1 {
+		return "", 0, model.ErrIssueSnapshotInvalid
+	}
+	epoch, err := s.currentIssueCursorEpoch()
+	if err != nil {
+		return "", 0, err
+	}
+	var retentionGeneration int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT retention_generation
+		FROM issue_projection_metadata
+		WHERE singleton = 1`,
+	).Scan(&retentionGeneration); err != nil {
+		return "", 0, errors.New("read fix action epoch")
+	}
+	if claimedEpoch != epoch || claimedRetentionGeneration != retentionGeneration {
+		return "", 0, model.ErrIssueSnapshotExpired
+	}
+	return epoch, retentionGeneration, nil
 }
 
 func (s *Store) RetractFixAnnotation(

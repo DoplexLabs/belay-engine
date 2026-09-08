@@ -8,6 +8,7 @@ import (
 var (
 	ErrIssueSnapshotExpired = errors.New("issue snapshot has expired")
 	ErrIssueSnapshotInvalid = errors.New("issue snapshot is invalid")
+	ErrIssueCursorInvalid   = errors.New("issue cursor is invalid")
 )
 
 const (
@@ -139,18 +140,23 @@ type IssuePosition struct {
 }
 
 type IssueQuery struct {
-	Filter   IssueFilter
-	Limit    int
-	Snapshot int64
-	IssuedAt time.Time
-	Cursor   *IssuePosition
+	Filter              IssueFilter
+	Limit               int
+	CursorEpoch         string
+	Snapshot            int64
+	RetentionGeneration int64
+	IssuedAt            time.Time
+	Cursor              *IssuePosition
 }
 
 type IssuePage struct {
-	Data     []IssueSummary        `json:"data"`
-	Analysis IssueAnalysisCoverage `json:"analysis"`
-	Snapshot int64                 `json:"snapshot"`
-	HasMore  bool                  `json:"has_more"`
+	Data                []IssueSummary        `json:"data"`
+	Analysis            IssueAnalysisCoverage `json:"analysis"`
+	CursorEpoch         string                `json:"cursor_epoch"`
+	Snapshot            int64                 `json:"snapshot"`
+	RetentionGeneration int64                 `json:"retention_generation"`
+	IssuedAt            time.Time             `json:"issued_at"`
+	HasMore             bool                  `json:"has_more"`
 }
 
 type IssueOccurrencePosition struct {
@@ -159,15 +165,20 @@ type IssueOccurrencePosition struct {
 }
 
 type IssueOccurrenceQuery struct {
-	IssueID  string
-	Limit    int
-	Snapshot int64
-	IssuedAt time.Time
-	Cursor   *IssueOccurrencePosition
+	IssueID             string
+	Limit               int
+	CursorEpoch         string
+	Snapshot            int64
+	RetentionGeneration int64
+	IssuedAt            time.Time
+	Cursor              *IssueOccurrencePosition
 }
 
 type IssueOccurrencePage struct {
-	Data     []IssueOccurrence `json:"data"`
-	Snapshot int64             `json:"snapshot"`
-	HasMore  bool              `json:"has_more"`
+	Data                []IssueOccurrence `json:"data"`
+	CursorEpoch         string            `json:"cursor_epoch"`
+	Snapshot            int64             `json:"snapshot"`
+	RetentionGeneration int64             `json:"retention_generation"`
+	IssuedAt            time.Time         `json:"issued_at"`
+	HasMore             bool              `json:"has_more"`
 }

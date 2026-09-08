@@ -382,11 +382,13 @@ func TestMigration011BackfillsExactNumbatHintsAndMonitoringSubjects(t *testing.T
 	for index, issueID := range issueIDs {
 		result, err := store.RecordFixAnnotation(ctx, FixAnnotationInput{
 			Claims: model.FixActionClaims{
-				Version:   model.FixActionTokenVersion,
-				IssueID:   issueID,
-				Snapshot:  commit.ProjectionGeneration,
-				IssuedAt:  now,
-				ExpiresAt: now.Add(issueCursorLifetime),
+				Version:             model.FixActionTokenVersion,
+				CursorEpoch:         mustIssueCursorEpoch(t, store),
+				IssueID:             issueID,
+				Snapshot:            commit.ProjectionGeneration,
+				RetentionGeneration: mustRetentionGeneration(t, store),
+				IssuedAt:            now,
+				ExpiresAt:           now.Add(issueCursorLifetime),
 			},
 			ChangeKind:     model.FixChangeCode,
 			RecordedVia:    model.FixRecordedViaLocalUI,

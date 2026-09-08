@@ -215,6 +215,14 @@ type EventLookupResult struct {
 	DataThrough     time.Time `json:"data_through"`
 }
 
+type EventLookupSummary struct {
+	RequestedCount  int       `json:"requested_count"`
+	FoundCount      int       `json:"found_count"`
+	MissingCount    int       `json:"missing_count"`
+	MissingEventIDs []string  `json:"missing_event_ids"`
+	DataThrough     time.Time `json:"data_through"`
+}
+
 type ActivityQuery struct {
 	Filter   ActivityFilter
 	Snapshot int64

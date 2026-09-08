@@ -24,6 +24,8 @@ const (
 	numbatProjectScopeHashKeyDomain  = "belay.local.numbat-project-scope-hash.v1"
 	commandSignatureKeyDomain        = "belay.local.command-signature.v1"
 	issueFingerprintKeyDomain        = "belay.local.issue-fingerprint.v1"
+	issueCursorKeyDomain             = "belay.local.issue-cursor.v2"
+	issueCursorEpochKeyDomain        = "belay.local.issue-cursor-epoch.v2"
 	fixAnnotationIDKeyDomain         = "belay.local.fix-annotation.v1"
 	fixAnnotationRequestKeyDomain    = "belay.local.fix-annotation-request.v1"
 	fixActionTokenKeyDomain          = "belay.local.fix-action-token.v1"
@@ -124,6 +126,14 @@ func (s *Store) deriveFixAnnotationID(idempotencyKey string) (string, error) {
 	)
 }
 
+func (s *Store) currentIssueCursorEpoch() (string, error) {
+	return s.deriveOpaqueID(
+		issueCursorEpochKeyDomain,
+		"ice_",
+		lengthPrefixed([]string{s.storeID}),
+	)
+}
+
 func (s *Store) deriveFixAnnotationRequestFingerprint(
 	claims model.FixActionClaims,
 	changeKind model.FixChangeKind,
@@ -134,8 +144,11 @@ func (s *Store) deriveFixAnnotationRequestFingerprint(
 		"fxp_",
 		lengthPrefixed([]string{
 			model.FixSchemaVersion,
+			claims.Version,
+			claims.CursorEpoch,
 			claims.IssueID,
 			fmt.Sprint(claims.Snapshot),
+			fmt.Sprint(claims.RetentionGeneration),
 			formatProjectionTime(claims.IssuedAt),
 			model.FixChangeCatalogVersion,
 			string(changeKind),

@@ -2,6 +2,7 @@ package local
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -23,11 +24,13 @@ func TestFixActionTokenRoundTripTamperingAndStoreBinding(t *testing.T) {
 	}
 	issuedAt := time.Date(2026, 9, 8, 17, 0, 0, 0, time.UTC)
 	claims := model.FixActionClaims{
-		Version:   model.FixActionTokenVersion,
-		IssueID:   issueID,
-		Snapshot:  17,
-		IssuedAt:  issuedAt,
-		ExpiresAt: issuedAt.Add(issueCursorLifetime),
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         mustIssueCursorEpoch(t, store),
+		IssueID:             issueID,
+		Snapshot:            17,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            issuedAt,
+		ExpiresAt:           issuedAt.Add(issueCursorLifetime),
 	}
 	token, err := store.IssueFixActionToken(claims)
 	if err != nil {
@@ -81,6 +84,60 @@ func TestFixActionTokenRoundTripTamperingAndStoreBinding(t *testing.T) {
 	}
 }
 
+func TestFixActionTokenV1AndStaleV2EpochAreExpired(t *testing.T) {
+	store := openStorageTestStore(t)
+	_, issueID, err := store.DeriveIssueIdentity("v1", "detector", "scope", "dimension")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	key, err := store.derivedKey(fixActionTokenKeyDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(key)
+	seal := func(body []byte) string {
+		return base64.RawURLEncoding.EncodeToString(body) + "." +
+			base64.RawURLEncoding.EncodeToString(opaqueDigest(key, body))
+	}
+
+	legacyBody, err := json.Marshal(fixActionTokenPayloadV1{
+		Version:   model.FixActionTokenVersionV1,
+		IssueID:   issueID,
+		Snapshot:  1,
+		IssuedAt:  formatProjectionTime(base),
+		ExpiresAt: formatProjectionTime(base.Add(time.Minute)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DecodeFixActionToken(seal(legacyBody)); !errors.Is(
+		err,
+		ErrFixActionTokenExpired,
+	) {
+		t.Fatalf("signed V1 error = %v", err)
+	}
+
+	staleBody, err := json.Marshal(fixActionTokenPayload{
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         "ice_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		IssueID:             issueID,
+		Snapshot:            1,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            formatProjectionTime(base),
+		ExpiresAt:           formatProjectionTime(base.Add(time.Minute)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DecodeFixActionToken(seal(staleBody)); !errors.Is(
+		err,
+		ErrFixActionTokenExpired,
+	) {
+		t.Fatalf("stale V2 epoch error = %v", err)
+	}
+}
+
 func TestFixActionTokenValidatesStructureButNotCurrentExpiry(t *testing.T) {
 	store := openStorageTestStore(t)
 	_, issueID, err := store.DeriveIssueIdentity("v1", "detector", "scope", "dimension")
@@ -89,11 +146,13 @@ func TestFixActionTokenValidatesStructureButNotCurrentExpiry(t *testing.T) {
 	}
 	base := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	expiredClaims := model.FixActionClaims{
-		Version:   model.FixActionTokenVersion,
-		IssueID:   issueID,
-		Snapshot:  1,
-		IssuedAt:  base,
-		ExpiresAt: base.Add(time.Minute),
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         mustIssueCursorEpoch(t, store),
+		IssueID:             issueID,
+		Snapshot:            1,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            base,
+		ExpiresAt:           base.Add(time.Minute),
 	}
 	token, err := store.IssueFixActionToken(expiredClaims)
 	if err != nil {
@@ -106,25 +165,31 @@ func TestFixActionTokenValidatesStructureButNotCurrentExpiry(t *testing.T) {
 	for _, claims := range []model.FixActionClaims{
 		{},
 		{
-			Version:   "wrong",
-			IssueID:   issueID,
-			Snapshot:  1,
-			IssuedAt:  base,
-			ExpiresAt: base.Add(time.Minute),
+			Version:             "wrong",
+			CursorEpoch:         expiredClaims.CursorEpoch,
+			IssueID:             issueID,
+			Snapshot:            1,
+			RetentionGeneration: expiredClaims.RetentionGeneration,
+			IssuedAt:            base,
+			ExpiresAt:           base.Add(time.Minute),
 		},
 		{
-			Version:   model.FixActionTokenVersion,
-			IssueID:   "iss_invalid",
-			Snapshot:  1,
-			IssuedAt:  base,
-			ExpiresAt: base.Add(time.Minute),
+			Version:             model.FixActionTokenVersion,
+			CursorEpoch:         expiredClaims.CursorEpoch,
+			IssueID:             "iss_invalid",
+			Snapshot:            1,
+			RetentionGeneration: expiredClaims.RetentionGeneration,
+			IssuedAt:            base,
+			ExpiresAt:           base.Add(time.Minute),
 		},
 		{
-			Version:   model.FixActionTokenVersion,
-			IssueID:   issueID,
-			Snapshot:  1,
-			IssuedAt:  base,
-			ExpiresAt: base.Add(issueCursorLifetime + time.Nanosecond),
+			Version:             model.FixActionTokenVersion,
+			CursorEpoch:         expiredClaims.CursorEpoch,
+			IssueID:             issueID,
+			Snapshot:            1,
+			RetentionGeneration: expiredClaims.RetentionGeneration,
+			IssuedAt:            base,
+			ExpiresAt:           base.Add(issueCursorLifetime + time.Nanosecond),
 		},
 	} {
 		if _, err := store.IssueFixActionToken(claims); !errors.Is(
