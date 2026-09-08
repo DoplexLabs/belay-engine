@@ -380,7 +380,7 @@ func assertIssueSummaryReady(
 		materialized != generation ||
 		oldest != generation ||
 		summaries != summaryCount ||
-		coverage != 1 {
+		coverage < 1 {
 		t.Fatalf(
 			"summary readiness=%q generations=%d/%d/%d want=%d summaries=%d/%d coverage=%d",
 			readiness, build, materialized, oldest, generation,

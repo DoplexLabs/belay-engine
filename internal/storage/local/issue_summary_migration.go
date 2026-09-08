@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
 )
@@ -24,6 +23,9 @@ func (s *Store) resumeIssueSummaryMigration(ctx context.Context) error {
 	}
 	if applied == 0 {
 		return nil
+	}
+	if err := s.ensureIssueSummaryRuntimeIndexes(ctx); err != nil {
+		return err
 	}
 	if err := s.ensurePersistedIssueCursorEpoch(ctx); err != nil {
 		return err
@@ -60,6 +62,18 @@ func (s *Store) resumeIssueSummaryMigration(ctx context.Context) error {
 		return s.verifyIssueSummaryReadiness(ctx)
 	}
 	return errors.New("issue summary generation changed during startup")
+}
+
+func (s *Store) ensureIssueSummaryRuntimeIndexes(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS issue_summary_order_snapshot_idx
+		ON issue_summary_revisions(
+			severity_rank DESC, repeated DESC, last_observed_at DESC, issue_id,
+			visible_from_generation, visible_until_generation
+		)`); err != nil {
+		return errors.New("ensure issue summary runtime indexes")
+	}
+	return nil
 }
 
 func (s *Store) ensurePersistedIssueCursorEpoch(ctx context.Context) error {
@@ -260,118 +274,7 @@ func materializeCurrentIssueSummaryTx(
 	generation int64,
 	now string,
 ) error {
-	var fingerprintID, fingerprintVersion, origin, detectorID, detectorVersion string
-	var category, titleCode, severity, confidence, scopeQuality string
-	var firstObserved, lastObserved, analysisStatus string
-	var severityRank, occurrenceCount, sessionCount int
-	var evidenceComplete, retainedHistoryOnly, experimental int
-	err := tx.QueryRowContext(ctx, `
-		WITH visible AS (
-			SELECT io.*, sar.status AS current_status
-			FROM issue_occurrences io
-			JOIN session_analysis_revisions sar
-				ON sar.session_key = io.session_key
-				AND sar.visible_until_generation IS NULL
-			WHERE io.issue_id = ? AND io.visible_until_generation IS NULL
-		)
-		SELECT
-			MIN(fingerprint_id), MIN(fingerprint_version), MIN(origin),
-			MIN(detector_id), MAX(detector_version), MIN(category),
-			MIN(title_code),
-			MAX(CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4
-				WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END),
-			CASE MAX(CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4
-				WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END)
-				WHEN 5 THEN 'critical' WHEN 4 THEN 'high' WHEN 3 THEN 'medium'
-				WHEN 2 THEN 'low' ELSE 'info' END,
-			CASE MIN(CASE confidence WHEN 'low' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END)
-				WHEN 1 THEN 'low' WHEN 2 THEN 'medium' ELSE 'high' END,
-			CASE MAX(CASE scope_quality WHEN 'conflict' THEN 4 WHEN 'unscoped' THEN 3
-				WHEN 'lexical' THEN 2 ELSE 1 END)
-				WHEN 4 THEN 'conflict' WHEN 3 THEN 'unscoped'
-				WHEN 2 THEN 'lexical' ELSE 'resolved' END,
-			MIN(first_observed_at), MAX(last_observed_at), COUNT(*),
-			COUNT(DISTINCT session_key),
-			CASE MAX(CASE current_status WHEN 'failed' THEN 4 WHEN 'pending' THEN 3
-				WHEN 'truncated' THEN 2 ELSE 1 END)
-				WHEN 4 THEN 'failed' WHEN 3 THEN 'pending'
-				WHEN 2 THEN 'truncated' ELSE 'current' END,
-			MIN(evidence_complete), MIN(retained_history_only), MAX(experimental)
-		FROM visible`,
-		issueID,
-	).Scan(
-		&fingerprintID, &fingerprintVersion, &origin, &detectorID,
-		&detectorVersion, &category, &titleCode, &severityRank, &severity,
-		&confidence, &scopeQuality, &firstObserved, &lastObserved,
-		&occurrenceCount, &sessionCount, &analysisStatus, &evidenceComplete,
-		&retainedHistoryOnly, &experimental,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return errors.New("aggregate current issue summary")
-	}
-	revisionID := stableLocalID("isr_", issueID, fmt.Sprint(generation))
-	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO issue_summary_revisions (
-			summary_revision_id, issue_id, fingerprint_id, fingerprint_version,
-			origin, detector_id, detector_version, category, title_code,
-			severity, severity_rank, confidence, scope_quality,
-			first_observed_at, last_observed_at, occurrence_count,
-			session_count, repeated, analysis_status, evidence_complete,
-			retained_history_only, experimental, visible_from_generation,
-			created_at
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		)`,
-		revisionID, issueID, fingerprintID, fingerprintVersion, origin,
-		detectorID, detectorVersion, category, titleCode, severity, severityRank,
-		confidence, scopeQuality, firstObserved, lastObserved, occurrenceCount,
-		sessionCount, boolInt(sessionCount >= 2), analysisStatus,
-		evidenceComplete, retainedHistoryOnly, experimental, generation, now,
-	); err != nil {
-		return errors.New("persist current issue summary")
-	}
-	for _, relation := range []struct {
-		table  string
-		column string
-		query  string
-	}{
-		{"issue_summary_harnesses", "harness", `
-			SELECT DISTINCT harness FROM issue_occurrences
-			WHERE issue_id = ? AND visible_until_generation IS NULL
-			ORDER BY harness`},
-		{"issue_summary_sessions", "session_key", `
-			SELECT DISTINCT session_key FROM issue_occurrences
-			WHERE issue_id = ? AND visible_until_generation IS NULL
-			ORDER BY session_key`},
-	} {
-		rows, err := tx.QueryContext(ctx, relation.query, issueID)
-		if err != nil {
-			return errors.New("read current issue summary relation")
-		}
-		var values []string
-		for rows.Next() {
-			var value string
-			if err := rows.Scan(&value); err != nil {
-				rows.Close()
-				return errors.New("decode current issue summary relation")
-			}
-			values = append(values, value)
-		}
-		if err := rows.Close(); err != nil {
-			return errors.New("close current issue summary relation")
-		}
-		for _, value := range values {
-			statement := "INSERT OR IGNORE INTO " + relation.table +
-				" (summary_revision_id, " + relation.column + ") VALUES (?, ?)"
-			if _, err := tx.ExecContext(ctx, statement, revisionID, value); err != nil {
-				return errors.New("persist current issue summary relation")
-			}
-		}
-	}
-	return nil
+	return refreshIssueSummaryRevisionTx(ctx, tx, issueID, generation, now)
 }
 
 func (s *Store) materializeCurrentIssueCoverage(ctx context.Context) error {
@@ -392,52 +295,20 @@ func (s *Store) materializeCurrentIssueCoverage(ctx context.Context) error {
 		).Scan(&generation); err != nil {
 			return errors.New("read issue coverage generation")
 		}
-		var current, pending, failed, truncated, unscoped int
-		var analysisThrough sql.NullString
-		if err := tx.QueryRowContext(ctx, `
-			WITH event_sessions AS (
-				SELECT DISTINCT session_key FROM events
-			),
-			active_analysis AS (
-				SELECT session_key, status, scope_quality, created_at
-				FROM session_analysis_revisions
-				WHERE visible_until_generation IS NULL
-			)
-			SELECT
-				COALESCE(SUM(CASE WHEN aa.status = 'current' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN aa.status = 'pending' OR aa.status IS NULL THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN aa.status = 'failed' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN aa.status = 'truncated' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN COALESCE(aa.scope_quality, 'unscoped') = 'unscoped'
-					THEN 1 ELSE 0 END), 0),
-				MAX(CASE WHEN aa.status = 'current' THEN aa.created_at END)
-			FROM event_sessions es
-			LEFT JOIN active_analysis aa ON aa.session_key = es.session_key`,
-		).Scan(&current, &pending, &failed, &truncated, &unscoped, &analysisThrough); err != nil {
-			return errors.New("aggregate current issue coverage")
-		}
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM issue_analysis_coverage_revisions",
 		); err != nil {
 			return errors.New("reset current issue coverage")
 		}
-		var through any
-		if analysisThrough.Valid {
-			through = analysisThrough.String
-		}
 		now := formatProjectionTime(s.nowUTC())
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO issue_analysis_coverage_revisions (
-				coverage_revision_id, current_sessions, pending_sessions,
-				failed_sessions, truncated_sessions, unscoped_sessions,
-				analysis_through, complete, visible_from_generation, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			stableLocalID("iac_", fmt.Sprint(generation)),
-			current, pending, failed, truncated, unscoped, through,
-			boolInt(pending == 0 && failed == 0 && truncated == 0),
-			generation, now,
+		coverage, err := aggregateCurrentIssueCoverageTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if err := insertIssueCoverageRevisionTx(
+			ctx, tx, coverage, generation, now,
 		); err != nil {
-			return errors.New("persist current issue coverage")
+			return err
 		}
 		return s.writeIssueSummaryProgressTx(ctx, tx, "coverage", 0, true)
 	})

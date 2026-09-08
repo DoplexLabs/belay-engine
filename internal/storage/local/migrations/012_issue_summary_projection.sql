@@ -65,6 +65,11 @@ CREATE INDEX IF NOT EXISTS issue_summary_snapshot_order_idx
         visible_from_generation, visible_until_generation,
         severity_rank DESC, repeated DESC, last_observed_at DESC, issue_id
     );
+CREATE INDEX IF NOT EXISTS issue_summary_order_snapshot_idx
+    ON issue_summary_revisions(
+        severity_rank DESC, repeated DESC, last_observed_at DESC, issue_id,
+        visible_from_generation, visible_until_generation
+    );
 CREATE INDEX IF NOT EXISTS issue_summary_filter_idx
     ON issue_summary_revisions(
         category, origin, analysis_status, experimental,

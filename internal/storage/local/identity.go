@@ -127,14 +127,17 @@ func (s *Store) deriveFixAnnotationID(idempotencyKey string) (string, error) {
 
 func (s *Store) currentIssueCursorEpoch() (string, error) {
 	var epoch, readiness string
+	var current, materialized int64
 	if err := s.db.QueryRow(`
-		SELECT cursor_epoch, readiness
-		FROM issue_summary_metadata
-		WHERE singleton = 1`,
-	).Scan(&epoch, &readiness); err != nil {
+		SELECT ism.cursor_epoch, ism.readiness, ipm.current_generation,
+			ism.materialized_generation
+		FROM issue_summary_metadata ism
+		JOIN issue_projection_metadata ipm ON ipm.singleton = ism.singleton
+		WHERE ism.singleton = 1`,
+	).Scan(&epoch, &readiness, &current, &materialized); err != nil {
 		return "", errors.New("read issue cursor epoch")
 	}
-	if epoch == "" || readiness != "ready" {
+	if epoch == "" || readiness != "ready" || materialized != current {
 		return "", model.ErrIssueSnapshotExpired
 	}
 	return epoch, nil

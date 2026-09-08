@@ -518,7 +518,7 @@ const issueSummaryMutationTriggerSQL = `
 	BEFORE UPDATE ON main.issue_summary_revisions
 	WHEN NOT EXISTS (
 		SELECT 1 FROM belay_mutation_authorization
-		WHERE purpose = 'projection_rebuild'
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'issue summary mutation is not authorized');
@@ -570,7 +570,7 @@ const issueSummaryMutationTriggerSQL = `
 	BEFORE UPDATE ON main.issue_analysis_coverage_revisions
 	WHEN NOT EXISTS (
 		SELECT 1 FROM belay_mutation_authorization
-		WHERE purpose = 'projection_rebuild'
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'issue coverage mutation is not authorized');

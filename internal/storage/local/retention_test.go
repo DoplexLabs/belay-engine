@@ -664,10 +664,10 @@ func TestRetentionProtectsIssueRevisionFromMostRecentClose(t *testing.T) {
 	).Scan(&retained); err != nil || retained != 1 {
 		t.Fatalf("recently closed issue retained = %d, error %v", retained, err)
 	}
-	page, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: firstCommit.ProjectionGeneration,
-		IssuedAt: issuedAt,
-	})
+	protectedQuery := issueQueryForSnapshot(
+		t, store, firstCommit.ProjectionGeneration, issuedAt,
+	)
+	page, err := store.QueryIssues(ctx, protectedQuery)
 	if err != nil || len(page.Data) != 1 {
 		t.Fatalf("protected issue snapshot = %+v, error %v", page, err)
 	}

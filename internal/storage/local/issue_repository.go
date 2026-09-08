@@ -30,71 +30,89 @@ func (s *Store) QueryIssues(
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
+		if ctx.Err() != nil {
+			return model.IssuePage{}, ctx.Err()
+		}
 		return model.IssuePage{}, errors.New("begin issue snapshot read")
 	}
 	defer tx.Rollback()
-	snapshot, err := s.issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
+	state, err := s.issueMaterializedSnapshot(
+		ctx,
+		tx,
+		query.CursorEpoch,
+		query.Snapshot,
+		query.RetentionGeneration,
+		query.IssuedAt,
+	)
 	if err != nil {
 		return model.IssuePage{}, err
 	}
 	matchClauses := []string{"1 = 1"}
 	matchArgs := make([]any, 0, 16)
 	if query.Filter.Harness != "" {
-		matchClauses = append(matchClauses, "LOWER(harness) = LOWER(?)")
+		matchClauses = append(matchClauses, `EXISTS (
+			SELECT 1 FROM issue_summary_harnesses ish
+			WHERE ish.summary_revision_id = sr.summary_revision_id
+				AND ish.harness = LOWER(?)
+		)`)
 		matchArgs = append(matchArgs, query.Filter.Harness)
 	}
 	if query.Filter.ObservedAfter != nil {
-		matchClauses = append(matchClauses, "last_observed_at >= ?")
+		matchClauses = append(matchClauses, "sr.last_observed_at >= ?")
 		matchArgs = append(matchArgs, formatProjectionTime(*query.Filter.ObservedAfter))
 	}
 	if query.Filter.SessionID != "" {
-		matchClauses = append(matchClauses, "session_key = ?")
+		matchClauses = append(matchClauses, `EXISTS (
+			SELECT 1 FROM issue_summary_sessions iss
+			WHERE iss.summary_revision_id = sr.summary_revision_id
+				AND iss.session_key = ?
+		)`)
 		matchArgs = append(matchArgs, query.Filter.SessionID)
 	}
 	switch query.Filter.AttentionKind {
 	case model.AttentionKindIssue:
-		matchClauses = append(matchClauses, "category <> 'evidence_gap'")
+		matchClauses = append(matchClauses, "sr.category <> 'evidence_gap'")
 	case model.AttentionKindEvidenceGap:
-		matchClauses = append(matchClauses, "category = 'evidence_gap'")
+		matchClauses = append(matchClauses, "sr.category = 'evidence_gap'")
 	case model.AttentionKindAll:
 	}
 	switch query.Filter.Experimental {
 	case model.ExperimentalStable:
-		matchClauses = append(matchClauses, "experimental = 0")
+		matchClauses = append(matchClauses, "sr.experimental = 0")
 	case model.ExperimentalOnly:
-		matchClauses = append(matchClauses, "experimental = 1")
+		matchClauses = append(matchClauses, "sr.experimental = 1")
 	case model.ExperimentalInclude:
 	}
 
 	summaryClauses := []string{"1 = 1"}
 	summaryArgs := make([]any, 0, 16)
 	if query.Filter.Severity != "" {
-		summaryClauses = append(summaryClauses, "severity = ?")
+		summaryClauses = append(summaryClauses, "sr.severity = ?")
 		summaryArgs = append(summaryArgs, query.Filter.Severity)
 	}
 	if query.Filter.Category != "" {
-		summaryClauses = append(summaryClauses, "category = ?")
+		summaryClauses = append(summaryClauses, "sr.category = ?")
 		summaryArgs = append(summaryArgs, query.Filter.Category)
 	}
 	if query.Filter.Origin != "" {
-		summaryClauses = append(summaryClauses, "origin = ?")
+		summaryClauses = append(summaryClauses, "sr.origin = ?")
 		summaryArgs = append(summaryArgs, query.Filter.Origin)
 	}
 	if query.Filter.AnalysisStatus != "" {
-		summaryClauses = append(summaryClauses, "analysis_status = ?")
+		summaryClauses = append(summaryClauses, "sr.analysis_status = ?")
 		summaryArgs = append(summaryArgs, query.Filter.AnalysisStatus)
 	}
 	if query.Filter.Recurrence == "single" {
-		summaryClauses = append(summaryClauses, "repeated = 0")
+		summaryClauses = append(summaryClauses, "sr.repeated = 0")
 	} else if query.Filter.Recurrence == "repeated" {
-		summaryClauses = append(summaryClauses, "repeated = 1")
+		summaryClauses = append(summaryClauses, "sr.repeated = 1")
 	}
 	if query.Filter.FingerprintID != "" {
-		summaryClauses = append(summaryClauses, "fingerprint_id = ?")
+		summaryClauses = append(summaryClauses, "sr.fingerprint_id = ?")
 		summaryArgs = append(summaryArgs, query.Filter.FingerprintID)
 	}
 	if query.Filter.IssueID != "" {
-		summaryClauses = append(summaryClauses, "issue_id = ?")
+		summaryClauses = append(summaryClauses, "sr.issue_id = ?")
 		summaryArgs = append(summaryArgs, query.Filter.IssueID)
 	}
 	if query.Cursor != nil {
@@ -103,10 +121,10 @@ func (s *Store) QueryIssues(
 			repeated = 1
 		}
 		summaryClauses = append(summaryClauses, `(
-			severity_rank < ? OR
-			(severity_rank = ? AND repeated < ?) OR
-			(severity_rank = ? AND repeated = ? AND last_observed_at < ?) OR
-			(severity_rank = ? AND repeated = ? AND last_observed_at = ? AND issue_id > ?)
+			sr.severity_rank < ? OR
+			(sr.severity_rank = ? AND sr.repeated < ?) OR
+			(sr.severity_rank = ? AND sr.repeated = ? AND sr.last_observed_at < ?) OR
+			(sr.severity_rank = ? AND sr.repeated = ? AND sr.last_observed_at = ? AND sr.issue_id > ?)
 		)`)
 		lastObserved := formatProjectionTime(query.Cursor.LastObserved)
 		summaryArgs = append(
@@ -124,134 +142,38 @@ func (s *Store) QueryIssues(
 		)
 	}
 
-	args := []any{snapshot, snapshot, snapshot, snapshot}
+	args := []any{state.snapshot, state.snapshot}
 	args = append(args, matchArgs...)
 	args = append(args, summaryArgs...)
 	args = append(args, query.Limit+1)
 	rows, err := tx.QueryContext(ctx, `
-		WITH visible AS (
-			SELECT
-				io.issue_id,
-				io.fingerprint_id,
-				io.fingerprint_version,
-				io.origin,
-				io.session_key,
-				io.harness,
-				io.detector_id,
-				io.detector_version,
-				io.category,
-				io.title_code,
-				io.severity,
-				CASE io.severity
-					WHEN 'critical' THEN 5
-					WHEN 'high' THEN 4
-					WHEN 'medium' THEN 3
-					WHEN 'low' THEN 2
-					ELSE 1
-				END AS severity_rank,
-				io.confidence,
-				CASE io.confidence
-					WHEN 'low' THEN 1
-					WHEN 'medium' THEN 2
-					ELSE 3
-				END AS confidence_rank,
-				io.scope_quality,
-				io.first_observed_at,
-				io.last_observed_at,
-				io.evidence_complete,
-				io.retained_history_only,
-				io.experimental,
-				sar.status AS analysis_status,
-				CASE sar.status
-					WHEN 'failed' THEN 4
-					WHEN 'pending' THEN 3
-					WHEN 'truncated' THEN 2
-					ELSE 1
-				END AS analysis_status_rank
-			FROM issue_occurrences io
-			JOIN session_analysis_revisions sar
-				ON sar.session_key = io.session_key
-				AND sar.visible_from_generation <= ?
-				AND (
-					sar.visible_until_generation IS NULL OR
-					sar.visible_until_generation > ?
-				)
-			WHERE io.visible_from_generation <= ?
-				AND (
-					io.visible_until_generation IS NULL OR
-					io.visible_until_generation > ?
-				)
-		),
-		eligible AS (
-			SELECT DISTINCT issue_id
-			FROM visible
-			WHERE `+strings.Join(matchClauses, " AND ")+`
-		),
-		grouped AS (
-			SELECT
-				v.issue_id,
-				MIN(v.fingerprint_id) AS fingerprint_id,
-				MIN(v.fingerprint_version) AS fingerprint_version,
-				MIN(v.origin) AS origin,
-				MIN(v.detector_id) AS detector_id,
-				MAX(v.detector_version) AS detector_version,
-				MIN(v.category) AS category,
-				MIN(v.title_code) AS title_code,
-				MAX(v.severity_rank) AS severity_rank,
-				CASE MAX(v.severity_rank)
-					WHEN 5 THEN 'critical'
-					WHEN 4 THEN 'high'
-					WHEN 3 THEN 'medium'
-					WHEN 2 THEN 'low'
-					ELSE 'info'
-				END AS severity,
-				CASE MIN(v.confidence_rank)
-					WHEN 1 THEN 'low'
-					WHEN 2 THEN 'medium'
-					ELSE 'high'
-				END AS confidence,
-				CASE MAX(
-					CASE v.scope_quality
-						WHEN 'conflict' THEN 4
-						WHEN 'unscoped' THEN 3
-						WHEN 'lexical' THEN 2
-						ELSE 1
-					END
-				)
-					WHEN 4 THEN 'conflict'
-					WHEN 3 THEN 'unscoped'
-					WHEN 2 THEN 'lexical'
-					ELSE 'resolved'
-				END AS scope_quality,
-				MIN(v.first_observed_at) AS first_observed_at,
-				MAX(v.last_observed_at) AS last_observed_at,
-				COUNT(*) AS occurrence_count,
-				COUNT(DISTINCT v.session_key) AS session_count,
-				CASE WHEN COUNT(DISTINCT v.session_key) >= 2 THEN 1 ELSE 0 END AS repeated,
-				GROUP_CONCAT(DISTINCT v.harness) AS harnesses,
-				CASE MAX(v.analysis_status_rank)
-					WHEN 4 THEN 'failed'
-					WHEN 3 THEN 'pending'
-					WHEN 2 THEN 'truncated'
-					ELSE 'current'
-				END AS analysis_status,
-				MIN(v.evidence_complete) AS evidence_complete,
-				MIN(v.retained_history_only) AS retained_history_only,
-				MAX(v.experimental) AS experimental
-			FROM visible v
-			JOIN eligible e ON e.issue_id = v.issue_id
-			GROUP BY v.issue_id
-		)
 		SELECT
-			issue_id, fingerprint_id, fingerprint_version, origin,
-			detector_id, detector_version, category, title_code, severity,
-			severity_rank, confidence, scope_quality, first_observed_at,
-			last_observed_at, occurrence_count, session_count, repeated,
-			harnesses, analysis_status, evidence_complete, retained_history_only,
-			experimental
-		FROM grouped
-		WHERE `+strings.Join(summaryClauses, " AND ")+`
-		ORDER BY severity_rank DESC, repeated DESC, last_observed_at DESC, issue_id ASC
+			sr.issue_id, sr.fingerprint_id, sr.fingerprint_version, sr.origin,
+			sr.detector_id, sr.detector_version, sr.category, sr.title_code,
+			sr.severity, sr.severity_rank, sr.confidence, sr.scope_quality,
+			sr.first_observed_at, sr.last_observed_at, sr.occurrence_count,
+			sr.session_count, sr.repeated,
+			COALESCE((
+				SELECT GROUP_CONCAT(ordered.harness)
+				FROM (
+					SELECT ish.harness
+					FROM issue_summary_harnesses ish
+					WHERE ish.summary_revision_id = sr.summary_revision_id
+					ORDER BY ish.harness
+				) ordered
+			), ''),
+			sr.analysis_status, sr.evidence_complete,
+			sr.retained_history_only, sr.experimental
+		FROM issue_summary_revisions sr INDEXED BY issue_summary_order_snapshot_idx
+		WHERE sr.visible_from_generation <= ?
+			AND (
+				sr.visible_until_generation IS NULL OR
+				sr.visible_until_generation > ?
+			)
+			AND `+strings.Join(matchClauses, " AND ")+`
+			AND `+strings.Join(summaryClauses, " AND ")+`
+		ORDER BY sr.severity_rank DESC, sr.repeated DESC,
+			sr.last_observed_at DESC, sr.issue_id ASC
 		LIMIT ?`,
 		args...,
 	)
@@ -274,7 +196,7 @@ func (s *Store) QueryIssues(
 	if hasMore {
 		summaries = summaries[:query.Limit]
 	}
-	coverage, err := issueAnalysisCoverage(ctx, tx, snapshot)
+	coverage, err := materializedIssueAnalysisCoverage(ctx, tx, state.snapshot)
 	if err != nil {
 		return model.IssuePage{}, err
 	}
@@ -282,10 +204,13 @@ func (s *Store) QueryIssues(
 		return model.IssuePage{}, errors.New("complete issue snapshot read")
 	}
 	return model.IssuePage{
-		Data:     summaries,
-		Analysis: coverage,
-		Snapshot: snapshot,
-		HasMore:  hasMore,
+		Data:                summaries,
+		Analysis:            coverage,
+		CursorEpoch:         state.epoch,
+		Snapshot:            state.snapshot,
+		RetentionGeneration: state.retentionGeneration,
+		IssuedAt:            state.issuedAt,
+		HasMore:             hasMore,
 	}, nil
 }
 
@@ -299,10 +224,20 @@ func (s *Store) QueryIssueOccurrences(
 	query.Limit = boundedReadLimit(query.Limit, 20, 100)
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
+		if ctx.Err() != nil {
+			return model.IssueOccurrencePage{}, ctx.Err()
+		}
 		return model.IssueOccurrencePage{}, errors.New("begin issue occurrence snapshot read")
 	}
 	defer tx.Rollback()
-	snapshot, err := s.issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
+	state, err := s.issueMaterializedSnapshot(
+		ctx,
+		tx,
+		query.CursorEpoch,
+		query.Snapshot,
+		query.RetentionGeneration,
+		query.IssuedAt,
+	)
 	if err != nil {
 		return model.IssueOccurrencePage{}, err
 	}
@@ -313,7 +248,13 @@ func (s *Store) QueryIssueOccurrences(
 		"sar.visible_from_generation <= ?",
 		"(sar.visible_until_generation IS NULL OR sar.visible_until_generation > ?)",
 	}
-	args := []any{query.IssueID, snapshot, snapshot, snapshot, snapshot}
+	args := []any{
+		query.IssueID,
+		state.snapshot,
+		state.snapshot,
+		state.snapshot,
+		state.snapshot,
+	}
 	if query.Cursor != nil {
 		clauses = append(clauses, `(
 			io.last_observed_at < ? OR
@@ -363,10 +304,92 @@ func (s *Store) QueryIssueOccurrences(
 		return model.IssueOccurrencePage{}, errors.New("complete issue occurrence snapshot read")
 	}
 	return model.IssueOccurrencePage{
-		Data:     occurrences,
-		Snapshot: snapshot,
-		HasMore:  hasMore,
+		Data:                occurrences,
+		CursorEpoch:         state.epoch,
+		Snapshot:            state.snapshot,
+		RetentionGeneration: state.retentionGeneration,
+		IssuedAt:            state.issuedAt,
+		HasMore:             hasMore,
 	}, nil
+}
+
+type issueMaterializedSnapshotState struct {
+	epoch               string
+	snapshot            int64
+	retentionGeneration int64
+	issuedAt            time.Time
+}
+
+func (s *Store) issueMaterializedSnapshot(
+	ctx context.Context,
+	queryer queryRower,
+	claimedEpoch string,
+	requested int64,
+	claimedRetentionGeneration int64,
+	issuedAt time.Time,
+) (issueMaterializedSnapshotState, error) {
+	var state issueMaterializedSnapshotState
+	var current, materialized, oldest int64
+	var readiness string
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT COALESCE(ism.cursor_epoch, ''), ism.readiness,
+			ipm.current_generation, ism.materialized_generation,
+			ism.oldest_materialized_generation, ipm.retention_generation
+		FROM issue_summary_metadata ism
+		JOIN issue_projection_metadata ipm ON ipm.singleton = ism.singleton
+		WHERE ism.singleton = 1`,
+	).Scan(
+		&state.epoch,
+		&readiness,
+		&current,
+		&materialized,
+		&oldest,
+		&state.retentionGeneration,
+	); err != nil {
+		if ctx.Err() != nil {
+			return issueMaterializedSnapshotState{}, ctx.Err()
+		}
+		return issueMaterializedSnapshotState{}, errors.New("read issue materialized snapshot")
+	}
+	if state.epoch == "" ||
+		readiness != "ready" ||
+		materialized != current {
+		return issueMaterializedSnapshotState{}, errors.New("issue summary projection is not ready")
+	}
+	now := s.nowUTC()
+	freshRequest := requested == 0 &&
+		claimedEpoch == "" &&
+		claimedRetentionGeneration == 0 &&
+		issuedAt.IsZero()
+	if freshRequest {
+		state.snapshot = current
+		state.issuedAt = now
+		return state, nil
+	}
+	if requested < 0 ||
+		claimedEpoch == "" ||
+		claimedRetentionGeneration < 1 ||
+		issuedAt.IsZero() {
+		return issueMaterializedSnapshotState{}, model.ErrIssueSnapshotInvalid
+	}
+	if claimedEpoch != state.epoch ||
+		claimedRetentionGeneration != state.retentionGeneration ||
+		requested < oldest {
+		return issueMaterializedSnapshotState{}, model.ErrIssueSnapshotExpired
+	}
+	if requested > current {
+		return issueMaterializedSnapshotState{}, model.ErrIssueSnapshotInvalid
+	}
+	issuedAt = issuedAt.UTC()
+	if issuedAt.After(now) {
+		return issueMaterializedSnapshotState{}, model.ErrIssueSnapshotInvalid
+	}
+	if now.Sub(issuedAt) > issueCursorLifetime {
+		return issueMaterializedSnapshotState{}, model.ErrIssueSnapshotExpired
+	}
+	state.snapshot = requested
+	state.issuedAt = issuedAt
+	return state, nil
 }
 
 func (s *Store) issueSnapshot(
@@ -478,6 +501,52 @@ func issueAnalysisCoverage(
 	result.Complete = result.PendingSessions == 0 &&
 		result.FailedSessions == 0 &&
 		result.TruncatedSessions == 0
+	return result, nil
+}
+
+func materializedIssueAnalysisCoverage(
+	ctx context.Context,
+	queryer queryRower,
+	snapshot int64,
+) (model.IssueAnalysisCoverage, error) {
+	var result model.IssueAnalysisCoverage
+	var analysisThrough sql.NullString
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT current_sessions, pending_sessions, failed_sessions,
+			truncated_sessions, unscoped_sessions, analysis_through, complete
+		FROM issue_analysis_coverage_revisions
+		WHERE visible_from_generation <= ?
+			AND (
+				visible_until_generation IS NULL OR
+				visible_until_generation > ?
+			)
+		ORDER BY visible_from_generation DESC
+		LIMIT 1`,
+		snapshot, snapshot,
+	).Scan(
+		&result.CurrentSessions,
+		&result.PendingSessions,
+		&result.FailedSessions,
+		&result.TruncatedSessions,
+		&result.UnscopedSessions,
+		&analysisThrough,
+		&result.Complete,
+	); err != nil {
+		if ctx.Err() != nil {
+			return model.IssueAnalysisCoverage{}, ctx.Err()
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.IssueAnalysisCoverage{}, model.ErrIssueSnapshotExpired
+		}
+		return model.IssueAnalysisCoverage{}, errors.New("read materialized issue analysis coverage")
+	}
+	if analysisThrough.Valid {
+		parsed, err := parseProjectionTime(analysisThrough.String)
+		if err != nil {
+			return model.IssueAnalysisCoverage{}, errors.New("decode issue analysis timestamp")
+		}
+		result.AnalysisThrough = parsed
+	}
 	return result, nil
 }
 

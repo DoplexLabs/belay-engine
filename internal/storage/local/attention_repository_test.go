@@ -178,41 +178,43 @@ func TestIssueSnapshotClockAndErrorIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: fresh.Snapshot,
-		IssuedAt: now.Add(-issueCursorLifetime),
-	}); err != nil {
+	boundary := issueQueryForSnapshot(
+		t, store, fresh.Snapshot, now.Add(-issueCursorLifetime),
+	)
+	if _, err := store.QueryIssues(ctx, boundary); err != nil {
 		t.Fatalf("boundary snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: fresh.Snapshot,
-		IssuedAt: now.Add(-issueCursorLifetime - time.Nanosecond),
-	}); !errors.Is(err, model.ErrIssueSnapshotExpired) ||
+	expired := issueQueryForSnapshot(
+		t,
+		store,
+		fresh.Snapshot,
+		now.Add(-issueCursorLifetime-time.Nanosecond),
+	)
+	if _, err := store.QueryIssues(ctx, expired); !errors.Is(err, model.ErrIssueSnapshotExpired) ||
 		!errors.Is(err, ErrIssueSnapshotExpired) {
 		t.Fatalf("expired snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: fresh.Snapshot,
-		IssuedAt: now.Add(time.Nanosecond),
-	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) ||
+	future := issueQueryForSnapshot(
+		t, store, fresh.Snapshot, now.Add(time.Nanosecond),
+	)
+	if _, err := store.QueryIssues(ctx, future); !errors.Is(err, model.ErrIssueSnapshotInvalid) ||
 		!errors.Is(err, ErrIssueSnapshotInvalid) {
 		t.Fatalf("future snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: fresh.Snapshot + 1,
-		IssuedAt: now,
-	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
+	newer := issueQueryForSnapshot(t, store, fresh.Snapshot+1, now)
+	if _, err := store.QueryIssues(ctx, newer); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
 		t.Fatalf("newer-generation snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: -1,
-		IssuedAt: now,
-	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
+	negative := issueQueryForSnapshot(t, store, -1, now)
+	if _, err := store.QueryIssues(ctx, negative); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
 		t.Fatalf("negative-generation snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: fresh.Snapshot,
-	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
+	missingIssuedAt := issueQueryForSnapshot(t, store, fresh.Snapshot, now)
+	missingIssuedAt.IssuedAt = time.Time{}
+	if _, err := store.QueryIssues(ctx, missingIssuedAt); !errors.Is(
+		err,
+		model.ErrIssueSnapshotInvalid,
+	) {
 		t.Fatalf("missing-issued-at snapshot error = %v", err)
 	}
 }

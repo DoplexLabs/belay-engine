@@ -112,6 +112,18 @@ func (s *Store) DecodeFixActionToken(token string) (model.FixActionClaims, error
 		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 			return model.FixActionClaims{}, ErrFixActionTokenInvalid
 		}
+		issuedAt, err := time.Parse(projectionTimestampLayout, legacy.IssuedAt)
+		if err != nil {
+			return model.FixActionClaims{}, ErrFixActionTokenInvalid
+		}
+		expiresAt, err := time.Parse(projectionTimestampLayout, legacy.ExpiresAt)
+		if err != nil ||
+			!validIssueID(legacy.IssueID) ||
+			legacy.Snapshot < 1 ||
+			!expiresAt.After(issuedAt) ||
+			expiresAt.Sub(issuedAt) > issueCursorLifetime {
+			return model.FixActionClaims{}, ErrFixActionTokenInvalid
+		}
 		return model.FixActionClaims{}, ErrFixActionTokenExpired
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))

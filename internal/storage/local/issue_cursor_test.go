@@ -2,8 +2,10 @@ package local
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
@@ -40,7 +42,19 @@ func TestIssueCursorCodecPersistsAcrossRestartAndRejectsTamperingAndOtherStore(
 		!bytes.Equal(opened, payload) {
 		t.Fatalf("reopened cursor = %q, %v", opened, err)
 	}
-	tampered := sealed[:len(sealed)-1] + "A"
+	parts := strings.SplitN(sealed, ".", 2)
+	if len(parts) != 2 {
+		t.Fatalf("sealed cursor parts = %d, want 2", len(parts))
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(signature) == 0 {
+		t.Fatalf("decode cursor signature = %d bytes, %v", len(signature), err)
+	}
+	signature[0] ^= 0x01
+	tampered := parts[0] + "." + base64.RawURLEncoding.EncodeToString(signature)
+	if tampered == sealed {
+		t.Fatal("tampered cursor did not change")
+	}
 	if _, err := reopened.OpenIssueCursor(tampered); !errors.Is(
 		err,
 		model.ErrIssueCursorInvalid,

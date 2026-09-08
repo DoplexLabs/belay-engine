@@ -126,6 +126,14 @@ func (s *Store) Prune(
 		if err != nil {
 			return err
 		}
+		affectedIssueIDs := make(map[string]struct{})
+		for sessionKey := range affectedSessions {
+			sessionIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+			if err != nil {
+				return err
+			}
+			mergeIssueIDs(affectedIssueIDs, sessionIssueIDs)
+		}
 		for sessionKey := range affectedSessions {
 			if _, err := s.markSessionDirtyTx(
 				ctx,
@@ -234,12 +242,37 @@ func (s *Store) Prune(
 			removedAnalysisRevisions > 0 ||
 			removedJobCount > 0 ||
 			hasSelectedRetentionItem(items)
-		if issueRevisionDeleted || removedAnalysisRevisions > 0 {
+		finalProjectionChange := issueRevisionDeleted ||
+			removedAnalysisRevisions > 0 ||
+			hasSelectedRetentionRecordType(items, "event")
+		if finalProjectionChange {
+			for sessionKey := range affectedSessions {
+				sessionIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+				if err != nil {
+					return err
+				}
+				mergeIssueIDs(affectedIssueIDs, sessionIssueIDs)
+			}
+			generation, err := nextProjectionGenerationTx(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if err := s.refreshIssueProjectionIfReadyTx(
+				ctx,
+				tx,
+				generation,
+				formatProjectionTime(now),
+				affectedIssueIDs,
+			); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE issue_projection_metadata
-				SET oldest_retained_generation = current_generation,
+				SET oldest_retained_generation = ?,
 					retention_generation = retention_generation + 1
-				WHERE singleton = 1`); err != nil {
+				WHERE singleton = 1`,
+				generation,
+			); err != nil {
 				return errors.New("advance retained issue generation")
 			}
 		} else if relevantPrune {
@@ -267,6 +300,15 @@ func (s *Store) Prune(
 func hasSelectedRetentionItem(items []retentionItem) bool {
 	for _, item := range items {
 		if item.selected {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSelectedRetentionRecordType(items []retentionItem, recordType string) bool {
+	for _, item := range items {
+		if item.selected && item.recordType == recordType {
 			return true
 		}
 	}

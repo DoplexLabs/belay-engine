@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -117,6 +118,53 @@ func TestFixActionTokenV1AndStaleV2EpochAreExpired(t *testing.T) {
 	) {
 		t.Fatalf("signed V1 error = %v", err)
 	}
+	for name, payload := range map[string]fixActionTokenPayloadV1{
+		"invalid issue": {
+			Version: model.FixActionTokenVersionV1, IssueID: "iss_invalid",
+			Snapshot: 1, IssuedAt: formatProjectionTime(base),
+			ExpiresAt: formatProjectionTime(base.Add(time.Minute)),
+		},
+		"nonpositive snapshot": {
+			Version: model.FixActionTokenVersionV1, IssueID: issueID,
+			Snapshot: 0, IssuedAt: formatProjectionTime(base),
+			ExpiresAt: formatProjectionTime(base.Add(time.Minute)),
+		},
+		"invalid issued timestamp": {
+			Version: model.FixActionTokenVersionV1, IssueID: issueID,
+			Snapshot: 1, IssuedAt: "not-a-time",
+			ExpiresAt: formatProjectionTime(base.Add(time.Minute)),
+		},
+		"invalid expiry timestamp": {
+			Version: model.FixActionTokenVersionV1, IssueID: issueID,
+			Snapshot: 1, IssuedAt: formatProjectionTime(base),
+			ExpiresAt: "not-a-time",
+		},
+		"nonincreasing expiry": {
+			Version: model.FixActionTokenVersionV1, IssueID: issueID,
+			Snapshot: 1, IssuedAt: formatProjectionTime(base),
+			ExpiresAt: formatProjectionTime(base),
+		},
+		"excessive lifetime": {
+			Version: model.FixActionTokenVersionV1, IssueID: issueID,
+			Snapshot: 1, IssuedAt: formatProjectionTime(base),
+			ExpiresAt: formatProjectionTime(
+				base.Add(issueCursorLifetime + time.Nanosecond),
+			),
+		},
+	} {
+		t.Run("malformed signed V1 "+name, func(t *testing.T) {
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DecodeFixActionToken(seal(body)); !errors.Is(
+				err,
+				ErrFixActionTokenInvalid,
+			) {
+				t.Fatalf("signed malformed V1 error = %v", err)
+			}
+		})
+	}
 
 	staleBody, err := json.Marshal(fixActionTokenPayload{
 		Version:             model.FixActionTokenVersion,
@@ -198,5 +246,48 @@ func TestFixActionTokenValidatesStructureButNotCurrentExpiry(t *testing.T) {
 		) {
 			t.Errorf("IssueFixActionToken(%+v) error = %v", claims, err)
 		}
+	}
+}
+
+func TestFixActionTokenRequiresCurrentMaterializedGeneration(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	_, issueID, err := store.DeriveIssueIdentity(
+		"v1", "detector", "scope", "dimension",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	claims := model.FixActionClaims{
+		Version:             model.FixActionTokenVersion,
+		CursorEpoch:         mustIssueCursorEpoch(t, store),
+		IssueID:             issueID,
+		Snapshot:            1,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            base,
+		ExpiresAt:           base.Add(time.Minute),
+	}
+	token, err := store.IssueFixActionToken(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE issue_projection_metadata
+		SET current_generation = current_generation + 1
+		WHERE singleton = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.IssueFixActionToken(claims); !errors.Is(
+		err,
+		model.ErrIssueSnapshotExpired,
+	) {
+		t.Fatalf("issue token during materialization drift error = %v", err)
+	}
+	if _, err := store.DecodeFixActionToken(token); !errors.Is(
+		err,
+		model.ErrIssueSnapshotExpired,
+	) {
+		t.Fatalf("decode token during materialization drift error = %v", err)
 	}
 }

@@ -687,6 +687,10 @@ func (s *Store) replaceSessionProjection(
 		if target != claimedGeneration {
 			return ErrStaleProjection
 		}
+		affectedIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+		if err != nil {
+			return err
+		}
 		generation, err := nextProjectionGenerationTx(ctx, tx)
 		if err != nil {
 			return err
@@ -796,6 +800,16 @@ func (s *Store) replaceSessionProjection(
 			); err != nil {
 				return errors.New("record successful issue analysis")
 			}
+		}
+		currentIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+		if err != nil {
+			return err
+		}
+		mergeIssueIDs(affectedIssueIDs, currentIssueIDs)
+		if err := s.refreshIssueProjectionIfReadyTx(
+			ctx, tx, generation, now, affectedIssueIDs,
+		); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -925,6 +939,10 @@ func (s *Store) PublishAnalysisFailure(
 		).Scan(&target); err != nil || target != targetGeneration {
 			return ErrStaleProjection
 		}
+		affectedIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+		if err != nil {
+			return err
+		}
 		generation, err = nextProjectionGenerationTx(ctx, tx)
 		if err != nil {
 			return err
@@ -963,6 +981,11 @@ func (s *Store) PublishAnalysisFailure(
 			target,
 		); err != nil {
 			return errors.New("record failed dirty-session work")
+		}
+		if err := s.refreshIssueProjectionIfReadyTx(
+			ctx, tx, generation, now, affectedIssueIDs,
+		); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -1071,6 +1094,10 @@ func (s *Store) markSessionDirtyTx(
 	).Scan(&target); err != nil {
 		return 0, errors.New("mark session dirty")
 	}
+	affectedIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+	if err != nil {
+		return 0, err
+	}
 	generation, err := nextProjectionGenerationTx(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -1092,6 +1119,11 @@ func (s *Store) markSessionDirtyTx(
 		now,
 		nil,
 		analyzed,
+	); err != nil {
+		return 0, err
+	}
+	if err := s.refreshIssueProjectionIfReadyTx(
+		ctx, tx, generation, now, affectedIssueIDs,
 	); err != nil {
 		return 0, err
 	}

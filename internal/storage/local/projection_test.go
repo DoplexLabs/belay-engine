@@ -243,10 +243,10 @@ func TestRevisionedIssueProjectionSnapshotAggregationAndFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first ReplaceIssueProjection() error = %v", err)
 	}
-	oldPage, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: firstCommit.ProjectionGeneration,
-		IssuedAt: time.Now().UTC(),
-	})
+	oldQuery := issueQueryForSnapshot(
+		t, store, firstCommit.ProjectionGeneration, time.Now().UTC(),
+	)
+	oldPage, err := store.QueryIssues(ctx, oldQuery)
 	if err != nil {
 		t.Fatalf("QueryIssues(old) error = %v", err)
 	}
@@ -296,10 +296,8 @@ func TestRevisionedIssueProjectionSnapshotAggregationAndFailure(t *testing.T) {
 		summary.AnalysisStatus != model.AnalysisCurrent {
 		t.Fatalf("aggregated summary = %+v", summary)
 	}
-	oldAgain, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: firstCommit.ProjectionGeneration,
-		IssuedAt: time.Now().UTC(),
-	})
+	oldQuery.IssuedAt = time.Now().UTC()
+	oldAgain, err := store.QueryIssues(ctx, oldQuery)
 	if err != nil {
 		t.Fatalf("QueryIssues(old again) error = %v", err)
 	}
@@ -322,11 +320,13 @@ func TestRevisionedIssueProjectionSnapshotAggregationAndFailure(t *testing.T) {
 		OccurrenceID: occurrencePage.Data[0].OccurrenceID,
 	}
 	nextOccurrences, err := store.QueryIssueOccurrences(ctx, model.IssueOccurrenceQuery{
-		IssueID:  issueID,
-		Limit:    1,
-		Snapshot: occurrencePage.Snapshot,
-		IssuedAt: time.Now().UTC(),
-		Cursor:   cursor,
+		IssueID:             issueID,
+		Limit:               1,
+		CursorEpoch:         occurrencePage.CursorEpoch,
+		Snapshot:            occurrencePage.Snapshot,
+		RetentionGeneration: occurrencePage.RetentionGeneration,
+		IssuedAt:            occurrencePage.IssuedAt,
+		Cursor:              cursor,
 	})
 	if err != nil {
 		t.Fatalf("QueryIssueOccurrences(next) error = %v", err)
@@ -396,16 +396,19 @@ func TestIssueSnapshotExpiryAndMutationAuthorization(t *testing.T) {
 	).Scan(&current); err != nil {
 		t.Fatalf("read current generation: %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: current,
-		IssuedAt: time.Now().UTC().Add(-issueCursorLifetime - time.Second),
-	}); !errors.Is(err, ErrIssueSnapshotExpired) {
+	expired := issueQueryForSnapshot(
+		t,
+		store,
+		current,
+		time.Now().UTC().Add(-issueCursorLifetime-time.Second),
+	)
+	if _, err := store.QueryIssues(ctx, expired); !errors.Is(err, ErrIssueSnapshotExpired) {
 		t.Fatalf("expired snapshot error = %v", err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: current,
-		IssuedAt: time.Now().UTC().Add(time.Minute),
-	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
+	future := issueQueryForSnapshot(
+		t, store, current, time.Now().UTC().Add(time.Minute),
+	)
+	if _, err := store.QueryIssues(ctx, future); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
 		t.Fatalf("future-issued snapshot error = %v", err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
@@ -492,12 +495,12 @@ func TestIssueListCursorUsesStableSnapshotOrdering(t *testing.T) {
 		LastObserved: first.Data[0].LastObservedAt,
 		IssueID:      first.Data[0].IssueID,
 	}
-	second, err := store.QueryIssues(ctx, model.IssueQuery{
-		Limit:    1,
-		Snapshot: commit.ProjectionGeneration,
-		IssuedAt: time.Now().UTC(),
-		Cursor:   cursor,
-	})
+	secondQuery := issueQueryForSnapshot(
+		t, store, commit.ProjectionGeneration, first.IssuedAt,
+	)
+	secondQuery.Limit = 1
+	secondQuery.Cursor = cursor
+	second, err := store.QueryIssues(ctx, secondQuery)
 	if err != nil {
 		t.Fatalf("QueryIssues(second) error = %v", err)
 	}
@@ -508,8 +511,18 @@ func TestIssueListCursorUsesStableSnapshotOrdering(t *testing.T) {
 
 func TestRetentionPrunesIssueDependenciesAndExpiresOldSnapshot(t *testing.T) {
 	ctx := context.Background()
-	store := openStorageTestStore(t)
 	now := time.Date(2026, 9, 8, 15, 0, 0, 0, time.UTC)
+	store, err := OpenWithOptions(
+		filepath.Join(t.TempDir(), "retention.sqlite"),
+		OpenOptions{
+			KeyProvider: newMemoryKeyProvider(),
+			Clock:       func() time.Time { return now },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	oldEvent := storageTestEvent(
 		"00000000-0000-7000-8000-000000000150",
 		"session-issue-retention",
@@ -597,10 +610,14 @@ func TestRetentionPrunesIssueDependenciesAndExpiresOldSnapshot(t *testing.T) {
 	if count, err := store.Count(ctx, "event_enrichments"); err != nil || count != 0 {
 		t.Fatalf("event enrichment count = %d, error = %v", count, err)
 	}
-	if _, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: commit.ProjectionGeneration,
-		IssuedAt: time.Now().UTC(),
-	}); !errors.Is(err, ErrIssueSnapshotExpired) {
+	retainedQuery := issueQueryForSnapshot(
+		t, store, commit.ProjectionGeneration, time.Now().UTC(),
+	)
+	retainedQuery.RetentionGeneration--
+	if _, err := store.QueryIssues(ctx, retainedQuery); !errors.Is(
+		err,
+		ErrIssueSnapshotExpired,
+	) {
 		t.Fatalf("retained snapshot error = %v", err)
 	}
 	current, err := store.QueryIssues(ctx, model.IssueQuery{})
@@ -657,6 +674,21 @@ func testIssueOccurrence(
 			CitedEventIDs: []string{eventID},
 			Dimensions:    []string{"opaque-dimension"},
 		},
+	}
+}
+
+func issueQueryForSnapshot(
+	t *testing.T,
+	store *Store,
+	snapshot int64,
+	issuedAt time.Time,
+) model.IssueQuery {
+	t.Helper()
+	return model.IssueQuery{
+		CursorEpoch:         mustIssueCursorEpoch(t, store),
+		Snapshot:            snapshot,
+		RetentionGeneration: mustRetentionGeneration(t, store),
+		IssuedAt:            issuedAt,
 	}
 }
 
@@ -953,10 +985,10 @@ func TestRetentionProtectsFreshIssueCursorAndAnalysisRevision(t *testing.T) {
 	if count, _ := store.Count(ctx, "session_analysis_revisions"); count < 1 {
 		t.Fatal("fresh analysis revisions were pruned")
 	}
-	page, err := store.QueryIssues(ctx, model.IssueQuery{
-		Snapshot: commit.ProjectionGeneration,
-		IssuedAt: issuedAt,
-	})
+	protectedQuery := issueQueryForSnapshot(
+		t, store, commit.ProjectionGeneration, issuedAt,
+	)
+	page, err := store.QueryIssues(ctx, protectedQuery)
 	if err != nil || len(page.Data) != 1 {
 		t.Fatalf("fresh cursor = %+v, error %v", page, err)
 	}
