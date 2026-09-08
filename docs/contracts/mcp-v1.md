@@ -12,9 +12,10 @@ inference, remediation, file write, command execution, fix recording, or
 recurrence registration.
 
 The implemented Attention Inbox, issue HTTP routes, browser-only fix-attempt
-routes, and internal issue/fix repositories do not automatically expose MCP
-capabilities. `list_issues` and `get_issue` remain unavailable until Feature 5.
-The current Local Alpha MCP server exposes exactly the six tools below.
+routes, recurrence-monitoring HTTP routes, and internal issue/fix/monitoring
+repositories do not automatically expose MCP capabilities. `list_issues` and
+`get_issue` remain unavailable until Feature 5. The current Local Alpha MCP
+server exposes exactly the six tools below.
 
 ## Implemented Local Alpha tools
 
@@ -233,10 +234,11 @@ described above.
 - Any `write_*`, `execute_*`, `apply_*`, or `remediate_*` tool
 - Arbitrary filesystem or shell access
 
-P0-03 browser fix-attempt declarations and retractions are implemented only in
-authenticated Local HTTP. MCP receives no corresponding reader or writer and
-cannot list, create, retract, or replay those declarations. Exact recurrence
-measurement remains future P0-04 work.
+P0-03 browser fix-attempt declarations/retractions and P0-04 exact recurrence
+monitoring are implemented only in authenticated Local HTTP. MCP receives no
+corresponding repository option, reader, or writer and cannot list, create,
+retract, replay, or monitor those declarations. The Local MCP construction
+remains core-only and advertises exactly the six tools above.
 
 ## Prompt-injection fixtures
 

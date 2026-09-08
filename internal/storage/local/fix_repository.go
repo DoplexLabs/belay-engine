@@ -74,6 +74,12 @@ type fixAnchor struct {
 	DetectorID         string
 	DetectorVersion    string
 	ScopeQuality       model.ScopeQuality
+	FingerprintScopeID string
+	Category           string
+	TitleCode          string
+	Severity           string
+	Confidence         string
+	Harness            string
 	AnalysisStatus     model.AnalysisStatus
 	AnalysisGeneration int64
 	FirstObservedAt    time.Time
@@ -252,6 +258,43 @@ func (s *Store) RecordFixAnnotation(
 		); err != nil {
 			return FixAnnotationResult{}, errors.New("persist fix annotation evidence link")
 		}
+	}
+	mode := model.FixNegativeComparisonSupported
+	if anchor.Origin == "numbat" {
+		mode = model.FixNegativeComparisonPositiveOnly
+	}
+	scopeCaptureStatus := "unavailable"
+	var fingerprintScopeID any
+	var monitorFromOrderNS any
+	if validProjectScopeID(anchor.FingerprintScopeID) {
+		scopeCaptureStatus = "captured"
+		fingerprintScopeID = anchor.FingerprintScopeID
+		monitorFromOrderNS = now.UnixNano()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO fix_monitoring_subjects (
+			annotation_id, fingerprint_scope_id, scope_capture_status,
+			category, title_code, severity, confidence, anchor_harness,
+			origin, detector_id, detector_version, fingerprint_version,
+			negative_comparison_mode, monitor_from_order_ns, captured_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		annotationID,
+		fingerprintScopeID,
+		scopeCaptureStatus,
+		anchor.Category,
+		anchor.TitleCode,
+		anchor.Severity,
+		anchor.Confidence,
+		anchor.Harness,
+		anchor.Origin,
+		anchor.DetectorID,
+		anchor.DetectorVersion,
+		anchor.FingerprintVersion,
+		mode,
+		monitorFromOrderNS,
+		recordedAt,
+	); err != nil {
+		return FixAnnotationResult{}, errors.New("persist fix monitoring subject")
 	}
 	annotation := model.FixAnnotation{
 		AnnotationID:             annotationID,
@@ -652,11 +695,14 @@ func (s *Store) readFixAnchorTx(
 ) (fixAnchor, error) {
 	var result fixAnchor
 	var firstObserved, lastObserved string
+	var fingerprintScopeID sql.NullString
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			io.revision_id, io.occurrence_id, io.session_key,
 			io.fingerprint_id, io.fingerprint_version, io.origin,
 			io.detector_id, io.detector_version, io.scope_quality,
+			io.fingerprint_scope_id, io.category, io.title_code, io.severity,
+			io.confidence, io.harness,
 			sar.status, io.analysis_generation,
 			io.first_observed_at, io.last_observed_at
 		FROM issue_occurrences io
@@ -690,6 +736,12 @@ func (s *Store) readFixAnchorTx(
 		&result.DetectorID,
 		&result.DetectorVersion,
 		&result.ScopeQuality,
+		&fingerprintScopeID,
+		&result.Category,
+		&result.TitleCode,
+		&result.Severity,
+		&result.Confidence,
+		&result.Harness,
 		&result.AnalysisStatus,
 		&result.AnalysisGeneration,
 		&firstObserved,
@@ -701,6 +753,7 @@ func (s *Store) readFixAnchorTx(
 		}
 		return fixAnchor{}, errors.New("read fix annotation anchor")
 	}
+	result.FingerprintScopeID = fingerprintScopeID.String
 	result.FirstObservedAt, err = parseProjectionTime(firstObserved)
 	if err != nil {
 		return fixAnchor{}, errors.New("decode fix anchor start")

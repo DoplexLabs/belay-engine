@@ -14,3 +14,12 @@ func parseProjectionTime(value string) (time.Time, error) {
 	}
 	return time.Parse(time.RFC3339Nano, value)
 }
+
+func projectionOrderNS(value time.Time) (int64, bool) {
+	if value.IsZero() {
+		return 0, false
+	}
+	normalized := value.UTC()
+	order := normalized.UnixNano()
+	return order, time.Unix(0, order).UTC().Equal(normalized)
+}

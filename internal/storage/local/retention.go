@@ -53,6 +53,7 @@ type retentionItem struct {
 	sequence       int64
 	bytes          int64
 	protectedUntil time.Time
+	pinned         bool
 	selected       bool
 }
 
@@ -182,14 +183,39 @@ func (s *Store) Prune(
 			)`); err != nil {
 			return errors.New("delete orphaned analysis diagnostics")
 		}
+		removedJobs, err := tx.ExecContext(ctx, `
+			DELETE FROM fix_recurrence_jobs
+			WHERE state = 'complete'
+				AND revision_id IN (
+					SELECT revision_id
+					FROM session_analysis_revisions
+					WHERE NOT EXISTS (
+						SELECT 1 FROM events
+						WHERE events.session_key =
+							session_analysis_revisions.session_key
+					)
+						AND updated_at <= ?
+				)`,
+			formatProjectionTime(now.Add(-time.Hour)),
+		)
+		if err != nil {
+			return errors.New("delete completed recurrence jobs")
+		}
+		removedJobCount, _ := removedJobs.RowsAffected()
 		var removedAnalysisRevisions int64
 		removed, err := tx.ExecContext(ctx, `
-				DELETE FROM session_analysis_revisions
-				WHERE NOT EXISTS (
-					SELECT 1 FROM events
-					WHERE events.session_key = session_analysis_revisions.session_key
-				)
-				AND updated_at <= ?`,
+					DELETE FROM session_analysis_revisions
+					WHERE NOT EXISTS (
+						SELECT 1 FROM events
+						WHERE events.session_key = session_analysis_revisions.session_key
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM fix_recurrence_jobs
+						WHERE fix_recurrence_jobs.revision_id =
+							session_analysis_revisions.revision_id
+							AND fix_recurrence_jobs.state <> 'complete'
+					)
+					AND updated_at <= ?`,
 			formatProjectionTime(now.Add(-time.Hour)),
 		)
 		if err != nil {
@@ -204,12 +230,24 @@ func (s *Store) Prune(
 			)`); err != nil {
 			return errors.New("delete orphaned dirty-session state")
 		}
+		relevantPrune := issueRevisionDeleted ||
+			removedAnalysisRevisions > 0 ||
+			removedJobCount > 0 ||
+			hasSelectedRetentionItem(items)
 		if issueRevisionDeleted || removedAnalysisRevisions > 0 {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE issue_projection_metadata
-				SET oldest_retained_generation = current_generation
+				SET oldest_retained_generation = current_generation,
+					retention_generation = retention_generation + 1
 				WHERE singleton = 1`); err != nil {
 				return errors.New("advance retained issue generation")
+			}
+		} else if relevantPrune {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE issue_projection_metadata
+				SET retention_generation = retention_generation + 1
+				WHERE singleton = 1`); err != nil {
+				return errors.New("advance retention generation")
 			}
 		}
 		return nil
@@ -224,6 +262,15 @@ func (s *Store) Prune(
 	result.AfterPayloadBytes = before.CurrentPayloadBytes - result.PrunedPayloadBytes
 	result.Maintenance = s.runPostPruneMaintenance(ctx)
 	return result, nil
+}
+
+func hasSelectedRetentionItem(items []retentionItem) bool {
+	for _, item := range items {
+		if item.selected {
+			return true
+		}
+	}
+	return false
 }
 
 type retentionQuerier interface {
@@ -265,7 +312,7 @@ func readCitationDependencies(
 func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retentionItem, error) {
 	rows, err := querier.QueryContext(ctx, `
 		SELECT record_type, record_id, occurred_at, source_sequence,
-			payload_bytes, protection_base
+			payload_bytes, protection_base, pinned
 		FROM (
 			SELECT
 				'event' AS record_type,
@@ -274,7 +321,8 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 				e.source_sequence,
 				LENGTH(e.canonical_json) +
 					COALESCE(LENGTH(ee.enrichment_payload), 0) AS payload_bytes,
-				NULL AS protection_base
+				NULL AS protection_base,
+				0 AS pinned
 			FROM events e
 			LEFT JOIN event_enrichments ee ON ee.event_id = e.event_id
 			UNION ALL
@@ -284,7 +332,8 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 				detected_at AS occurred_at,
 				0 AS source_sequence,
 				LENGTH(cited_event_ids_json) AS payload_bytes,
-				NULL AS protection_base
+				NULL AS protection_base,
+				0 AS pinned
 			FROM findings
 			UNION ALL
 			SELECT
@@ -293,7 +342,17 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 				last_observed_at AS occurred_at,
 				0 AS source_sequence,
 				LENGTH(evidence_payload) AS payload_bytes,
-				updated_at AS protection_base
+				updated_at AS protection_base,
+				EXISTS (
+					SELECT 1
+					FROM fix_recurrence_jobs frj
+					JOIN session_analysis_revisions sar
+						ON sar.revision_id = frj.revision_id
+					WHERE sar.session_key = issue_occurrences.session_key
+						AND sar.visible_from_generation =
+							issue_occurrences.visible_from_generation
+						AND frj.state <> 'complete'
+				) AS pinned
 			FROM issue_occurrences
 		)
 		ORDER BY occurred_at ASC, source_sequence ASC, record_id ASC, record_type ASC`)
@@ -306,6 +365,7 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 		var item retentionItem
 		var occurredAt string
 		var protectionBase sql.NullString
+		var pinned int
 		if err := rows.Scan(
 			&item.recordType,
 			&item.recordID,
@@ -313,6 +373,7 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 			&item.sequence,
 			&item.bytes,
 			&protectionBase,
+			&pinned,
 		); err != nil {
 			return nil, errors.New("read local retention record")
 		}
@@ -327,6 +388,7 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 			}
 			item.protectedUntil = item.protectedUntil.Add(time.Hour)
 		}
+		item.pinned = pinned == 1
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -387,6 +449,9 @@ func evaluateRetention(
 		if !item.protectedUntil.IsZero() && now.Before(item.protectedUntil) {
 			continue
 		}
+		if item.pinned {
+			continue
+		}
 		expired := policy.MaxAge > 0 && item.occurredAt.Before(cutoff)
 		overCount := policy.MaxEventCount > 0 &&
 			item.recordType == "event" &&
@@ -401,8 +466,9 @@ func evaluateRetention(
 			for _, dependentID := range dependencies[item.recordID] {
 				if dependentIndex, ok := recordIndexes[dependentID]; ok {
 					dependent := items[dependentIndex]
-					if !dependent.protectedUntil.IsZero() &&
-						now.Before(dependent.protectedUntil) {
+					if dependent.pinned ||
+						(!dependent.protectedUntil.IsZero() &&
+							now.Before(dependent.protectedUntil)) {
 						protectedDependency = true
 						break
 					}

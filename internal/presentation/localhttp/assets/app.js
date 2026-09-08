@@ -7,7 +7,9 @@
     findings: { page: 20 },
     issues: { page: 20 },
     occurrences: { page: 20 },
-    fixHistory: { page: 20 },
+    fixMonitoring: { page: 20 },
+    fixMonitoringDetail: { page: 20 },
+    fixRecurrences: { page: 20 },
   });
   const mutationRequestDeadlineMilliseconds = 15_000;
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
@@ -49,6 +51,49 @@
     unknown:
       "Analysis status is unavailable; result freshness and completeness are uncertain.",
   });
+  const fixMonitoringCatalog = Object.freeze({
+    matching_evidence_observed: Object.freeze({
+      title: "Exact matching evidence was observed after this attempt.",
+      detail:
+        "This does not establish causality or whether the attempted change worked.",
+      tone: "attention",
+    }),
+    monitoring_incomplete: Object.freeze({
+      title: "Monitoring is incomplete.",
+      detail:
+        "Some later Local activity is pending, failed, truncated, or only partially analyzed.",
+      tone: "pending",
+    }),
+    awaiting_later_evidence: Object.freeze({
+      title: "Awaiting later evidence.",
+      detail: "No comparable completed Local activity is available yet.",
+      tone: "neutral",
+    }),
+    no_later_match_observed: Object.freeze({
+      title:
+        "No later exact match was observed in retained, completed Local analysis.",
+      detail: "This does not verify resolution.",
+      tone: "neutral",
+    }),
+    comparison_unavailable: Object.freeze({
+      title: "Comparison unavailable.",
+      detail:
+        "The stored baseline cannot be compared under current exact-match semantics.",
+      tone: "neutral",
+    }),
+    retracted: Object.freeze({
+      title: "Retracted declaration — excluded from active monitoring.",
+      detail: "",
+      tone: "neutral",
+    }),
+    unknown: Object.freeze({
+      title: "Monitoring status unavailable.",
+      detail: "",
+      tone: "neutral",
+    }),
+  });
+  const canonicalUUIDv7Pattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const fixChangeCatalog = Object.freeze([
     Object.freeze({
       value: "code_change",
@@ -136,8 +181,20 @@
       analysisStatus: "",
       experimental: false,
     },
+    fixMonitoring: createFixMonitoringBucket(),
+    fixMonitoringFilters: {
+      state: "",
+      changeKind: "",
+      severity: "",
+      harness: "",
+      issueID: "",
+      recordedAfter: "",
+      includeRetracted: false,
+    },
     selectedIssueID: "",
     selectedIssueKind: "",
+    selectedIssueSource: "",
+    selectedDrivingAnnotationID: "",
     selectedIssue: null,
     occurrences: [],
     occurrenceNextCursor: "",
@@ -152,6 +209,10 @@
     fixHistoryHasMore: false,
     fixHistoryStatus: "idle",
     fixHistoryRequestGeneration: 0,
+    fixHistoryViewCursor: "",
+    fixHistoryCurrentIssueAvailable: null,
+    fixHistoryStale: false,
+    fixHistoryError: null,
     fixEvidenceEvaluatedAt: "",
     fixActionMessage: "",
     fixActionTone: "status",
@@ -223,6 +284,54 @@
     clearAttentionFilters: document.querySelector("#clear-attention-filters"),
     attentionFilterNote: document.querySelector("#attention-filter-note"),
     issueFilterDisclosure: document.querySelector("#issue-filter-disclosure"),
+    fixMonitoringFilters: document.querySelector("#fix-monitoring-filters"),
+    fixMonitoringFilterState: document.querySelector(
+      "#fix-monitoring-filter-state",
+    ),
+    fixMonitoringFilterChangeKind: document.querySelector(
+      "#fix-monitoring-filter-change-kind",
+    ),
+    fixMonitoringFilterSeverity: document.querySelector(
+      "#fix-monitoring-filter-severity",
+    ),
+    fixMonitoringFilterHarness: document.querySelector(
+      "#fix-monitoring-filter-harness",
+    ),
+    fixMonitoringFilterIssueID: document.querySelector(
+      "#fix-monitoring-filter-issue-id",
+    ),
+    fixMonitoringFilterRecordedAfter: document.querySelector(
+      "#fix-monitoring-filter-recorded-after",
+    ),
+    fixMonitoringFilterRetracted: document.querySelector(
+      "#fix-monitoring-filter-retracted",
+    ),
+    clearFixMonitoringFilters: document.querySelector(
+      "#clear-fix-monitoring-filters",
+    ),
+    fixMonitoringFilterNote: document.querySelector(
+      "#fix-monitoring-filter-note",
+    ),
+    fixMonitoringStatus: document.querySelector("#fix-monitoring-status"),
+    fixMonitoringCount: document.querySelector("#fix-monitoring-count"),
+    fixMonitoringList: document.querySelector("#fix-monitoring-list"),
+    fixMonitoringLoading: document.querySelector("#fix-monitoring-loading"),
+    fixMonitoringEmpty: document.querySelector("#fix-monitoring-empty"),
+    fixMonitoringEmptyTitle: document.querySelector(
+      "#fix-monitoring-empty-title",
+    ),
+    fixMonitoringEmptyDetail: document.querySelector(
+      "#fix-monitoring-empty-detail",
+    ),
+    fixMonitoringPagination: document.querySelector(
+      "#fix-monitoring-pagination",
+    ),
+    fixMonitoringPageStatus: document.querySelector(
+      "#fix-monitoring-page-status",
+    ),
+    fixMonitoringLoadMore: document.querySelector(
+      "#fix-monitoring-load-more",
+    ),
     issueCount: document.querySelector("#issue-count"),
     issueList: document.querySelector("#issue-list"),
     issuesLoading: document.querySelector("#issues-loading"),
@@ -262,11 +371,18 @@
     ),
     issueExplanation: document.querySelector("#issue-explanation"),
     issueScopeDisclosure: document.querySelector("#issue-scope-disclosure"),
+    issueExplanationSection: document.querySelector(
+      "#issue-explanation-section",
+    ),
     issueMetadata: document.querySelector("#issue-metadata"),
+    fingerprintPanel: document.querySelector("#fingerprint-panel"),
     issueFingerprint: document.querySelector("#issue-fingerprint"),
     copyIssueFingerprint: document.querySelector("#copy-issue-fingerprint"),
     recordFixAttempt: document.querySelector("#record-fix-attempt"),
     fixEligibilityStatus: document.querySelector("#fix-eligibility-status"),
+    fixMonitoringDetailStatus: document.querySelector(
+      "#fix-monitoring-detail-status",
+    ),
     fixActionStatus: document.querySelector("#fix-action-status"),
     fixHistoryList: document.querySelector("#fix-history-list"),
     fixHistoryLoading: document.querySelector("#fix-history-loading"),
@@ -281,6 +397,7 @@
     occurrencesPagination: document.querySelector("#occurrences-pagination"),
     occurrencesPageStatus: document.querySelector("#occurrences-page-status"),
     occurrencesLoadMore: document.querySelector("#occurrences-load-more"),
+    matchingSection: document.querySelector("#matching-section"),
     refreshButton: document.querySelector("#refresh-button"),
     sessionPanel: document.querySelector(".session-panel"),
     timelinePanel: document.querySelector(".timeline-panel"),
@@ -370,19 +487,23 @@
   };
 
   const focusRegistry = {
+    monitoringCards: new Map(),
     issueCards: new Map(),
     occurrenceActions: new Map(),
     sessionCards: new Map(),
     fixTriggers: new Map(),
     fixHistoryRows: new Map(),
     fixRetractionTriggers: new Map(),
+    fixObservationRows: new Map(),
   };
   const fixDrafts = new Map();
   const fixRetractionDrafts = new Map();
+  const fixObservationPages = new Map();
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
   renderFixDialogChoices();
+  renderFixMonitoringFilters();
   bindEvents();
   setActiveView("attention", false);
   refreshAll(false);
@@ -395,6 +516,19 @@
       hasMore: false,
       viewCursor: "",
       analysis: null,
+      status: "idle",
+      error: null,
+      requestGeneration: 0,
+    };
+  }
+
+  function createFixMonitoringBucket() {
+    return {
+      data: [],
+      nextCursor: "",
+      hasMore: false,
+      viewCursor: "",
+      evidenceEvaluatedAt: "",
       status: "idle",
       error: null,
       requestGeneration: 0,
@@ -424,9 +558,62 @@
     elements.evidenceGapsLoadMore.addEventListener("click", () => {
       loadIssueBucket(state.evidenceGaps, true);
     });
+    elements.fixMonitoringLoadMore.addEventListener("click", () => {
+      void loadFixMonitoring(true);
+    });
+    elements.fixMonitoringFilters.addEventListener("submit", (event) => {
+      event.preventDefault();
+      syncFixMonitoringFilters();
+      resetAndLoadFixMonitoring();
+    });
+    [
+      [elements.fixMonitoringFilterState, "state"],
+      [elements.fixMonitoringFilterChangeKind, "changeKind"],
+      [elements.fixMonitoringFilterSeverity, "severity"],
+    ].forEach(([element, key]) => {
+      element.addEventListener("change", () => {
+        state.fixMonitoringFilters[key] = element.value;
+        if (key === "state" && element.value === "retracted") {
+          state.fixMonitoringFilters.includeRetracted = true;
+          elements.fixMonitoringFilterRetracted.checked = true;
+        }
+        resetAndLoadFixMonitoring();
+      });
+    });
+    elements.fixMonitoringFilterRetracted.addEventListener("change", () => {
+      state.fixMonitoringFilters.includeRetracted =
+        elements.fixMonitoringFilterRetracted.checked;
+      resetAndLoadFixMonitoring();
+    });
+    [
+      elements.fixMonitoringFilterHarness,
+      elements.fixMonitoringFilterIssueID,
+      elements.fixMonitoringFilterRecordedAfter,
+    ].forEach((element) => {
+      element.addEventListener("change", () => {
+        syncFixMonitoringFilters();
+        resetAndLoadFixMonitoring();
+      });
+    });
+    elements.clearFixMonitoringFilters.addEventListener("click", () => {
+      state.fixMonitoringFilters = {
+        state: "",
+        changeKind: "",
+        severity: "",
+        harness: "",
+        issueID: "",
+        recordedAfter: "",
+        includeRetracted: false,
+      };
+      renderFixMonitoringFilters();
+      resetAndLoadFixMonitoring();
+    });
     elements.occurrencesLoadMore.addEventListener("click", loadMoreOccurrences);
     elements.recordFixAttempt.addEventListener("click", openFixAttemptDialog);
-    elements.fixHistoryLoadMore.addEventListener("click", loadMoreFixHistory);
+    elements.fixHistoryLoadMore.addEventListener(
+      "click",
+      loadMoreFixMonitoringDetail,
+    );
     elements.issueBackButton.addEventListener("click", closeIssueDetail);
     elements.copyIssueFingerprint.addEventListener("click", () => {
       copyText(
@@ -713,6 +900,9 @@
 
   function resolveFocusReference(reference) {
     if (!reference) return null;
+    if (reference.type === "monitoring") {
+      return focusRegistry.monitoringCards.get(reference.key) || null;
+    }
     if (reference.type === "issue") {
       return focusRegistry.issueCards.get(reference.key) || null;
     }
@@ -727,6 +917,11 @@
     }
     if (reference.type === "fix-history") {
       return focusRegistry.fixHistoryRows.get(reference.annotationID) || null;
+    }
+    if (reference.type === "fix-observation") {
+      return (
+        focusRegistry.fixObservationRows.get(reference.recurrenceID) || null
+      );
     }
     if (reference.type === "fix-retraction") {
       return (
@@ -771,13 +966,14 @@
     const refreshGeneration = ++state.attentionRefreshGeneration;
     const selectedID = preserveSelection ? state.selectedIssueID : "";
     const selectedKind = preserveSelection ? state.selectedIssueKind : "";
+    const selectedSource = preserveSelection ? state.selectedIssueSource : "";
     const selectedBucket =
       selectedKind === "evidence_gap" ? state.evidenceGaps : state.issues;
     const selectedPageBudget = Math.max(
       1,
       Math.ceil(selectedBucket.data.length / pageLimits.issues.page),
     );
-    if (selectedID) {
+    if (selectedID && selectedSource !== "monitoring") {
       closeIssueDetail(false);
       showAttentionNotice(
         "Refreshing Attention; selected detail is hidden until current data confirms it.",
@@ -788,11 +984,51 @@
     }
     resetIssueBucket(state.issues);
     resetIssueBucket(state.evidenceGaps);
-    const [issuesReady, gapsReady] = await Promise.all([
+    resetFixMonitoringBucket();
+    const [issuesReady, gapsReady, monitoringReady] = await Promise.all([
       loadIssueBucket(state.issues, false),
       loadIssueBucket(state.evidenceGaps, false),
+      loadFixMonitoring(false),
     ]);
     if (refreshGeneration !== state.attentionRefreshGeneration) return false;
+    if (selectedID && selectedSource === "monitoring") {
+      if (!monitoringReady) {
+        state.fixHistoryStale = true;
+        state.fixHistoryError =
+          "Monitoring refresh failed. Previously loaded attempt detail may be stale.";
+        renderFixAttempts();
+        return false;
+      }
+      const summary = state.fixMonitoring.data.find(
+        (entry) => readText(entry.issue_id) === selectedID,
+      );
+      if (!summary) {
+        closeIssueDetail(false);
+        showAttentionNotice(
+          state.fixMonitoring.hasMore
+            ? "Post-attempt monitoring refreshed. The selected item is outside the loaded results."
+            : "Post-attempt monitoring refreshed. The selected item is no longer visible under the current filters.",
+          "status",
+          7000,
+        );
+        return issuesReady && gapsReady;
+      }
+      const detailReady = await refreshSelectedMonitoringIssue(summary);
+      if (refreshGeneration !== state.attentionRefreshGeneration) return false;
+      if (!detailReady) {
+        state.fixHistoryStale = true;
+        state.fixHistoryError =
+          "Monitoring list refreshed, but attempt detail could not be refreshed.";
+        renderFixAttempts();
+        return false;
+      }
+      showAttentionNotice(
+        "Attention refreshed; post-attempt detail was reloaded from the current view.",
+        "success",
+        4000,
+      );
+      return issuesReady && gapsReady;
+    }
     if (!issuesReady || !gapsReady) {
       if (!suppressFailureNotice && !state.attentionExpiryRefresh) {
         showAttentionNotice(
@@ -876,10 +1112,12 @@
     hideAttentionNotice();
     resetIssueBucket(state.issues);
     resetIssueBucket(state.evidenceGaps);
+    resetFixMonitoringBucket();
     renderAttentionFilters();
     void Promise.all([
       loadIssueBucket(state.issues, false),
       loadIssueBucket(state.evidenceGaps, false),
+      loadFixMonitoring(false),
     ]);
   }
 
@@ -892,6 +1130,430 @@
     bucket.analysis = null;
     bucket.status = "idle";
     bucket.error = null;
+  }
+
+  function resetFixMonitoringBucket(render = true) {
+    state.fixMonitoring.requestGeneration += 1;
+    state.fixMonitoring.data = [];
+    state.fixMonitoring.nextCursor = "";
+    state.fixMonitoring.hasMore = false;
+    state.fixMonitoring.viewCursor = "";
+    state.fixMonitoring.evidenceEvaluatedAt = "";
+    state.fixMonitoring.status = "idle";
+    state.fixMonitoring.error = null;
+    focusRegistry.monitoringCards.clear();
+    if (render) renderFixMonitoring();
+  }
+
+  function syncFixMonitoringFilters() {
+    state.fixMonitoringFilters.harness =
+      elements.fixMonitoringFilterHarness.value.trim();
+    state.fixMonitoringFilters.issueID =
+      elements.fixMonitoringFilterIssueID.value.trim();
+    const recordedAfter = elements.fixMonitoringFilterRecordedAfter.value;
+    if (!recordedAfter) {
+      state.fixMonitoringFilters.recordedAfter = "";
+      return;
+    }
+    const date = new Date(recordedAfter);
+    state.fixMonitoringFilters.recordedAfter = Number.isFinite(date.getTime())
+      ? date.toISOString()
+      : "";
+  }
+
+  function renderFixMonitoringFilters() {
+    const filters = state.fixMonitoringFilters;
+    elements.fixMonitoringFilterState.value = filters.state;
+    elements.fixMonitoringFilterChangeKind.value = filters.changeKind;
+    elements.fixMonitoringFilterSeverity.value = filters.severity;
+    elements.fixMonitoringFilterHarness.value = filters.harness;
+    elements.fixMonitoringFilterIssueID.value = filters.issueID;
+    elements.fixMonitoringFilterRetracted.checked = filters.includeRetracted;
+    if (!filters.recordedAfter) {
+      elements.fixMonitoringFilterRecordedAfter.value = "";
+    }
+    elements.fixMonitoringFilterNote.textContent = filters.includeRetracted
+      ? "Including all-retracted history."
+      : "Showing active attempts.";
+  }
+
+  function resetAndLoadFixMonitoring() {
+    if (state.selectedIssueSource === "monitoring") {
+      closeIssueDetail(false);
+      showAttentionNotice(
+        "Post-attempt filters changed. The prior detail was closed until a current result is selected.",
+        "status",
+        5000,
+      );
+    }
+    resetFixMonitoringBucket();
+    renderFixMonitoringFilters();
+    void loadFixMonitoring(false);
+  }
+
+  function buildFixMonitoringPath(cursor) {
+    const parameters = new URLSearchParams();
+    if (cursor) {
+      parameters.set("cursor", cursor);
+      return `/v1/fix-monitoring?${parameters.toString()}`;
+    }
+    const filters = state.fixMonitoringFilters;
+    parameters.set("limit", String(pageLimits.fixMonitoring.page));
+    if (filters.state) parameters.set("state", filters.state);
+    if (filters.changeKind) {
+      parameters.set("change_kind", filters.changeKind);
+    }
+    if (filters.severity) parameters.set("severity", filters.severity);
+    if (filters.harness) parameters.set("harness", filters.harness);
+    if (filters.issueID) parameters.set("issue_id", filters.issueID);
+    if (filters.recordedAfter) {
+      parameters.set("recorded_after", filters.recordedAfter);
+    }
+    if (filters.includeRetracted) {
+      parameters.set("include_retracted", "true");
+    }
+    return `/v1/fix-monitoring?${parameters.toString()}`;
+  }
+
+  async function loadFixMonitoring(append) {
+    const bucket = state.fixMonitoring;
+    if (append && (!bucket.hasMore || !bucket.nextCursor)) return false;
+    const generation = ++bucket.requestGeneration;
+    const cursor = append ? bucket.nextCursor : "";
+    bucket.status = append ? "loading-more" : "loading";
+    bucket.error = null;
+    renderFixMonitoring();
+    try {
+      const response = await apiGet(buildFixMonitoringPath(cursor));
+      requireFixMonitoringSchema(response);
+      if (generation !== bucket.requestGeneration) return false;
+      const page = Array.isArray(response.data)
+        ? response.data.filter(
+            (entry) =>
+              isRecord(entry) &&
+              readText(entry.issue_id) &&
+              readText(entry.annotation_id),
+          )
+        : [];
+      const data =
+        append && cursor
+          ? deduplicateByID(bucket.data.concat(page), "issue_id")
+          : deduplicateByID(page, "issue_id");
+      const nextCursor = readCursor(response.next_cursor);
+      if (response.has_more === true && !nextCursor) {
+        throw new Error(
+          "Local API returned monitoring pagination without a cursor.",
+        );
+      }
+      const viewCursor = readCursor(response.monitoring_view_cursor);
+      if (!viewCursor) {
+        throw new Error(
+          "Local API returned monitoring results without a view cursor.",
+        );
+      }
+      bucket.data = data;
+      bucket.nextCursor = nextCursor;
+      bucket.hasMore = Boolean(nextCursor);
+      bucket.viewCursor = viewCursor;
+      bucket.evidenceEvaluatedAt = readText(response.evidence_evaluated_at);
+      bucket.status = "ready";
+      renderFixMonitoring();
+      return true;
+    } catch (error) {
+      if (generation !== bucket.requestGeneration) return false;
+      if (isCursorExpired(error) && append) {
+        const closedSelectedMonitoringDetail =
+          state.selectedIssueSource === "monitoring";
+        if (closedSelectedMonitoringDetail) {
+          state.attentionRefreshGeneration += 1;
+          closeIssueDetail(false);
+        }
+        resetFixMonitoringBucket();
+        const refreshed = await loadFixMonitoring(false);
+        bucket.error = refreshed
+          ? closedSelectedMonitoringDetail
+            ? "The prior monitoring view expired. After attempts was refreshed from a new snapshot, and the connected detail was closed."
+            : "The prior monitoring view expired. After attempts was refreshed from a new snapshot."
+          : "This monitoring view expired and could not be refreshed.";
+        renderFixMonitoring();
+        return refreshed;
+      }
+      bucket.status = "error";
+      bucket.error = fixMonitoringErrorMessage(error);
+      renderFixMonitoring();
+      return false;
+    }
+  }
+
+  function fixMonitoringErrorMessage(error) {
+    if (error instanceof LocalAPIError && error.status === 503) {
+      if (
+        error.problemType ===
+        "belay.local/monitoring-catchup-in-progress"
+      ) {
+        return "Post-attempt monitoring is catching up. Issues, evidence gaps, sessions, and fix actions remain available.";
+      }
+      if (
+        error.problemType === "belay.local/monitoring-catchup-failed"
+      ) {
+        return "Post-attempt monitoring catch-up needs a Local retry. Other Local views remain available.";
+      }
+    }
+    if (isCursorExpired(error)) {
+      return "This monitoring view expired. Refresh After attempts.";
+    }
+    return "Post-attempt monitoring could not be loaded. Other Local views remain available.";
+  }
+
+  function renderFixMonitoring() {
+    const bucket = state.fixMonitoring;
+    focusRegistry.monitoringCards.clear();
+    const fragment = document.createDocumentFragment();
+    bucket.data.forEach((summary) => {
+      fragment.append(createFixMonitoringCard(summary));
+    });
+    elements.fixMonitoringList.replaceChildren(fragment);
+    elements.fixMonitoringCount.textContent =
+      bucket.status === "ready" ? formatNumber(bucket.data.length) : "—";
+    elements.fixMonitoringLoading.hidden = bucket.status !== "loading";
+    elements.fixMonitoringEmpty.hidden =
+      bucket.status !== "ready" || bucket.data.length !== 0;
+    elements.fixMonitoringEmptyTitle.textContent =
+      state.fixMonitoringFilters.includeRetracted
+        ? "No monitored attempt history matches these filters"
+        : "No active monitored attempts match these filters";
+    elements.fixMonitoringEmptyDetail.textContent =
+      "Recording an attempt is optional. Monitoring begins only after a retained declaration.";
+    elements.fixMonitoringPagination.hidden = !bucket.hasMore;
+    elements.fixMonitoringLoadMore.disabled =
+      bucket.status === "loading-more";
+    elements.fixMonitoringPageStatus.textContent = bucket.hasMore
+      ? `Showing ${bucket.data.length}; more monitored issues are available.`
+      : `Showing ${bucket.data.length} monitored ${
+          bucket.data.length === 1 ? "issue" : "issues"
+        }.`;
+    elements.fixMonitoringStatus.hidden = !bucket.error;
+    elements.fixMonitoringStatus.textContent = bucket.error || "";
+    elements.fixMonitoringStatus.dataset.tone =
+      bucket.status === "error" ? "error" : "status";
+  }
+
+  function createFixMonitoringCard(summary) {
+    const issueID = readText(summary.issue_id);
+    const annotationID = readText(summary.annotation_id);
+    const article = createElement("article", "issue-card monitoring-card");
+    const button = createElement("button", "issue-card-main");
+    button.type = "button";
+    const stateEntry = fixMonitoringStateEntry(
+      summary.fix_recurrence_state,
+    );
+    button.dataset.monitoringTone = stateEntry.tone;
+    const catalog = monitoringSubjectCatalog(summary);
+    const header = createElement("span", "issue-card-top");
+    header.append(
+      createElement("strong", "", catalog.title),
+      createToneBadge(summary.severity),
+    );
+    const category = fixChangeCatalogEntry(summary.change_kind);
+    const metadata = createElement("span", "issue-card-meta");
+    const activeAttempts = toOptionalCount(summary.active_attempt_count);
+    const observedAttempts = toOptionalCount(
+      summary.observed_attempt_count,
+    );
+    const sameSession = toOptionalCount(
+      summary.same_anchor_session_observation_count,
+    );
+    const otherSessions = toOptionalCount(
+      summary.other_session_observation_count,
+    );
+    metadata.append(
+      createElement("span", "", category.label),
+      createElement(
+        "span",
+        "",
+        `${
+          activeAttempts === null
+            ? "Active attempt count unavailable"
+            : `${formatNumber(activeAttempts)} active`
+        } · ${
+          observedAttempts === null
+            ? "Observed-attempt count unavailable"
+            : `${formatNumber(observedAttempts)} with matching evidence`
+        }`,
+      ),
+      createElement(
+        "span",
+        "",
+        `${
+          sameSession === null
+            ? "Original-session count unavailable"
+            : `${formatNumber(sameSession)} original-session`
+        } · ${
+          otherSessions === null
+            ? "Other-session count unavailable"
+            : `${formatNumber(otherSessions)} other-session`
+        }`,
+      ),
+      createElement(
+        "span",
+        "",
+        formatRelativeTime(parseDate(summary.recorded_at)),
+      ),
+    );
+    button.append(
+      header,
+      createElement("span", "monitoring-state-title", stateEntry.title),
+    );
+    if (stateEntry.detail) {
+      button.append(
+        createElement("span", "issue-card-caveat", stateEntry.detail),
+      );
+    }
+    button.append(metadata);
+    if (toFiniteNumber(summary.same_anchor_session_observation_count) > 0) {
+      button.append(
+        createElement(
+          "span",
+          "issue-card-caveat",
+          "This may be continuation within the original session.",
+        ),
+      );
+    }
+    if (
+      summary.analysis_complete === false &&
+      normalizeFixRecurrenceState(summary.fix_recurrence_state) ===
+        "matching_evidence_observed"
+    ) {
+      button.append(
+        createElement(
+          "span",
+          "issue-card-caveat",
+          "Additional matching evidence may exist because monitoring coverage is incomplete.",
+        ),
+      );
+    }
+    if (
+      normalizeFixRecurrenceState(summary.fix_recurrence_state) ===
+        "retracted" &&
+      toOptionalCount(summary.historical_matching_evidence_count) > 0
+    ) {
+      button.append(
+        createElement(
+          "span",
+          "issue-card-caveat",
+          "Matching evidence was recorded before this declaration was retracted.",
+        ),
+      );
+    }
+    const focusKey = `${issueID}\u0000${annotationID}`;
+    focusRegistry.monitoringCards.set(focusKey, button);
+    const selected =
+      state.selectedIssueSource === "monitoring" &&
+      state.selectedIssueID === issueID &&
+      state.selectedDrivingAnnotationID === annotationID;
+    article.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.setAttribute("aria-current", selected ? "true" : "false");
+    button.addEventListener("click", () => {
+      void selectMonitoringIssue(summary, true);
+    });
+    article.append(button);
+    return article;
+  }
+
+  function selectMonitoringIssue(summary, moveFocus) {
+    const issueID = readText(summary && summary.issue_id);
+    const annotationID = readText(summary && summary.annotation_id);
+    if (!issueID || !annotationID) return Promise.resolve(false);
+    const monitoringViewCursor = readCursor(
+      state.fixMonitoring.viewCursor,
+    );
+    if (!monitoringViewCursor) {
+      state.fixMonitoring.status = "error";
+      state.fixMonitoring.error =
+        "This monitoring snapshot is unavailable. Refresh After attempts before opening it.";
+      renderFixMonitoring();
+      return Promise.resolve(false);
+    }
+    if (moveFocus) state.attentionRefreshGeneration += 1;
+    state.selectedIssueID = issueID;
+    state.selectedIssueKind = "issue";
+    state.selectedIssueSource = "monitoring";
+    state.selectedDrivingAnnotationID = annotationID;
+    state.selectedIssue = monitoringSummaryIssue(summary);
+    state.issueReturnFocus = {
+      type: "monitoring",
+      key: `${issueID}\u0000${annotationID}`,
+    };
+    state.occurrences = [];
+    state.occurrenceNextCursor = "";
+    state.occurrenceHasMore = false;
+    state.occurrenceStatus = "idle";
+    resetFixIssueState();
+    state.fixEligibilityStatus = "loading";
+    elements.attentionWelcome.hidden = true;
+    elements.issueDetail.hidden = false;
+    document.body.classList.add("is-attention-detail-open");
+    renderIssueBucket(state.issues);
+    renderIssueBucket(state.evidenceGaps);
+    renderFixMonitoring();
+    renderIssueDetail();
+    applyPaneAccessibility();
+    if (moveFocus) focusCurrentElement(elements.issueDetailHeading);
+    return loadFixMonitoringDetail(
+      issueID,
+      false,
+      monitoringViewCursor,
+      false,
+      moveFocus ? annotationID : "",
+    );
+  }
+
+  function refreshSelectedMonitoringIssue(summary) {
+    const issueID = readText(summary && summary.issue_id);
+    const annotationID = readText(summary && summary.annotation_id);
+    if (
+      !issueID ||
+      !annotationID ||
+      issueID !== state.selectedIssueID ||
+      state.selectedIssueSource !== "monitoring"
+    ) {
+      return Promise.resolve(false);
+    }
+    const monitoringViewCursor = readCursor(
+      state.fixMonitoring.viewCursor,
+    );
+    if (!monitoringViewCursor) {
+      state.fixHistoryStale = true;
+      state.fixHistoryError =
+        "The monitoring list snapshot is unavailable. Connected attempt detail was preserved; refresh After attempts before reloading it.";
+      renderFixAttempts();
+      return Promise.resolve(false);
+    }
+    state.selectedDrivingAnnotationID = annotationID;
+    state.issueReturnFocus = {
+      type: "monitoring",
+      key: `${issueID}\u0000${annotationID}`,
+    };
+    renderFixMonitoring();
+    return loadFixMonitoringDetail(
+      issueID,
+      false,
+      monitoringViewCursor,
+      true,
+      annotationID,
+    );
+  }
+
+  function monitoringSummaryIssue(summary) {
+    return {
+      issue_id: readText(summary.issue_id),
+      title_code: readText(summary.title_code),
+      severity: readText(summary.severity),
+      analysis_status: "",
+      evidence_complete: null,
+      retained_history_only: true,
+    };
   }
 
   async function loadIssueBucket(bucket, append) {
@@ -1129,9 +1791,14 @@
     const article = createElement("article", "issue-card");
     const button = createElement("button", "issue-card-main");
     button.type = "button";
-    button.setAttribute("aria-pressed", String(
-      issueID === state.selectedIssueID,
-    ));
+    button.setAttribute(
+      "aria-pressed",
+      String(
+        state.selectedIssueSource === "attention" &&
+          issueID === state.selectedIssueID &&
+          state.selectedIssueKind === kind,
+      ),
+    );
     button.addEventListener("click", () => {
       void selectIssue(issue, kind, true);
     });
@@ -1207,6 +1874,8 @@
     if (moveFocus) state.attentionRefreshGeneration += 1;
     state.selectedIssueID = issueID;
     state.selectedIssueKind = kind === "evidence_gap" ? "evidence_gap" : "issue";
+    state.selectedIssueSource = "attention";
+    state.selectedDrivingAnnotationID = "";
     state.selectedIssue = issue;
     state.issueReturnFocus = {
       type: "issue",
@@ -1230,7 +1899,7 @@
         ? state.evidenceGaps
         : state.issues;
     void loadFixEligibility(issueID, bucket.viewCursor);
-    void loadFixHistory(issueID, false);
+    void loadFixMonitoringDetail(issueID, false, "", false, "");
     return loadIssueDetail(false, bucket.viewCursor);
   }
 
@@ -1310,21 +1979,46 @@
 
   function renderIssueDetail() {
     const issue = state.selectedIssue || {};
-    const catalog = issueCatalogEntry(issue.title_code);
+    const catalog = monitoringSubjectCatalog(issue);
+    const historyOnly =
+      state.fixHistoryCurrentIssueAvailable === false;
+    const currentProjectionPending =
+      state.selectedIssueSource === "monitoring" &&
+      state.fixHistoryCurrentIssueAvailable === null;
     const kind =
-      state.selectedIssueKind === "evidence_gap" ? "Evidence gap" : "Issue";
+      historyOnly
+        ? "Retained attempt history"
+        : currentProjectionPending
+          ? "Post-attempt monitoring"
+        : state.selectedIssueKind === "evidence_gap"
+          ? "Evidence gap"
+          : "Issue";
     elements.issueDetailKind.textContent = kind;
     elements.issueDetailHeading.textContent = catalog.title;
     elements.issueExplanation.textContent = catalog.explanation;
     const status = normalizeAnalysisStatus(issue.analysis_status);
     elements.issueAnalysisQualifier.textContent =
-      analysisQualifiers[status] || "";
-    elements.issueScopeDisclosure.textContent = issueScopeDisclosure(issue);
+      historyOnly
+        ? "The current issue projection is unavailable. Durable attempt and observation history remains available."
+        : currentProjectionPending
+          ? "Checking whether a current issue projection remains available."
+        : analysisQualifiers[status] || "";
+    elements.issueScopeDisclosure.textContent = historyOnly
+      ? "Current fix eligibility and matching sessions are unavailable in history-only detail."
+      : currentProjectionPending
+        ? "Attempt history is loading from the selected monitoring snapshot."
+      : issueScopeDisclosure(issue);
     const badges = [
       createToneBadge(issue.severity),
-      createElement("span", "meta-badge", issueRecurrenceLabel(issue)),
-      createElement("span", "meta-badge", analysisStatusLabel(status)),
     ];
+    if (!historyOnly && !currentProjectionPending) {
+      badges.push(
+        createElement("span", "meta-badge", issueRecurrenceLabel(issue)),
+        createElement("span", "meta-badge", analysisStatusLabel(status)),
+      );
+    } else {
+      badges.push(createElement("span", "meta-badge", "History only"));
+    }
     if (catalog.experimental || issue.experimental === true) {
       badges.push(createElement("span", "experimental-label", "Experimental"));
     }
@@ -1332,9 +2026,36 @@
     elements.issueFingerprint.textContent =
       readText(issue.fingerprint_id) || "Unavailable";
     elements.copyIssueFingerprint.disabled = !readText(issue.fingerprint_id);
+    elements.fingerprintPanel.hidden = historyOnly || currentProjectionPending;
+    elements.matchingSection.hidden = historyOnly || currentProjectionPending;
     renderIssueMetadata(issue);
     renderFixAttempts();
-    renderOccurrences();
+    if (!historyOnly && !currentProjectionPending) renderOccurrences();
+  }
+
+  function monitoringSubjectCatalog(value) {
+    const subject = isRecord(value && value.subject) ? value.subject : value;
+    const titleCode = readText(subject && subject.title_code);
+    return issueCatalogEntry(
+      titleCode && !titleCode.startsWith("issue.")
+        ? `issue.${titleCode}`
+        : titleCode,
+    );
+  }
+
+  function monitoringAttemptSubjectIssue(attempt) {
+    if (!isRecord(attempt) || !isRecord(attempt.subject)) return null;
+    return {
+      issue_id: readText(attempt.issue_id),
+      title_code: readText(attempt.subject.title_code),
+      severity: readText(attempt.subject.severity),
+      confidence: readText(attempt.subject.confidence),
+      origin: readText(attempt.subject.origin),
+      detector_id: readText(attempt.subject.detector_id),
+      detector_version: readText(attempt.subject.detector_version),
+      fingerprint_version: readText(attempt.subject.fingerprint_version),
+      retained_history_only: true,
+    };
   }
 
   function renderIssueMetadata(issue) {
@@ -1367,12 +2088,21 @@
     state.fixHistoryNextCursor = "";
     state.fixHistoryHasMore = false;
     state.fixHistoryStatus = "idle";
+    state.fixHistoryViewCursor = "";
+    state.fixHistoryCurrentIssueAvailable = null;
+    state.fixHistoryStale = false;
+    state.fixHistoryError = null;
     state.fixEvidenceEvaluatedAt = "";
     state.fixActionMessage = "";
     state.fixActionTone = "status";
     focusRegistry.fixTriggers.clear();
     focusRegistry.fixHistoryRows.clear();
     focusRegistry.fixRetractionTriggers.clear();
+    focusRegistry.fixObservationRows.clear();
+    fixObservationPages.forEach((page) => {
+      page.requestGeneration += 1;
+    });
+    fixObservationPages.clear();
   }
 
   async function loadFixEligibility(issueID, viewCursor) {
@@ -1428,20 +2158,99 @@
     }
   }
 
-  async function loadFixHistory(issueID, append) {
+  async function loadMonitoringIssueEligibility(issueID) {
+    const loadedBucket = state.issues.data.some(
+      (entry) => readText(entry.issue_id) === issueID,
+    )
+      ? state.issues
+      : state.evidenceGaps.data.some(
+            (entry) => readText(entry.issue_id) === issueID,
+          )
+        ? state.evidenceGaps
+        : null;
+    const loadedViewCursor = readCursor(
+      loadedBucket && loadedBucket.viewCursor,
+    );
+    if (loadedViewCursor) {
+      return loadFixEligibility(issueID, loadedViewCursor);
+    }
+
+    const generation = ++state.fixEligibilityRequestGeneration;
+    state.fixEligibility = null;
+    state.fixEligibilityStatus = "loading";
+    renderFixAttempts();
+    const parameters = new URLSearchParams({ limit: "1" });
+    try {
+      const response = await apiGet(
+        `/v1/issues/${encodeURIComponent(issueID)}/occurrences?${parameters.toString()}`,
+      );
+      if (
+        generation !== state.fixEligibilityRequestGeneration ||
+        issueID !== state.selectedIssueID ||
+        state.selectedIssueSource !== "monitoring"
+      ) {
+        return false;
+      }
+      if (
+        !isRecord(response) ||
+        response.schema_version !== "belay.read.v1" ||
+        !isRecord(response.data) ||
+        !isRecord(response.data.issue)
+      ) {
+        throw new Error("Local API returned an invalid exact issue result.");
+      }
+      const issue = response.data.issue;
+      const viewCursor = readCursor(response.view_cursor);
+      if (readText(issue.issue_id) !== issueID || !viewCursor) {
+        throw new Error(
+          "Local API did not return a current exact issue snapshot.",
+        );
+      }
+      state.selectedIssue = issue;
+      renderIssueDetail();
+      return loadFixEligibility(issueID, viewCursor);
+    } catch (error) {
+      if (
+        generation !== state.fixEligibilityRequestGeneration ||
+        issueID !== state.selectedIssueID ||
+        state.selectedIssueSource !== "monitoring"
+      ) {
+        return false;
+      }
+      state.fixEligibility = null;
+      state.fixEligibilityStatus = "error";
+      renderFixAttempts();
+      return false;
+    }
+  }
+
+  async function loadFixMonitoringDetail(
+    issueID,
+    append,
+    viewCursor,
+    preserveOnFailure,
+    focusAnnotationID,
+  ) {
     const generation = ++state.fixHistoryRequestGeneration;
     const cursor = append ? state.fixHistoryNextCursor : "";
     state.fixHistoryStatus = append ? "loading-more" : "loading";
+    state.fixHistoryError = null;
+    state.fixHistoryStale = false;
     renderFixAttempts();
     const parameters = new URLSearchParams({
-      limit: String(pageLimits.fixHistory.page),
+      limit: String(pageLimits.fixMonitoringDetail.page),
     });
-    if (cursor) parameters.set("cursor", cursor);
+    if (cursor) {
+      parameters.delete("limit");
+      parameters.set("cursor", cursor);
+    } else if (viewCursor) {
+      parameters.set("view_cursor", viewCursor);
+    }
     try {
       const response = await apiGet(
-        `/v1/issues/${encodeURIComponent(issueID)}/fixes?${parameters.toString()}`,
+        `/v1/issues/${encodeURIComponent(issueID)}/fix-monitoring?${parameters.toString()}`,
       );
-      requireFixSchema(response);
+      requireFixMonitoringSchema(response);
       if (
         generation !== state.fixHistoryRequestGeneration ||
         issueID !== state.selectedIssueID
@@ -1449,6 +2258,19 @@
         return false;
       }
       const evaluatedAt = readText(response.evidence_evaluated_at);
+      const currentIssueAvailable =
+        response.current_issue_available === true;
+      const currentIssue = response.current_issue;
+      if (
+        (currentIssueAvailable && !isRecord(currentIssue)) ||
+        (!currentIssueAvailable && currentIssue !== null) ||
+        (currentIssueAvailable &&
+          readText(currentIssue.issue_id) !== issueID)
+      ) {
+        throw new Error(
+          "Local API returned an invalid current-issue monitoring state.",
+        );
+      }
       const page = Array.isArray(response.data)
         ? response.data
             .filter(
@@ -1462,34 +2284,141 @@
               browser_evidence_evaluated_at: evaluatedAt,
             }))
         : [];
-      state.fixHistory =
+      const history =
         append && cursor
           ? deduplicateByID(
               state.fixHistory.concat(page),
               "annotation_id",
             )
           : deduplicateByID(page, "annotation_id");
-      state.fixHistoryNextCursor = readCursor(response.next_cursor);
-      state.fixHistoryHasMore =
-        response.has_more === true || Boolean(state.fixHistoryNextCursor);
+      const nextCursor = readCursor(response.next_cursor);
+      if (append && nextCursor && nextCursor === cursor) {
+        throw new Error(
+          "Local API returned a non-advancing attempt cursor.",
+        );
+      }
+      if (response.has_more === true && !nextCursor) {
+        throw new Error(
+          "Local API returned attempt pagination without a cursor.",
+        );
+      }
+      const monitoringViewCursor = readCursor(
+        response.monitoring_view_cursor,
+      );
+      if (!monitoringViewCursor) {
+        throw new Error(
+          "Local API returned attempt monitoring without a view cursor.",
+        );
+      }
+      state.fixHistory = history;
+      state.fixHistoryNextCursor = nextCursor;
+      state.fixHistoryHasMore = Boolean(state.fixHistoryNextCursor);
+      state.fixHistoryViewCursor = monitoringViewCursor;
+      state.fixHistoryCurrentIssueAvailable = currentIssueAvailable;
       state.fixEvidenceEvaluatedAt = evaluatedAt;
       state.fixHistoryStatus = "ready";
+      state.fixHistoryError = null;
+      state.fixHistoryStale = false;
+      if (!append) {
+        if (
+          currentIssueAvailable &&
+          state.selectedIssueSource === "monitoring"
+        ) {
+          state.selectedIssue = currentIssue;
+          state.occurrenceStatus = "loading";
+          void loadIssueDetail(false, "");
+          void loadMonitoringIssueEligibility(issueID);
+        } else if (!currentIssueAvailable) {
+          if (state.selectedIssueSource === "monitoring") {
+            state.selectedIssue =
+              monitoringAttemptSubjectIssue(
+                state.fixHistory.find(
+                  (attempt) =>
+                    readText(attempt.annotation_id) ===
+                    state.selectedDrivingAnnotationID,
+                ) || state.fixHistory[0],
+              ) ||
+              state.selectedIssue;
+          }
+          state.occurrenceRequestGeneration += 1;
+          state.occurrenceStatus = "unavailable";
+          state.fixEligibilityRequestGeneration += 1;
+          state.fixEligibility = null;
+          state.fixEligibilityStatus = "unavailable";
+        }
+      }
       renderFixAttempts();
+      renderIssueDetail();
+      if (
+        focusAnnotationID &&
+        !state.fixHistory.some(
+          (attempt) =>
+            readText(attempt.annotation_id) === focusAnnotationID,
+        ) &&
+        state.fixHistoryHasMore &&
+        state.fixHistoryNextCursor
+      ) {
+        return loadFixMonitoringDetail(
+          issueID,
+          true,
+          "",
+          true,
+          focusAnnotationID,
+        );
+      }
+      if (focusAnnotationID) {
+        const drivingAttempt =
+          focusRegistry.fixHistoryRows.get(focusAnnotationID) || null;
+        focusCurrentElement(drivingAttempt) ||
+          focusCurrentElement(elements.issueDetailHeading);
+      }
       return true;
-    } catch {
+    } catch (error) {
       if (
         generation !== state.fixHistoryRequestGeneration ||
         issueID !== state.selectedIssueID
       ) {
         return false;
       }
-      state.fixHistoryStatus = "error";
+      if (isCursorExpired(error)) {
+        return recoverExpiredFixMonitoringDetail(issueID, append);
+      }
+      if (preserveOnFailure && state.fixHistory.length) {
+        state.fixHistoryStatus = "ready";
+        state.fixHistoryStale = true;
+      } else {
+        state.fixHistoryStatus = "error";
+      }
+      state.fixHistoryError = fixMonitoringErrorMessage(error);
       renderFixAttempts();
       return false;
     }
   }
 
-  function loadMoreFixHistory() {
+  async function recoverExpiredFixMonitoringDetail(issueID, append) {
+    if (issueID !== state.selectedIssueID) return false;
+    const expiredSurface = append
+      ? "Attempt pagination"
+      : "Attempt detail";
+    state.attentionRefreshGeneration += 1;
+    resetFixMonitoringBucket(false);
+    closeIssueDetail(false);
+    showAttentionNotice(
+      `${expiredSurface} expired. Connected attempt and observation detail was cleared before refreshing After attempts…`,
+      "pending",
+    );
+    const refreshed = await loadFixMonitoring(false);
+    showAttentionNotice(
+      refreshed
+        ? `${expiredSurface} expired. After attempts was refreshed from a current snapshot; reopen the issue to inspect current evidence.`
+        : `${expiredSurface} expired. Connected detail remains closed, and After attempts could not be refreshed.`,
+      refreshed ? "status" : "error",
+      refreshed ? 7000 : 0,
+    );
+    return false;
+  }
+
+  function loadMoreFixMonitoringDetail() {
     if (
       !state.selectedIssueID ||
       !state.fixHistoryHasMore ||
@@ -1497,7 +2426,13 @@
     ) {
       return;
     }
-    void loadFixHistory(state.selectedIssueID, true);
+    void loadFixMonitoringDetail(
+      state.selectedIssueID,
+      true,
+      "",
+      true,
+      "",
+    );
   }
 
   function renderFixAttempts() {
@@ -1511,24 +2446,35 @@
       retainedDraft.unresolved === true &&
       Boolean(retainedDraft.idempotencyKey) &&
       Boolean(retainedDraft.actionToken);
+    const monitoringCurrentIssueUnavailable =
+      state.fixHistoryCurrentIssueAvailable === false ||
+      (state.selectedIssueSource === "monitoring" &&
+        state.fixHistoryCurrentIssueAvailable === null);
     const catalogReady =
       eligibility.changeCatalogVersion === "fix-change.v1";
     const canRecord =
-      canResume ||
-      (state.fixEligibilityStatus === "ready" &&
-        eligibility.eligible === true &&
-        Boolean(eligibility.actionToken) &&
-        catalogReady);
+      !monitoringCurrentIssueUnavailable &&
+      (canResume ||
+        (state.fixEligibilityStatus === "ready" &&
+          eligibility.eligible === true &&
+          Boolean(eligibility.actionToken) &&
+          catalogReady));
     elements.recordFixAttempt.disabled = !canRecord;
     elements.recordFixAttempt.textContent = canResume
       ? "Resume fix attempt"
       : "Record fix attempt";
-    if (canResume) {
+    if (canResume && monitoringCurrentIssueUnavailable) {
+      elements.fixEligibilityStatus.textContent =
+        "An unresolved submission is retained, but it cannot resume without a current issue projection and current eligibility.";
+    } else if (canResume) {
       elements.fixEligibilityStatus.textContent =
         "An unresolved submission is retained. Resume it with the same private retry key or explicitly abandon it.";
     } else if (state.fixEligibilityStatus === "loading") {
       elements.fixEligibilityStatus.textContent =
         "Checking whether this current issue can anchor a declaration…";
+    } else if (state.fixEligibilityStatus === "unavailable") {
+      elements.fixEligibilityStatus.textContent =
+        "Current eligibility is unavailable because this is retained attempt history without a current issue projection.";
     } else if (state.fixEligibilityStatus === "error") {
       elements.fixEligibilityStatus.textContent =
         "Eligibility could not be confirmed. Matching-session evidence remains available.";
@@ -1546,6 +2492,15 @@
       elements.fixEligibilityStatus.textContent =
         "Eligibility has not been checked.";
     }
+    elements.fixMonitoringDetailStatus.hidden =
+      !state.fixHistoryError && !state.fixHistoryStale;
+    elements.fixMonitoringDetailStatus.textContent =
+      state.fixHistoryError ||
+      (state.fixHistoryStale
+        ? "Attempt monitoring may be stale. Other issue detail remains available."
+        : "");
+    elements.fixMonitoringDetailStatus.dataset.tone =
+      state.fixHistoryError ? "error" : "status";
     renderFixActionStatus();
     renderFixHistory();
   }
@@ -1572,6 +2527,7 @@
   function renderFixHistory() {
     focusRegistry.fixHistoryRows.clear();
     focusRegistry.fixRetractionTriggers.clear();
+    focusRegistry.fixObservationRows.clear();
     const fragment = document.createDocumentFragment();
     state.fixHistory.forEach((annotation) => {
       fragment.append(createFixHistoryRow(annotation));
@@ -1586,7 +2542,7 @@
         createElement(
           "p",
           "overview-empty",
-          "Fix-attempt history could not be loaded. Matching sessions remain available.",
+          "Attempt monitoring could not be loaded. Matching sessions and fix actions remain available.",
         ),
       );
     }
@@ -1594,15 +2550,15 @@
     elements.fixHistoryLoadMore.disabled =
       state.fixHistoryStatus === "loading-more";
     elements.fixHistoryPageStatus.textContent = state.fixHistoryHasMore
-      ? `Showing ${state.fixHistory.length}; more declarations are available.`
-      : `Showing ${state.fixHistory.length} recorded ${
-          state.fixHistory.length === 1 ? "declaration" : "declarations"
+      ? `Showing ${state.fixHistory.length}; more monitored attempts are available.`
+      : `Showing ${state.fixHistory.length} monitored ${
+          state.fixHistory.length === 1 ? "attempt" : "attempts"
         }.`;
     const evaluatedAt = parseDate(state.fixEvidenceEvaluatedAt);
     elements.fixEvidenceEvaluated.textContent = evaluatedAt
-      ? `Anchor evidence retention evaluated ${formatRelativeTime(evaluatedAt)}.`
+      ? `Monitoring evidence retention evaluated ${formatRelativeTime(evaluatedAt)}. Payload-free monitoring metadata and positive observations may remain after cited evidence is pruned.`
       : state.fixHistory.length
-        ? "Anchor evidence retention evaluation time is unavailable."
+        ? "Monitoring evidence retention evaluation time is unavailable. Payload-free monitoring metadata and positive observations may remain after cited evidence is pruned."
         : "";
   }
 
@@ -1614,7 +2570,11 @@
       focusRegistry.fixHistoryRows.set(annotationID, row);
     }
     const category = fixChangeCatalogEntry(annotation.change_kind);
-    const stateValue = normalizeFixAnnotationState(annotation.state);
+    const annotationState = normalizeFixAnnotationState(annotation.state);
+    const monitoringState = normalizeFixRecurrenceState(
+      annotation.fix_recurrence_state,
+    );
+    const monitoringEntry = fixMonitoringStateEntry(monitoringState);
     const header = createElement("div", "fix-history-header");
     const title = createElement("div");
     title.append(
@@ -1622,24 +2582,22 @@
       createElement(
         "small",
         "",
-        annotation.change_catalog_version === "fix-change.v1"
-          ? "Catalog fix-change.v1"
-          : "Catalog version unavailable",
+        monitoringSubjectCatalog(annotation).title,
       ),
     );
     const badges = createElement("div", "fix-history-badges");
     const stateBadge = createElement(
       "span",
       "fix-state-badge",
-      stateValue === "retracted"
+      annotationState === "retracted"
         ? "Retracted declaration"
-        : stateValue === "active"
+        : annotationState === "active"
           ? "Active declaration"
           : "Declaration state unavailable",
     );
-    stateBadge.dataset.tone = stateValue;
+    stateBadge.dataset.tone = annotationState;
     const evidenceStatus = normalizeFixEvidenceStatus(
-      annotation.evidence_currently_retained,
+      annotation.anchor_evidence_currently_retained,
     );
     const evidenceBadge = createElement(
       "span",
@@ -1649,10 +2607,11 @@
     evidenceBadge.dataset.tone = evidenceStatus;
     badges.append(stateBadge, evidenceBadge);
     header.append(title, badges);
-    const description = createElement(
-      "p",
-      "fix-history-description",
-      category.description,
+    const status = createElement("div", "fix-monitoring-state");
+    status.dataset.tone = monitoringEntry.tone;
+    status.append(
+      createElement("strong", "", monitoringEntry.title),
+      createElement("p", "", monitoringEntry.detail),
     );
     const metadata = createElement("dl", "fix-history-metadata");
     appendFixMetadata(
@@ -1662,10 +2621,41 @@
     );
     appendFixMetadata(
       metadata,
-      "Evidence",
-      fixEvidenceHistoryText(annotation, evidenceStatus),
+      "Monitoring began",
+      formatFullDate(parseDate(annotation.monitor_from)) || "Time unavailable",
     );
-    if (stateValue === "retracted") {
+    appendFixMetadata(
+      metadata,
+      "Latest matching evidence",
+      formatFullDate(parseDate(annotation.last_recurrence_observed_at)) ||
+        "No matching-evidence time available",
+    );
+    appendFixMetadata(
+      metadata,
+      "Anchor evidence",
+      fixEvidenceStatusExplanation(evidenceStatus),
+    );
+    appendOptionalFixCount(
+      metadata,
+      "Matching observations",
+      annotation.fix_recurrence_count,
+      annotation.count_is_lower_bound === true,
+    );
+    appendOptionalFixCount(
+      metadata,
+      "Original session",
+      annotation.same_anchor_session_observation_count,
+      false,
+    );
+    appendOptionalFixCount(
+      metadata,
+      "Other sessions",
+      annotation.other_session_observation_count,
+      false,
+    );
+    appendMonitoringCoverage(metadata, annotation.coverage);
+    appendRecurrenceEvidence(metadata, annotation.recurrence_evidence);
+    if (annotationState === "retracted") {
       appendFixMetadata(
         metadata,
         "Retraction",
@@ -1675,9 +2665,95 @@
         }`,
       );
     }
-    row.append(header, description, metadata);
-    if (stateValue === "active" && annotationID) {
-      const actions = createElement("div", "fix-history-actions");
+    row.append(
+      header,
+      createElement("p", "fix-history-description", category.description),
+      status,
+      metadata,
+    );
+    if (
+      toOptionalCount(annotation.same_anchor_session_observation_count) > 0
+    ) {
+      row.append(
+        createElement(
+          "p",
+          "fix-monitoring-caveat",
+          "This may be continuation within the original session.",
+        ),
+      );
+    }
+    if (
+      monitoringState === "matching_evidence_observed" &&
+      annotation.analysis_complete === false
+    ) {
+      row.append(
+        createElement(
+          "p",
+          "fix-monitoring-caveat",
+          "The matching-evidence count is a lower bound because monitoring coverage is incomplete.",
+        ),
+      );
+    }
+    if (
+      annotationState === "active" &&
+      annotation.future_comparison_available === false
+    ) {
+      row.append(
+        createElement(
+          "p",
+          "fix-monitoring-caveat",
+          futureComparisonUnavailableText(
+            annotation.future_comparison_unavailable_reason,
+          ),
+        ),
+      );
+    }
+    if (
+      annotationState === "retracted" &&
+      toOptionalCount(annotation.historical_matching_evidence_count) > 0
+    ) {
+      row.append(
+        createElement(
+          "p",
+          "fix-monitoring-caveat",
+          "Matching evidence was recorded before this declaration was retracted.",
+        ),
+      );
+    }
+    const actions = createElement("div", "fix-history-actions");
+    const observationCount = toOptionalCount(
+      annotation.fix_recurrence_count,
+    );
+    const observationCursor = readCursor(annotation.observation_view_cursor);
+    if (
+      observationCount !== null &&
+      observationCount > 0 &&
+      observationCursor &&
+      annotationID
+    ) {
+      const observations = createElement(
+        "button",
+        "secondary-button",
+        "Show observations",
+      );
+      observations.type = "button";
+      observations.setAttribute(
+        "aria-expanded",
+        String(Boolean(fixObservationPages.get(annotationID)?.expanded)),
+      );
+      observations.textContent = fixObservationPages.get(annotationID)?.expanded
+        ? "Hide observations"
+        : "Show observations";
+      observations.addEventListener("click", () => {
+        toggleFixRecurrenceObservations(annotation, observations, row);
+      });
+      actions.append(observations);
+    }
+    if (
+      annotationState === "active" &&
+      monitoringState !== "unknown" &&
+      annotationID
+    ) {
       const retract = createElement(
         "button",
         "secondary-button",
@@ -1689,16 +2765,17 @@
       });
       focusRegistry.fixRetractionTriggers.set(annotationID, retract);
       actions.append(retract);
-      row.append(actions);
-    } else if (stateValue === "retracted") {
+    }
+    if (actions.childElementCount) row.append(actions);
+    if (annotationState === "retracted") {
       row.append(
         createElement(
           "p",
           "fix-retraction-note",
-          "Preserved in history and excluded from future recurrence monitoring. Recurrence monitoring is not yet available.",
+          "Preserved in history and excluded from active monitoring.",
         ),
       );
-    } else {
+    } else if (annotationState === "unknown") {
       row.append(
         createElement(
           "p",
@@ -1707,7 +2784,477 @@
         ),
       );
     }
+    renderFixObservationSection(annotation, row);
     return row;
+  }
+
+  function appendOptionalFixCount(list, label, value, lowerBound) {
+    const count = toOptionalCount(value);
+    appendFixMetadata(
+      list,
+      label,
+      count === null
+        ? "Unavailable"
+        : `${lowerBound ? "At least " : ""}${formatNumber(count)}`,
+    );
+  }
+
+  function appendMonitoringCoverage(list, value) {
+    if (!isRecord(value)) {
+      appendFixMetadata(list, "Monitoring coverage", "Unavailable");
+      return;
+    }
+    const counts = [
+      ["current", toOptionalCount(value.comparable_current)],
+      ["pending", toOptionalCount(value.comparable_pending)],
+      ["failed", toOptionalCount(value.comparable_failed)],
+      ["partial", toOptionalCount(value.comparable_truncated)],
+    ];
+    if (counts.some((entry) => entry[1] === null)) {
+      appendFixMetadata(list, "Monitoring coverage", "Unavailable");
+      return;
+    }
+    appendFixMetadata(
+      list,
+      "Monitoring coverage",
+      counts
+        .map(([label, count]) => `${formatNumber(count)} ${label}`)
+        .join(" · "),
+    );
+    appendFixMetadata(
+      list,
+      "Analysis through",
+      formatFullDate(parseDate(value.analysis_through)) ||
+        "Comparable analysis time unavailable",
+    );
+  }
+
+  function appendRecurrenceEvidence(list, value) {
+    if (!isRecord(value)) {
+      appendFixMetadata(list, "Observation evidence", "Unavailable");
+      return;
+    }
+    const counts = [
+      ["retained", toOptionalCount(value.available)],
+      ["partial", toOptionalCount(value.partial)],
+      ["pruned", toOptionalCount(value.pruned)],
+      ["unknown", toOptionalCount(value.unknown)],
+    ];
+    if (counts.some((entry) => entry[1] === null)) {
+      appendFixMetadata(list, "Observation evidence", "Unavailable");
+      return;
+    }
+    appendFixMetadata(
+      list,
+      "Observation evidence",
+      counts
+        .map(([label, count]) => `${formatNumber(count)} ${label}`)
+        .join(" · "),
+    );
+  }
+
+  function toggleFixRecurrenceObservations(annotation, button) {
+    const annotationID = readText(annotation.annotation_id);
+    if (!annotationID) return;
+    const page = getFixObservationPage(annotationID);
+    if (page.expanded) {
+      page.expanded = false;
+      renderFixHistory();
+      restoreLogicalFocus(
+        { type: "fix-history", annotationID },
+        button,
+      );
+      return;
+    }
+    page.expanded = true;
+    if (page.status === "idle") {
+      void loadFixRecurrences(annotation, false);
+    } else {
+      renderFixHistory();
+    }
+  }
+
+  function getFixObservationPage(annotationID) {
+    let page = fixObservationPages.get(annotationID);
+    if (!page) {
+      page = {
+        data: [],
+        nextCursor: "",
+        hasMore: false,
+        status: "idle",
+        error: "",
+        expired: false,
+        expanded: false,
+        requestGeneration: 0,
+      };
+      fixObservationPages.set(annotationID, page);
+    }
+    return page;
+  }
+
+  async function loadFixRecurrences(annotation, append) {
+    const issueID = state.selectedIssueID;
+    const annotationID = readText(annotation.annotation_id);
+    const viewCursor = readCursor(annotation.observation_view_cursor);
+    if (!issueID || !annotationID) return false;
+    const pageState = getFixObservationPage(annotationID);
+    if (
+      append &&
+      (!pageState.hasMore || !pageState.nextCursor)
+    ) {
+      return false;
+    }
+    const generation = ++pageState.requestGeneration;
+    pageState.status = append ? "loading-more" : "loading";
+    pageState.error = "";
+    pageState.expired = false;
+    renderFixHistory();
+    const parameters = new URLSearchParams();
+    if (append) {
+      parameters.set("cursor", pageState.nextCursor);
+    } else {
+      if (!viewCursor) {
+        pageState.status = "error";
+        pageState.error =
+          "Observation history is unavailable for this attempt snapshot.";
+        renderFixHistory();
+        return false;
+      }
+      parameters.set("observation_view_cursor", viewCursor);
+      parameters.set("limit", String(pageLimits.fixRecurrences.page));
+    }
+    try {
+      const response = await apiGet(
+        `/v1/issues/${encodeURIComponent(issueID)}/fixes/${encodeURIComponent(annotationID)}/recurrences?${parameters.toString()}`,
+      );
+      requireFixMonitoringSchema(response);
+      if (
+        generation !== pageState.requestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      if (
+        readText(response.issue_id) !== issueID ||
+        readText(response.annotation_id) !== annotationID
+      ) {
+        throw new Error("Local API returned mismatched observation history.");
+      }
+      const rows = Array.isArray(response.data)
+        ? response.data.filter(
+            (entry) =>
+              isRecord(entry) &&
+              readText(entry.recurrence_id) &&
+              readText(entry.session_id),
+          )
+        : [];
+      pageState.data =
+        append && pageState.nextCursor
+          ? deduplicateByID(
+              pageState.data.concat(rows),
+              "recurrence_id",
+            )
+          : deduplicateByID(rows, "recurrence_id");
+      pageState.nextCursor = readCursor(response.next_cursor);
+      if (response.has_more === true && !pageState.nextCursor) {
+        throw new Error(
+          "Local API returned observation pagination without a cursor.",
+        );
+      }
+      pageState.hasMore = Boolean(pageState.nextCursor);
+      pageState.status = "ready";
+      pageState.error = "";
+      pageState.expired = false;
+      renderFixHistory();
+      return true;
+    } catch (error) {
+      if (
+        generation !== pageState.requestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      pageState.status = "error";
+      pageState.expired = isCursorExpired(error);
+      pageState.error = pageState.expired
+        ? "This observation view expired. Reload attempt monitoring to inspect current retained evidence."
+        : "Observation history could not be loaded. Attempt monitoring remains available.";
+      renderFixHistory();
+      return false;
+    }
+  }
+
+  function renderFixObservationSection(annotation, row) {
+    const annotationID = readText(annotation.annotation_id);
+    const page = fixObservationPages.get(annotationID);
+    if (!page || !page.expanded) return;
+    const section = createElement("section", "fix-observation-section");
+    section.setAttribute("aria-label", "Matching observations");
+    if (page.status === "loading" && !page.data.length) {
+      section.append(
+        createElement("p", "overview-empty", "Loading observations…"),
+      );
+    }
+    if (page.error) {
+      const error = createElement(
+        "p",
+        "monitoring-status",
+        page.error,
+      );
+      error.dataset.tone = "error";
+      error.setAttribute("role", "status");
+      section.append(error);
+      const retry = createElement(
+        "button",
+        "secondary-button",
+        page.expired
+          ? "Reload attempt monitoring"
+          : "Retry observations",
+      );
+      retry.type = "button";
+      retry.addEventListener("click", () => {
+        if (page.expired) {
+          fixObservationPages.delete(annotationID);
+          void loadFixMonitoringDetail(
+            state.selectedIssueID,
+            false,
+            "",
+            true,
+            annotationID,
+          );
+          return;
+        }
+        void loadFixRecurrences(annotation, false);
+      });
+      section.append(retry);
+    }
+    page.data.forEach((observation) => {
+      section.append(createFixObservationRow(observation));
+    });
+    if (page.status === "ready" && !page.data.length) {
+      section.append(
+        createElement(
+          "p",
+          "overview-empty",
+          "No bounded observation rows were returned for this attempt snapshot.",
+        ),
+      );
+    }
+    if (page.hasMore) {
+      const more = createElement(
+        "button",
+        "secondary-button",
+        "Load more observations",
+      );
+      more.type = "button";
+      more.disabled = page.status === "loading-more";
+      more.addEventListener("click", () => {
+        void loadFixRecurrences(annotation, true);
+      });
+      section.append(more);
+    }
+    row.append(section);
+  }
+
+  function createFixObservationRow(observation) {
+    const recurrenceID = readText(observation.recurrence_id);
+    const sessionID = readText(observation.session_id);
+    const article = createElement("article", "fix-observation-card");
+    article.tabIndex = -1;
+    if (recurrenceID) {
+      focusRegistry.fixObservationRows.set(recurrenceID, article);
+    }
+    const header = createElement("div", "fix-observation-header");
+    header.append(
+      createElement("strong", "", "Exact matching observation"),
+      createElement(
+        "span",
+        "fix-evidence-badge",
+        fixEvidenceStatusLabel(
+          normalizeFixEvidenceStatus(
+            observation.evidence_currently_retained,
+          ),
+        ),
+      ),
+    );
+    const metadata = createElement("dl", "fix-history-metadata");
+    appendFixMetadata(
+      metadata,
+      "First matching evidence",
+      formatFullDate(parseDate(observation.first_qualifying_event_at)) ||
+        "Time unavailable",
+    );
+    appendFixMetadata(
+      metadata,
+      "Last matching evidence",
+      formatFullDate(parseDate(observation.last_qualifying_event_at)) ||
+        "Time unavailable",
+    );
+    appendFixMetadata(
+      metadata,
+      "Session",
+      compactID(sessionID) || "Unavailable",
+    );
+    appendFixMetadata(
+      metadata,
+      "Detector",
+      detectorVersionLabel(observation),
+    );
+    appendFixMetadata(
+      metadata,
+      "Detection evidence",
+      evidenceCompletenessLabel(observation.evidence_complete),
+    );
+    appendFixMetadata(
+      metadata,
+      "Observation recorded",
+      formatFullDate(parseDate(observation.observed_at)) ||
+        "Time unavailable",
+    );
+    appendObservationEvidenceMetadata(metadata, observation);
+    article.append(header, metadata);
+    if (observation.same_session_as_anchor === true) {
+      article.append(
+        createElement(
+          "p",
+          "fix-monitoring-caveat",
+          "This may be continuation within the original session.",
+        ),
+      );
+    }
+    const retainedEventIDs = recurrenceEventIDs(observation);
+    if (sessionID) {
+      const actions = createElement("div", "fix-history-actions");
+      let evidence = null;
+      if (retainedEventIDs.length) {
+        const inspect = createElement(
+          "button",
+          "secondary-button",
+          "Inspect retained evidence",
+        );
+        inspect.type = "button";
+        inspect.setAttribute("aria-expanded", "false");
+        evidence = createElement("div", "occurrence-evidence");
+        evidence.hidden = true;
+        inspect.addEventListener("click", () => {
+          void loadRecurrenceEvidence(
+            sessionID,
+            retainedEventIDs,
+            evidence,
+            inspect,
+          );
+        });
+        actions.append(inspect);
+      }
+      const open = createElement(
+        "button",
+        "primary-button",
+        "Open full session",
+      );
+      open.type = "button";
+      if (recurrenceID) {
+        focusRegistry.fixObservationRows.set(recurrenceID, open);
+      }
+      open.addEventListener("click", () => {
+        state.sessionReturnFocus = {
+          type: "fix-observation",
+          recurrenceID,
+        };
+        state.sessionReturnView = "attention";
+        openSession(sessionID, null);
+      });
+      actions.append(open);
+      article.append(actions);
+      if (evidence) article.append(evidence);
+    }
+    return article;
+  }
+
+  function appendObservationEvidenceMetadata(metadata, observation) {
+    const status = normalizeFixEvidenceStatus(
+      observation.evidence_currently_retained,
+    );
+    if (status === "unknown") {
+      appendFixMetadata(
+        metadata,
+        "Evidence retention",
+        "Evidence status unknown; retained and missing counts are unavailable.",
+      );
+      return;
+    }
+    const retained = toOptionalCount(observation.retained_event_count);
+    const missing = toOptionalCount(observation.missing_event_count);
+    const total = toOptionalCount(observation.qualifying_citation_count);
+    const truncation =
+      observation.evidence_truncated === true
+        ? " · returned IDs are truncated to 50"
+        : "";
+    appendFixMetadata(
+      metadata,
+      "Evidence retention",
+      retained === null || missing === null || total === null
+        ? fixEvidenceStatusLabel(status)
+        : `${formatNumber(retained)} retained · ${formatNumber(
+            missing,
+          )} missing · ${formatNumber(total)} cited${truncation}`,
+    );
+  }
+
+  function recurrenceEventIDs(observation) {
+    if (
+      normalizeFixEvidenceStatus(
+        observation.evidence_currently_retained,
+      ) === "unknown"
+    ) {
+      return [];
+    }
+    const values = Array.isArray(observation.retained_event_ids)
+      ? observation.retained_event_ids
+      : [];
+    return values
+      .map(readText)
+      .filter((value) => canonicalUUIDv7Pattern.test(value))
+      .slice(0, 50);
+  }
+
+  async function loadRecurrenceEvidence(
+    sessionID,
+    eventIDs,
+    container,
+    button,
+  ) {
+    if (container.dataset.loaded === "true") {
+      container.hidden = !container.hidden;
+      button.setAttribute("aria-expanded", String(!container.hidden));
+      return;
+    }
+    container.hidden = false;
+    button.disabled = true;
+    button.setAttribute("aria-expanded", "true");
+    container.replaceChildren(
+      createElement("p", "overview-empty", "Loading retained cited events…"),
+    );
+    const parameters = new URLSearchParams();
+    eventIDs.slice(0, 50).forEach((eventID) => {
+      parameters.append("event_id", eventID);
+    });
+    try {
+      const response = await apiGet(
+        `/v1/sessions/${encodeURIComponent(sessionID)}/events/lookup?${parameters.toString()}`,
+      );
+      renderOccurrenceEvidence(container, response, eventIDs.length);
+      container.dataset.loaded = "true";
+    } catch {
+      container.replaceChildren(
+        createElement(
+          "p",
+          "overview-empty",
+          "Retained cited events could not be loaded. The observation remains recorded.",
+        ),
+      );
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function appendFixMetadata(list, label, value) {
@@ -1737,11 +3284,44 @@
       : "unknown";
   }
 
+  function normalizeFixRecurrenceState(value) {
+    const recurrenceState = readText(value);
+    return Object.prototype.hasOwnProperty.call(
+      fixMonitoringCatalog,
+      recurrenceState,
+    )
+      ? recurrenceState
+      : "unknown";
+  }
+
+  function fixMonitoringStateEntry(value) {
+    return fixMonitoringCatalog[normalizeFixRecurrenceState(value)];
+  }
+
   function normalizeFixEvidenceStatus(value) {
     const status = readText(value);
     return ["available", "partial", "pruned", "unknown"].includes(status)
       ? status
       : "unknown";
+  }
+
+  function futureComparisonUnavailableText(value) {
+    const messages = {
+      scope_unavailable:
+        "Future comparison is unavailable because an exact private scope was not retained.",
+      source_positive_only:
+        "Future comparison can report later positive matches, but this source cannot support a no-match conclusion.",
+      capability_unavailable:
+        "Future comparison capability is unavailable for this detector snapshot.",
+      baseline_time_unavailable:
+        "Future comparison is unavailable because the exact baseline time was not retained.",
+      fingerprint_version_unsupported:
+        "Future comparison is unavailable for this fingerprint version.",
+    };
+    return (
+      messages[readText(value)] ||
+      "Future comparison capability is unavailable for this attempt."
+    );
   }
 
   function fixEvidenceStatusLabel(status) {
@@ -2032,7 +3612,7 @@
       draft.pending = false;
       state.modalSubmitting = false;
       closeFixAttemptDialog(false);
-      await reloadFixHistoryAndFocus(issueID, annotationID);
+      await reloadFixMonitoringAndFocus(issueID, annotationID);
     } catch (error) {
       draft.pending = false;
       state.modalSubmitting = false;
@@ -2068,7 +3648,10 @@
     if (
       !state.selectedIssueID ||
       !annotationID ||
-      normalizeFixAnnotationState(annotation && annotation.state) !== "active"
+      normalizeFixAnnotationState(annotation && annotation.state) !== "active" ||
+      normalizeFixRecurrenceState(
+        annotation && annotation.fix_recurrence_state,
+      ) === "unknown"
     ) {
       return;
     }
@@ -2266,7 +3849,7 @@
       draft.pending = false;
       state.modalSubmitting = false;
       closeFixRetractionDialog(false);
-      await reloadFixHistoryAndFocus(issueID, annotationID);
+      await reloadFixMonitoringAndFocus(issueID, annotationID);
     } catch (error) {
       draft.pending = false;
       state.modalSubmitting = false;
@@ -2279,8 +3862,16 @@
     }
   }
 
-  async function reloadFixHistoryAndFocus(issueID, annotationID) {
-    const loaded = await loadFixHistory(issueID, false);
+  async function reloadFixMonitoringAndFocus(issueID, annotationID) {
+    invalidateFixMonitoringSnapshotsAfterMutation();
+    void loadFixMonitoring(false);
+    const loaded = await loadFixMonitoringDetail(
+      issueID,
+      false,
+      "",
+      true,
+      annotationID,
+    );
     if (
       !loaded ||
       issueID !== state.selectedIssueID ||
@@ -2288,6 +3879,34 @@
     ) {
       focusCurrentElement(elements.fixActionStatus);
     }
+  }
+
+  function invalidateFixMonitoringSnapshotsAfterMutation() {
+    state.fixMonitoring.requestGeneration += 1;
+    state.fixMonitoring.data = [];
+    state.fixMonitoring.nextCursor = "";
+    state.fixMonitoring.hasMore = false;
+    state.fixMonitoring.viewCursor = "";
+    state.fixMonitoring.evidenceEvaluatedAt = "";
+    state.fixMonitoring.status = "idle";
+    state.fixMonitoring.error = null;
+    focusRegistry.monitoringCards.clear();
+
+    state.fixHistoryRequestGeneration += 1;
+    state.fixHistoryNextCursor = "";
+    state.fixHistoryHasMore = false;
+    state.fixHistoryViewCursor = "";
+    state.fixHistory = state.fixHistory.map((annotation) => ({
+      ...annotation,
+      observation_view_cursor: "",
+    }));
+    fixObservationPages.forEach((page) => {
+      page.requestGeneration += 1;
+    });
+    fixObservationPages.clear();
+    focusRegistry.fixObservationRows.clear();
+    renderFixMonitoring();
+    renderFixAttempts();
   }
 
   function fixMutationErrorMessage(error, action) {
@@ -2325,6 +3944,17 @@
   function requireFixSchema(response) {
     if (!isRecord(response) || response.schema_version !== "belay.fix.v1") {
       throw new Error("Local API returned an unsupported fix schema.");
+    }
+  }
+
+  function requireFixMonitoringSchema(response) {
+    if (
+      !isRecord(response) ||
+      response.schema_version !== "belay.fix-monitoring.v1"
+    ) {
+      throw new Error(
+        "Local API returned an unsupported fix-monitoring schema.",
+      );
     }
   }
 
@@ -2611,6 +4241,8 @@
     closeFixRetractionDialog(false);
     state.selectedIssueID = "";
     state.selectedIssueKind = "";
+    state.selectedIssueSource = "";
+    state.selectedDrivingAnnotationID = "";
     state.selectedIssue = null;
     state.occurrences = [];
     state.occurrenceNextCursor = "";
@@ -2623,6 +4255,7 @@
     elements.attentionWelcome.hidden = false;
     renderIssueBucket(state.issues);
     renderIssueBucket(state.evidenceGaps);
+    renderFixMonitoring();
     applyPaneAccessibility();
     if (restoreFocus) {
       restoreLogicalFocus(returnFocus, elements.navAttention);
@@ -4306,6 +5939,19 @@
   function toFiniteNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 ? number : 0;
+  }
+
+  function toOptionalCount(value) {
+    if (
+      value === null ||
+      value === undefined ||
+      value === "" ||
+      typeof value === "boolean"
+    ) {
+      return null;
+    }
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 ? number : null;
   }
 
   function deduplicateByID(values, key) {

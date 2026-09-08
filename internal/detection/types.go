@@ -86,11 +86,25 @@ type Match struct {
 	Fingerprint         []FingerprintDimension `json:"fingerprint_dimensions"`
 }
 
+type AbsenceCapability string
+
+const (
+	AbsenceSupported     AbsenceCapability = "supported"
+	AbsenceNotApplicable AbsenceCapability = "not_applicable"
+	AbsenceIncomplete    AbsenceCapability = "incomplete"
+)
+
+type DetectorResult struct {
+	Matches           []Match           `json:"matches"`
+	AbsenceCapability AbsenceCapability `json:"absence_capability"`
+	UnavailableReason string            `json:"unavailable_reason,omitempty"`
+}
+
 type Detector interface {
 	ID() string
 	Version() string
 	FingerprintVersion() string
-	Evaluate(context.Context, SessionInput) ([]Match, error)
+	Evaluate(context.Context, SessionInput) (DetectorResult, error)
 }
 
 type DetectorFailure struct {
@@ -99,10 +113,19 @@ type DetectorFailure struct {
 }
 
 type CatalogResult struct {
-	CatalogVersion string            `json:"catalog_version"`
-	Status         AnalysisStatus    `json:"status"`
-	Matches        []Match           `json:"matches"`
-	Failures       []DetectorFailure `json:"failures"`
+	CatalogVersion string                  `json:"catalog_version"`
+	Status         AnalysisStatus          `json:"status"`
+	Matches        []Match                 `json:"matches"`
+	Failures       []DetectorFailure       `json:"failures"`
+	Applicability  []DetectorApplicability `json:"applicability"`
+}
+
+type DetectorApplicability struct {
+	DetectorID         string            `json:"detector_id"`
+	DetectorVersion    string            `json:"detector_version"`
+	FingerprintVersion string            `json:"fingerprint_version"`
+	AbsenceCapability  AbsenceCapability `json:"absence_capability"`
+	UnavailableReason  string            `json:"unavailable_reason,omitempty"`
 }
 
 type CatalogEntry struct {

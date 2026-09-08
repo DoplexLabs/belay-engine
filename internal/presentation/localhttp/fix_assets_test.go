@@ -33,9 +33,13 @@ func TestFixBrowserShellAndDisclosureContract(t *testing.T) {
 		}
 	}
 
-	const disclosure = "This version records attempts only; recurrence monitoring is"
-	if got := strings.Count(index, disclosure); got < 2 {
-		t.Errorf("P0-04 disclosure appears %d times; want it in detail and dialog", got)
+	for _, disclosure := range []string{
+		"Belay compares later retained Local analysis using exact",
+		"Belay may monitor later exact matching evidence locally.",
+	} {
+		if !strings.Contains(index, disclosure) {
+			t.Errorf("P0-04 disclosure is missing %q", disclosure)
+		}
 	}
 	if strings.Index(index, `id="fix-attempts-heading"`) >
 		strings.Index(index, `id="matching-sessions-heading"`) {
@@ -92,9 +96,9 @@ func TestFixBrowserFrozenHTTPAndCatalogContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		`fixHistory: { page: 20 }`,
+		`fixMonitoringDetail: { page: 20 }`,
 		"`/v1/issues/${encodeURIComponent(issueID)}/fix-eligibility?${parameters.toString()}`",
-		"`/v1/issues/${encodeURIComponent(issueID)}/fixes?${parameters.toString()}`",
+		"`/v1/issues/${encodeURIComponent(issueID)}/fix-monitoring?${parameters.toString()}`",
 		"`/v1/issues/${encodeURIComponent(issueID)}/fixes`",
 		"`/v1/issues/${encodeURIComponent(issueID)}/fixes/${encodeURIComponent(annotationID)}/retractions`",
 		`headers["Content-Type"] = "application/json";`,
@@ -148,7 +152,7 @@ func TestFixBrowserMutationDeadlineAndRetryStateContract(t *testing.T) {
 		t,
 		app,
 		"  async function submitFixRetraction() {",
-		"  async function reloadFixHistoryAndFocus(",
+		"  async function reloadFixMonitoringAndFocus(",
 	)
 
 	if !strings.Contains(app, `const mutationRequestDeadlineMilliseconds = 15_000;`) {
@@ -286,7 +290,7 @@ func TestFixBrowserHistoryRetractionAndTruthfulWording(t *testing.T) {
 		`Active declaration`,
 		`Declaration state unavailable`,
 		`Declaration state is unavailable. Retraction is disabled until Local reports an exact active state.`,
-		`Preserved in history and excluded from future recurrence monitoring.`,
+		`Preserved in history and excluded from active monitoring.`,
 		`openFixRetractionDialog(annotationID);`,
 	} {
 		if !strings.Contains(history, required) {
@@ -348,9 +352,9 @@ func TestFixBrowserUnknownAnnotationStateIsNeutralAndNotRetractable(t *testing.T
 		}
 	}
 	for _, required := range []string{
-		`stateValue === "active" && annotationID`,
+		`annotationState === "active"`,
 		`"Declaration state unavailable"`,
-		`stateBadge.dataset.tone = stateValue;`,
+		`stateBadge.dataset.tone = annotationState;`,
 		`Retraction is disabled until Local reports an exact active state.`,
 	} {
 		if !strings.Contains(historyRow, required) {

@@ -12,25 +12,35 @@ const builtinVersion = "1.0.0"
 type builtinDetector struct {
 	entry    CatalogEntry
 	evaluate func(context.Context, preparedSession) ([]Match, error)
+	absence  func(preparedSession) (AbsenceCapability, string)
 }
 
 func (d builtinDetector) ID() string                 { return d.entry.DetectorID }
 func (d builtinDetector) Version() string            { return d.entry.DetectorVersion }
 func (d builtinDetector) FingerprintVersion() string { return d.entry.FingerprintVersion }
 
-func (d builtinDetector) Evaluate(ctx context.Context, input SessionInput) ([]Match, error) {
+func (d builtinDetector) Evaluate(ctx context.Context, input SessionInput) (DetectorResult, error) {
 	session, err := prepareSession(ctx, input)
 	if err != nil {
-		return nil, err
+		return DetectorResult{}, err
 	}
-	return d.evaluate(ctx, session)
+	return d.evaluatePrepared(ctx, session)
 }
 
 func (d builtinDetector) evaluatePrepared(
 	ctx context.Context,
 	session preparedSession,
-) ([]Match, error) {
-	return d.evaluate(ctx, session)
+) (DetectorResult, error) {
+	matches, err := d.evaluate(ctx, session)
+	if err != nil {
+		return DetectorResult{}, err
+	}
+	capability, reason := d.absence(session)
+	return DetectorResult{
+		Matches:           matches,
+		AbsenceCapability: capability,
+		UnavailableReason: reason,
+	}, nil
 }
 
 func BuiltinDetectors() []Detector {
@@ -42,6 +52,7 @@ func BuiltinDetectors() []Detector {
 			"inspect_command_failure",
 			false,
 			detectExplicitCommandFailures,
+			commandAbsenceCapability,
 		),
 		newBuiltin(
 			"repeated_command_attempts",
@@ -50,6 +61,7 @@ func BuiltinDetectors() []Detector {
 			"inspect_repeated_attempts",
 			true,
 			detectRepeatedCommandAttempts,
+			notApplicableAbsence,
 		),
 		newBuiltin(
 			"explicit_permission_denial",
@@ -58,6 +70,7 @@ func BuiltinDetectors() []Detector {
 			"review_permission_boundary",
 			false,
 			detectPermissionDenials,
+			permissionAbsenceCapability,
 		),
 		newBuiltin(
 			"verification_not_observed",
@@ -66,6 +79,7 @@ func BuiltinDetectors() []Detector {
 			"add_verification",
 			false,
 			detectVerificationGap,
+			verificationGapAbsenceCapability,
 		),
 		newBuiltin(
 			"unresolved_verification_failure_at_completion",
@@ -74,6 +88,7 @@ func BuiltinDetectors() []Detector {
 			"rerun_verification",
 			false,
 			detectUnresolvedVerification,
+			unresolvedVerificationAbsenceCapability,
 		),
 	}
 }
@@ -85,6 +100,7 @@ func newBuiltin(
 	action string,
 	experimental bool,
 	evaluate func(context.Context, preparedSession) ([]Match, error),
+	absence func(preparedSession) (AbsenceCapability, string),
 ) builtinDetector {
 	return builtinDetector{
 		entry: CatalogEntry{
@@ -97,7 +113,60 @@ func newBuiltin(
 			Experimental:        experimental,
 		},
 		evaluate: evaluate,
+		absence:  absence,
 	}
+}
+
+func notApplicableAbsence(preparedSession) (AbsenceCapability, string) {
+	return AbsenceNotApplicable, "experimental_detector"
+}
+
+func commandAbsenceCapability(session preparedSession) (AbsenceCapability, string) {
+	for _, item := range session.events {
+		if item.historical {
+			continue
+		}
+		if (item.event.Observation.Type == "command.exec" ||
+			item.event.Observation.Type == "command.result") &&
+			item.event.Source.Kind == "hook" &&
+			item.event.Coverage.Depth == "tool_call" {
+			return AbsenceSupported, ""
+		}
+	}
+	return AbsenceNotApplicable, "command_coverage_unavailable"
+}
+
+func permissionAbsenceCapability(session preparedSession) (AbsenceCapability, string) {
+	for _, item := range session.events {
+		if !item.historical &&
+			item.event.Source.Kind == "hook" &&
+			(item.event.Source.Agent == "codex" ||
+				item.event.Source.Agent == "claude-code") {
+			return AbsenceSupported, ""
+		}
+	}
+	return AbsenceNotApplicable, "permission_coverage_unavailable"
+}
+
+func verificationGapAbsenceCapability(session preparedSession) (AbsenceCapability, string) {
+	if d4Compatible(session) {
+		return AbsenceSupported, ""
+	}
+	return AbsenceNotApplicable, "verification_coverage_unavailable"
+}
+
+func unresolvedVerificationAbsenceCapability(
+	session preparedSession,
+) (AbsenceCapability, string) {
+	for _, item := range session.events {
+		if !item.historical &&
+			item.event.Observation.Type == "session.end" &&
+			item.event.Source.Kind == "hook" &&
+			item.event.Coverage.Depth == "lifecycle" {
+			return AbsenceSupported, ""
+		}
+	}
+	return AbsenceIncomplete, "session_completion_unavailable"
 }
 
 func detectExplicitCommandFailures(

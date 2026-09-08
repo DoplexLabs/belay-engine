@@ -117,7 +117,7 @@
                   </select>
                 </label>
                 <label>
-                  <span>Recurrence</span>
+                  <span>Session spread</span>
                   <select id="issue-filter-recurrence">
                     <option value="">Single + repeated</option>
                     <option value="repeated">Exact matches</option>
@@ -196,6 +196,150 @@
             </div>
 
             <div class="attention-scroll">
+              <section
+                class="attention-section monitoring-section"
+                id="fix-monitoring-section"
+                aria-labelledby="fix-monitoring-heading"
+              >
+                <div class="attention-section-heading">
+                  <div>
+                    <p class="eyebrow">Post-attempt evidence</p>
+                    <h2 id="fix-monitoring-heading">After attempts</h2>
+                  </div>
+                  <span class="count-pill" id="fix-monitoring-count">—</span>
+                </div>
+                <p class="section-disclosure">
+                  Exact matching evidence is monitored locally after recorded
+                  attempts. It does not establish causality or whether an
+                  attempted change worked.
+                </p>
+                <form
+                  class="monitoring-filters"
+                  id="fix-monitoring-filters"
+                >
+                  <label>
+                    <span>Monitoring state</span>
+                    <select id="fix-monitoring-filter-state">
+                      <option value="">All active states</option>
+                      <option value="matching_evidence_observed">Matching evidence observed</option>
+                      <option value="monitoring_incomplete">Monitoring incomplete</option>
+                      <option value="awaiting_later_evidence">Awaiting later evidence</option>
+                      <option value="no_later_match_observed">No later exact match observed</option>
+                      <option value="comparison_unavailable">Comparison unavailable</option>
+                      <option value="retracted">Retracted</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Change category</span>
+                    <select id="fix-monitoring-filter-change-kind">
+                      <option value="">All categories</option>
+                      <option value="code_change">Code change</option>
+                      <option value="configuration_change">Configuration change</option>
+                      <option value="dependency_change">Dependency change</option>
+                      <option value="permission_change">Permission change</option>
+                      <option value="environment_change">Environment change</option>
+                      <option value="agent_instruction">Agent instruction</option>
+                      <option value="project_rule">Project rule</option>
+                      <option value="monitor_hook">Monitor hook</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Severity</span>
+                    <select id="fix-monitoring-filter-severity">
+                      <option value="">All severities</option>
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                      <option value="info">Info</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Harness</span>
+                    <input
+                      id="fix-monitoring-filter-harness"
+                      type="text"
+                      maxlength="128"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Exact harness"
+                    >
+                  </label>
+                  <label>
+                    <span>Issue ID</span>
+                    <input
+                      id="fix-monitoring-filter-issue-id"
+                      type="text"
+                      maxlength="128"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Exact iss_… ID"
+                    >
+                  </label>
+                  <label>
+                    <span>Recorded after</span>
+                    <input
+                      id="fix-monitoring-filter-recorded-after"
+                      type="datetime-local"
+                    >
+                  </label>
+                  <label class="monitoring-checkbox">
+                    <input
+                      id="fix-monitoring-filter-retracted"
+                      type="checkbox"
+                    >
+                    <span>Include retracted</span>
+                  </label>
+                  <div class="filter-footer monitoring-filter-footer">
+                    <p id="fix-monitoring-filter-note">
+                      Showing active attempts.
+                    </p>
+                    <button id="clear-fix-monitoring-filters" type="button">
+                      Clear
+                    </button>
+                  </div>
+                </form>
+                <div
+                  class="monitoring-status"
+                  id="fix-monitoring-status"
+                  role="status"
+                  aria-live="polite"
+                  hidden
+                ></div>
+                <div
+                  class="issue-list monitoring-list"
+                  id="fix-monitoring-list"
+                  aria-live="polite"
+                ></div>
+                <div
+                  class="panel-state compact-state"
+                  id="fix-monitoring-loading"
+                >
+                  <span class="spinner" aria-hidden="true"></span>
+                  <p>Loading post-attempt monitoring…</p>
+                </div>
+                <div
+                  class="panel-state compact-state"
+                  id="fix-monitoring-empty"
+                  hidden
+                >
+                  <span class="empty-glyph" aria-hidden="true">◇</span>
+                  <p id="fix-monitoring-empty-title">No monitored attempts available</p>
+                  <small id="fix-monitoring-empty-detail"></small>
+                </div>
+                <div
+                  class="pagination-bar"
+                  id="fix-monitoring-pagination"
+                  hidden
+                >
+                  <p id="fix-monitoring-page-status"></p>
+                  <button id="fix-monitoring-load-more" type="button">
+                    Load more monitored issues
+                  </button>
+                </div>
+              </section>
+
               <section
                 class="attention-section"
                 aria-labelledby="stable-issues-heading"
@@ -312,7 +456,11 @@
               </header>
 
               <div class="issue-detail-scroll">
-                <section class="issue-explanation" aria-labelledby="why-heading">
+                <section
+                  class="issue-explanation"
+                  id="issue-explanation-section"
+                  aria-labelledby="why-heading"
+                >
                   <p class="analysis-qualifier" id="issue-analysis-qualifier"></p>
                   <h3 id="why-heading">Why this needs attention</h3>
                   <p id="issue-explanation"></p>
@@ -321,7 +469,11 @@
 
                 <dl class="issue-metadata" id="issue-metadata"></dl>
 
-                <section class="fingerprint-panel" aria-labelledby="fingerprint-heading">
+                <section
+                  class="fingerprint-panel"
+                  id="fingerprint-panel"
+                  aria-labelledby="fingerprint-heading"
+                >
                   <div>
                     <h3 id="fingerprint-heading">Opaque exact-match identifier</h3>
                     <code id="issue-fingerprint"></code>
@@ -348,9 +500,17 @@
                     </button>
                   </div>
                   <p class="fix-recurrence-disclosure">
-                    This version records attempts only; recurrence monitoring is
-                    not yet available.
+                    Belay compares later retained Local analysis using exact
+                    private fingerprints. It does not verify resolution or
+                    establish that an attempted change caused an outcome.
                   </p>
+                  <p
+                    class="monitoring-status"
+                    id="fix-monitoring-detail-status"
+                    role="status"
+                    aria-live="polite"
+                    hidden
+                  ></p>
                   <p
                     class="section-disclosure"
                     id="fix-eligibility-status"
@@ -378,7 +538,7 @@
                     hidden
                   >
                     <span class="spinner" aria-hidden="true"></span>
-                    <p>Loading fix-attempt history…</p>
+                    <p>Loading attempt monitoring…</p>
                   </div>
                   <div
                     class="panel-state compact-state"
@@ -409,6 +569,7 @@
 
                 <section
                   class="matching-section"
+                  id="matching-section"
                   aria-labelledby="matching-sessions-heading"
                 >
                   <div class="matching-heading">
@@ -736,8 +897,8 @@
             Belay cannot verify the change or its effect.
           </p>
           <p class="fix-recurrence-disclosure">
-            This version records attempts only; recurrence monitoring is not
-            yet available.
+            Belay may monitor later exact matching evidence locally. This does
+            not verify the attempted change or establish causality.
           </p>
           <div
             class="modal-alert"
@@ -816,8 +977,8 @@
         <div class="modal-scroll">
           <p id="fix-retraction-dialog-description">
             Retraction preserves the original declaration in history and
-            excludes it from future recurrence monitoring. Recurrence
-            monitoring is not yet available.
+            excludes it from active monitoring. Previously recorded matching
+            evidence remains visible.
           </p>
           <div
             class="modal-alert"

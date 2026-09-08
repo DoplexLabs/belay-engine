@@ -332,7 +332,7 @@ func (s *Store) QueryIssueOccurrences(
 			io.confidence, io.scope_quality, io.first_observed_at,
 			io.last_observed_at, io.evidence_complete, io.retained_history_only,
 			io.experimental, sar.status, io.analysis_generation, io.evidence_payload,
-			io.evidence_encoding
+			io.evidence_encoding, COALESCE(io.fingerprint_scope_id, '')
 		FROM issue_occurrences io
 		JOIN session_analysis_revisions sar ON sar.session_key = io.session_key
 		WHERE `+strings.Join(clauses, " AND ")+`
@@ -565,6 +565,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 		&result.AnalysisGeneration,
 		&evidence,
 		&encoding,
+		&result.FingerprintScopeID,
 	); err != nil {
 		return model.IssueOccurrence{}, err
 	}

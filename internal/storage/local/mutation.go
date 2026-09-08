@@ -17,6 +17,7 @@ const (
 	mutationPayloadUpgrade    mutationPurpose = "payload_upgrade"
 	mutationRetentionPrune    mutationPurpose = "retention_prune"
 	mutationProjectionRebuild mutationPurpose = "projection_rebuild"
+	mutationRecurrenceWorker  mutationPurpose = "recurrence_worker"
 	guardedSQLiteDriverName                   = "belay_local_sqlite"
 )
 
@@ -59,6 +60,15 @@ func initializeMutationConnection(
 	if fixReady {
 		if _, err := connection.ExecContext(ctx, fixMutationTriggerSQL, nil); err != nil {
 			return errors.New("install connection-local fix mutation guards")
+		}
+	}
+	recurrenceReady, err := recurrenceMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if recurrenceReady {
+		if _, err := connection.ExecContext(ctx, recurrenceMutationTriggerSQL, nil); err != nil {
+			return errors.New("install connection-local recurrence mutation guards")
 		}
 	}
 	return nil
@@ -128,6 +138,40 @@ func feature3MutationTablesReady(
 	return count == 2, nil
 }
 
+func recurrenceMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name IN (
+				'fix_monitoring_metadata',
+				'fix_monitoring_subjects',
+				'session_analysis_capabilities',
+				'fix_recurrence_jobs',
+				'fix_recurrence_job_events',
+				'fix_recurrence_observations',
+				'fix_recurrence_observation_events'
+			)`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect local recurrence mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect local recurrence mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect local recurrence mutation schema")
+	}
+	return count == 7, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -142,6 +186,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, fixMutationTriggerSQL); err != nil {
 		return errors.New("install connection-local fix mutation guards")
+	}
+	if _, err := connection.ExecContext(ctx, recurrenceMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local recurrence mutation guards")
 	}
 	return nil
 }
@@ -181,7 +228,8 @@ const mutationAuthorizationTableSQL = `
 				purpose IN (
 					'payload_upgrade',
 					'retention_prune',
-					'projection_rebuild'
+					'projection_rebuild',
+					'recurrence_worker'
 				)
 			)
 	) WITHOUT ROWID;
@@ -315,4 +363,107 @@ const fixMutationTriggerSQL = `
 	BEFORE DELETE ON main.fix_annotation_retractions
 	BEGIN
 		SELECT RAISE(ABORT, 'fix annotation retractions are append-only');
+	END;`
+
+const recurrenceMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_monitoring_subjects_update
+	BEFORE UPDATE ON main.fix_monitoring_subjects
+	BEGIN
+		SELECT RAISE(ABORT, 'fix monitoring subjects are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_monitoring_subjects_delete
+	BEFORE DELETE ON main.fix_monitoring_subjects
+	BEGIN
+		SELECT RAISE(ABORT, 'fix monitoring subjects are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_analysis_capabilities_update
+	BEFORE UPDATE ON main.session_analysis_capabilities
+	BEGIN
+		SELECT RAISE(ABORT, 'analysis capabilities are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_analysis_capabilities_delete
+	BEFORE DELETE ON main.session_analysis_capabilities
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'analysis capability mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_jobs_update
+	BEFORE UPDATE ON main.fix_recurrence_jobs
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'recurrence_worker'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence job mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_jobs_delete
+	BEFORE DELETE ON main.fix_recurrence_jobs
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'retention_prune'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence job deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_job_events_update
+	BEFORE UPDATE ON main.fix_recurrence_job_events
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence job events are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_job_events_delete
+	BEFORE DELETE ON main.fix_recurrence_job_events
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'retention_prune'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence job events are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_observations_update
+	BEFORE UPDATE ON main.fix_recurrence_observations
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence observations are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_observations_delete
+	BEFORE DELETE ON main.fix_recurrence_observations
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence observations are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_observation_events_update
+	BEFORE UPDATE ON main.fix_recurrence_observation_events
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence observation events are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_recurrence_observation_events_delete
+	BEFORE DELETE ON main.fix_recurrence_observation_events
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'retention_prune'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'recurrence observation event deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_monitoring_metadata_update
+	BEFORE UPDATE ON main.fix_monitoring_metadata
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'recurrence_worker'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'fix monitoring metadata mutation is not authorized');
 	END;`

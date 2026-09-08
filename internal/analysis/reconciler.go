@@ -127,7 +127,8 @@ func (r *Reconciler) reconcileSession(
 	if err != nil {
 		return r.fail(ctx, work, "analysis_scope_read_failed", nil)
 	}
-	events, eventLimitExceeded, err := r.sessionEvents(ctx, work.SessionKey)
+	events, eventLimitExceeded, eventGeneration, analysisThrough, err :=
+		r.sessionEvents(ctx, work.SessionKey)
 	if err != nil {
 		return r.fail(ctx, work, "analysis_event_read_failed", nil)
 	}
@@ -186,13 +187,23 @@ func (r *Reconciler) reconcileSession(
 	if r.beforePublish != nil {
 		r.beforePublish(work)
 	}
+	capabilities := r.analysisCapabilities(
+		scope,
+		catalogResult,
+		numbatOccurrences,
+		analysisThrough,
+		status,
+	)
 	_, err = r.store.ReplaceSessionProjection(ctx, local.SessionProjectionReplacement{
-		SessionKey:        work.SessionKey,
-		ClaimedGeneration: work.TargetGeneration,
-		Status:            status,
-		ScopeQuality:      scope.Quality,
-		BelayOccurrences:  belayOccurrences,
-		NumbatOccurrences: numbatOccurrences,
+		SessionKey:              work.SessionKey,
+		ClaimedGeneration:       work.TargetGeneration,
+		Status:                  status,
+		ScopeQuality:            scope.Quality,
+		AnalysisThroughOrderNS:  analysisThrough,
+		AnalyzedEventGeneration: eventGeneration,
+		BelayOccurrences:        belayOccurrences,
+		NumbatOccurrences:       numbatOccurrences,
+		Capabilities:            capabilities,
 	})
 	if errors.Is(err, local.ErrStaleProjection) {
 		return sessionResult{}, err
@@ -260,7 +271,7 @@ func (r *Reconciler) sessionScope(
 func (r *Reconciler) sessionEvents(
 	ctx context.Context,
 	sessionID string,
-) ([]model.Event, bool, error) {
+) ([]model.Event, bool, int64, *int64, error) {
 	events := make([]model.Event, 0, detection.MaxSessionEvents)
 	var snapshot int64
 	var cursor *model.EventPosition
@@ -277,14 +288,14 @@ func (r *Reconciler) sessionEvents(
 			Cursor:    cursor,
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, false, 0, nil, err
 		}
 		if snapshot == 0 {
 			snapshot = page.Snapshot
 		}
 		events = append(events, page.Data...)
 		if len(page.Data) < limit {
-			return events, false, nil
+			return events, false, snapshot, eventWatermark(events), nil
 		}
 		last := page.Data[len(page.Data)-1]
 		cursor = &model.EventPosition{
@@ -300,9 +311,22 @@ func (r *Reconciler) sessionEvents(
 		Cursor:    cursor,
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, nil, err
 	}
-	return events, len(lookAhead.Data) > 0, nil
+	return events, len(lookAhead.Data) > 0, snapshot, eventWatermark(events), nil
+}
+
+func eventWatermark(events []model.Event) *int64 {
+	if len(events) == 0 {
+		return nil
+	}
+	value := events[0].OccurredAt.UTC().UnixNano()
+	for _, event := range events[1:] {
+		if candidate := event.OccurredAt.UTC().UnixNano(); candidate > value {
+			value = candidate
+		}
+	}
+	return &value
 }
 
 func (r *Reconciler) sessionFindings(
@@ -451,15 +475,16 @@ func (r *Reconciler) detectorOccurrences(
 				FingerprintVersion: match.FingerprintVersion,
 				ProjectionVersion:  result.CatalogVersion,
 			},
-			Category:         match.Category,
-			TitleCode:        match.TitleCode,
-			Severity:         match.Severity,
-			Confidence:       match.Confidence,
-			ScopeQuality:     scope.Quality,
-			FirstObservedAt:  match.FirstObservedAt,
-			LastObservedAt:   match.LastObservedAt,
-			EvidenceComplete: match.EvidenceComplete,
-			Experimental:     match.Experimental,
+			Category:           match.Category,
+			TitleCode:          match.TitleCode,
+			Severity:           match.Severity,
+			Confidence:         match.Confidence,
+			ScopeQuality:       scope.Quality,
+			FirstObservedAt:    match.FirstObservedAt,
+			LastObservedAt:     match.LastObservedAt,
+			EvidenceComplete:   match.EvidenceComplete,
+			Experimental:       match.Experimental,
+			FingerprintScopeID: exactFingerprintScope(scope),
 			Evidence: model.IssueEvidence{
 				CitedEventIDs: append([]string(nil), match.CitedEventIDs...),
 				Dimensions:    evidenceDimensions,
@@ -557,6 +582,13 @@ func (r *Reconciler) numbatOccurrences(
 				FirstObservedAt:  finding.DetectedAt,
 				LastObservedAt:   finding.DetectedAt,
 				EvidenceComplete: true,
+				FingerprintScopeID: func() string {
+					if findingScopeQuality == model.ScopeResolved ||
+						findingScopeQuality == model.ScopeLexical {
+						return findingScopeIdentity
+					}
+					return ""
+				}(),
 				Evidence: model.IssueEvidence{
 					Dimensions: append([]string(nil), material...),
 				},
@@ -595,6 +627,73 @@ func (r *Reconciler) numbatOccurrences(
 		result = append(result, grouped[key])
 	}
 	return result, truncated, nil
+}
+
+func (r *Reconciler) analysisCapabilities(
+	scope local.SessionScope,
+	result detection.CatalogResult,
+	numbat []model.IssueOccurrence,
+	analysisThrough *int64,
+	status model.AnalysisStatus,
+) []model.AnalysisCapability {
+	if status != model.AnalysisCurrent {
+		return nil
+	}
+	scopeID := exactFingerprintScope(scope)
+	capabilities := make(
+		[]model.AnalysisCapability,
+		0,
+		len(result.Applicability)+len(numbat),
+	)
+	if scopeID != "" {
+		for _, applicability := range result.Applicability {
+			if applicability.AbsenceCapability != detection.AbsenceSupported {
+				continue
+			}
+			capabilities = append(capabilities, model.AnalysisCapability{
+				SessionID:              scope.SessionKey,
+				FingerprintScopeID:     scopeID,
+				Origin:                 "belay",
+				DetectorID:             applicability.DetectorID,
+				DetectorVersion:        applicability.DetectorVersion,
+				FingerprintVersion:     applicability.FingerprintVersion,
+				NegativeComparisonMode: model.FixNegativeComparisonSupported,
+				AnalysisThroughOrderNS: analysisThrough,
+			})
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, occurrence := range numbat {
+		if occurrence.FingerprintScopeID == "" {
+			continue
+		}
+		key := occurrence.FingerprintScopeID + "\x00" +
+			occurrence.Provenance.DetectorID + "\x00" +
+			occurrence.FingerprintVersion
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		capabilities = append(capabilities, model.AnalysisCapability{
+			SessionID:              scope.SessionKey,
+			FingerprintScopeID:     occurrence.FingerprintScopeID,
+			Origin:                 "numbat",
+			DetectorID:             occurrence.Provenance.DetectorID,
+			DetectorVersion:        occurrence.Provenance.DetectorVersion,
+			FingerprintVersion:     occurrence.FingerprintVersion,
+			NegativeComparisonMode: model.FixNegativeComparisonPositiveOnly,
+			AnalysisThroughOrderNS: analysisThrough,
+		})
+	}
+	return capabilities
+}
+
+func exactFingerprintScope(scope local.SessionScope) string {
+	if (scope.Quality == model.ScopeResolved || scope.Quality == model.ScopeLexical) &&
+		scope.ProjectScopeID != "" {
+		return scope.ProjectScopeID
+	}
+	return ""
 }
 
 func detectionEnrichments(

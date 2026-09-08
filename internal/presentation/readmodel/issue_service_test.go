@@ -275,9 +275,18 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 	}
 	if first.NextCursor == nil ||
 		!first.HasMore ||
+		first.ViewCursor == "" ||
 		first.Data.Occurrences == nil ||
 		first.Data.Occurrences[0].Evidence.CitedEventIDs == nil {
 		t.Fatalf("first issue detail = %+v", first)
+	}
+	detailView, err := decodeViewCursor(first.ViewCursor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detailView.Snapshot != 23 ||
+		detailView.IssuedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("detail view cursor = %+v", detailView)
 	}
 	if summaryQueries[0].Snapshot != 23 ||
 		summaryQueries[0].Filter.AttentionKind != model.AttentionKindAll ||
@@ -299,6 +308,16 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 	}
 	if second.HasMore || second.NextCursor != nil {
 		t.Fatalf("second issue detail = %+v", second)
+	}
+	continuedView, err := decodeViewCursor(second.ViewCursor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuedView.Snapshot != 23 ||
+		continuedView.IssuedAt !=
+			time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC).
+				Format(time.RFC3339Nano) {
+		t.Fatalf("continued detail view cursor = %+v", continuedView)
 	}
 	if occurrenceQueries[1].Snapshot != 23 ||
 		!occurrenceQueries[1].IssuedAt.Equal(time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)) ||

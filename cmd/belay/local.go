@@ -274,13 +274,24 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	startAnalysisRecovery(ctx, store, func() {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: issue analysis recovery pending; Local remains available\n",
-			options.commandName,
-		)
-	})
+	stopRecovery, recoveryDone := startLocalRecovery(
+		ctx,
+		store,
+		func() {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: issue analysis recovery pending; Local remains available\n",
+				options.commandName,
+			)
+		},
+		func() {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: attempt monitoring recovery pending; Local remains available\n",
+				options.commandName,
+			)
+		},
+	)
 	if _, err := localapp.ImportLive(ctx, runtime.paths, store, runtime.config); err != nil {
 		fmt.Fprintf(stderr, "belay %s: live records will be retried\n", options.commandName)
 	}
@@ -306,7 +317,10 @@ func runLocalLaunch(
 	if options.openBrowser {
 		attemptBrowserOpen(ctx, browserURL, options.commandName, stderr)
 	}
-	return running.Wait()
+	waitErr := running.Wait()
+	stopRecovery()
+	<-recoveryDone
+	return waitErr
 }
 
 func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, error) {
@@ -315,7 +329,11 @@ func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, er
 		return nil, err
 	}
 	return localhttp.New(
-		readmodel.New(store, readmodel.WithIssueRepository(store)),
+		readmodel.New(
+			store,
+			readmodel.WithIssueRepository(store),
+			readmodel.WithFixMonitoringRepository(store),
+		),
 		token,
 		localhttp.WithFixService(actions),
 	)
@@ -455,23 +473,145 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		serverDone <- server.RunStdio(ctx)
 	}()
 	<-serverStarted
-	startAnalysisRecovery(ctx, store, func() {
-		fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
-	})
-	return <-serverDone
+	stopRecovery, recoveryDone := startLocalRecovery(
+		ctx,
+		store,
+		func() {
+			fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
+		},
+		func() {
+			fmt.Fprintln(stderr, "belay mcp: attempt monitoring recovery pending")
+		},
+	)
+	runErr := <-serverDone
+	stopRecovery()
+	<-recoveryDone
+	return runErr
 }
 
-func startAnalysisRecovery(
+type localRecoveryActions struct {
+	analysisStartup   func(context.Context) error
+	monitoringStartup func(context.Context) error
+	monitoringDrain   func(context.Context) error
+}
+
+const localRecoveryInterval = 2 * time.Second
+
+func startLocalRecovery(
 	ctx context.Context,
 	store *local.Store,
-	onError func(),
-) {
+	onAnalysisError func(),
+	onMonitoringError func(),
+) (context.CancelFunc, <-chan struct{}) {
+	recoveryCtx, cancel := context.WithCancel(ctx)
+	reconciler := analysis.NewReconciler(store)
+	worker := analysis.NewRecurrenceWorker(store)
+	done := make(chan struct{})
 	go func() {
-		if _, err := analysis.NewReconciler(store).Startup(ctx); err != nil &&
-			onError != nil {
-			onError()
-		}
+		defer close(done)
+		runLocalRecovery(
+			recoveryCtx,
+			localRecoveryActions{
+				analysisStartup: func(ctx context.Context) error {
+					_, err := reconciler.Startup(ctx)
+					return err
+				},
+				monitoringStartup: func(ctx context.Context) error {
+					_, err := worker.Startup(ctx)
+					return err
+				},
+				monitoringDrain: func(ctx context.Context) error {
+					_, err := worker.Recover(ctx)
+					return err
+				},
+			},
+			localRecoveryInterval,
+			onAnalysisError,
+			onMonitoringError,
+		)
 	}()
+	return cancel, done
+}
+
+func runLocalRecovery(
+	ctx context.Context,
+	actions localRecoveryActions,
+	interval time.Duration,
+	onAnalysisError func(),
+	onMonitoringError func(),
+) {
+	if interval <= 0 {
+		interval = localRecoveryInterval
+	}
+	analysisFailureReported := false
+	for actions.analysisStartup != nil {
+		err := actions.analysisStartup(ctx)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		if !analysisFailureReported && onAnalysisError != nil {
+			onAnalysisError()
+			analysisFailureReported = true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+	monitoringFailureReported := false
+	for actions.monitoringStartup != nil {
+		err := actions.monitoringStartup(ctx)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		if !monitoringFailureReported && onMonitoringError != nil {
+			onMonitoringError()
+			monitoringFailureReported = true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+	if actions.monitoringDrain == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	drainFailureReported := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := actions.monitoringDrain(ctx); err != nil &&
+				!errors.Is(err, context.Canceled) &&
+				onMonitoringError != nil {
+				if !drainFailureReported {
+					onMonitoringError()
+					drainFailureReported = true
+				}
+				continue
+			}
+			drainFailureReported = false
+		}
+	}
 }
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {

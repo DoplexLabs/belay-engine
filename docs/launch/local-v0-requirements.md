@@ -25,7 +25,10 @@ evidence gaps remain separate from the default issue count.
 Eligible stable issues can retain append-only fix-attempt declarations. These
 records contain a fixed change category and exact monitoring baseline only.
 They do not execute remediation, accept free text, mark an issue resolved, or
-claim that a change worked. Exact recurrence measurement remains P0-04 work.
+claim that a change worked. P0-04 monitors later exact compatible fingerprint
+observations and preserves durable positive history. A later match is attention
+evidence, not proof that the attempted fix failed; no later match is not proof
+that it worked.
 
 ## Launch scope
 
@@ -47,6 +50,8 @@ claim that a change worked. Exact recurrence measurement remains P0-04 work.
     exact matching sessions, and truthful incomplete-analysis states.
 12. Let the authenticated Local browser record and retract durable,
     append-only fix-attempt declarations for eligible stable issues.
+13. Monitor active attempts for later exact compatible fingerprint observations
+    with explicit comparison coverage, bounded evidence, and durable history.
 
 ### Launch-validated harnesses
 
@@ -72,10 +77,10 @@ until the clean-machine checklist passes on Intel hardware.
 - Windows packaging
 - Linux packaging beyond reproducible source builds
 
-Automatic remediation, resolution claims, and recurrence measurement remain
-deferred. P0-03 implements only browser-recorded external fix-attempt
-declarations; P0-04 will determine whether the exact fingerprint recurs after an
-active declaration.
+Automatic remediation, resolution claims, semantic similarity, and claims that
+a fix prevented recurrence remain deferred. P0-04 reports only deterministic
+exact compatible fingerprint evidence observed after an active declaration's
+server-recorded baseline.
 
 ## User commands
 
@@ -163,6 +168,9 @@ Required routes:
 - `GET /v1/issues/{id}/fixes`
 - `POST /v1/issues/{id}/fixes`
 - `POST /v1/issues/{id}/fixes/{annotation_id}/retractions`
+- `GET /v1/fix-monitoring`
+- `GET /v1/issues/{id}/fix-monitoring`
+- `GET /v1/issues/{id}/fixes/{annotation_id}/recurrences`
 - `GET /v1/stats`
 
 The issue routes are bounded, snapshot-stable reads over the revisioned issue
@@ -260,6 +268,63 @@ sidecars and change only the computed evidence-retention status; it does not
 delete annotations or retractions. Records survive Local restart and remain
 until the entire Local database is reset.
 
+## P0 exact recurrence monitoring
+
+Fix monitoring is an optional Local HTTP read capability injected separately
+from the core read model. It is not exposed to MCP or through a new CLI
+command.
+
+`GET /v1/fix-monitoring` returns one bounded, grouped row per issue with the
+most actionable driving attempt state and aggregate attempt counts. It accepts
+exact filters for `state`, `change_kind`, `severity`, `harness`,
+`recorded_after`, `issue_id`, and `include_retracted`, plus `limit` or a
+continuation `cursor`.
+
+`GET /v1/issues/{id}/fix-monitoring` returns bounded attempt history for one
+issue. It supports a fresh read, a rowless `monitoring_view_cursor` transferred
+from the top-level list, or its own continuation cursor. Current issue
+presentation is explicitly nullable so durable attempt history remains
+available after the current issue projection disappears.
+
+`GET /v1/issues/{id}/fixes/{annotation_id}/recurrences` requires either the
+attempt's rowless `observation_view_cursor` or an observation continuation
+cursor. Each row is one durable exact post-baseline occurrence and includes
+same-anchor-session status, bounded retained canonical event IDs, original
+citation count, retained/missing counts, truncation, and evidence-retention
+state. Unknown evidence returns an empty event-ID array with nullable counts and
+truncation.
+
+All three routes use `schema_version=belay.fix-monitoring.v1`, default limit 20,
+maximum 100, deterministic endpoint-specific ordering, non-nil arrays, and
+opaque dedicated cursors. Their immutable 15-minute snapshot binds issue
+projection, event, retention, annotation, retraction, recurrence-job,
+job-event, and observation high-water marks. Continuations preserve the
+original filters and page size. A retention-generation change or expired
+snapshot returns 410 rather than silently changing membership or evidence.
+
+The fixed attempt states are:
+
+- `matching_evidence_observed`;
+- `monitoring_incomplete`;
+- `awaiting_later_evidence`;
+- `no_later_match_observed`;
+- `comparison_unavailable`;
+- `retracted`.
+
+Coverage separately reports comparable current, pending, failed, and truncated
+analysis plus `analysis_through` and `complete`. Comparison-unavailable reasons
+are fixed, payload-free codes. Numbat positive-only evidence can establish a
+later exact match but never establish no-match. Historical matching count
+aggregates qualifying observations across active and retracted attempts and is
+reported separately from the driving attempt's own recurrence count.
+
+Synchronous schema migration finishes before the Store is returned. The HTTP
+server starts before background historical catch-up. While readiness is
+`catching_up` or `failed`, only these three monitoring routes fail closed with
+fixed non-reflective 503 problems; existing Local reads and writes remain
+available. Cancellation preserves durable progress without recording a false
+failure, and a due retry or Local restart resumes convergence.
+
 ## MCP
 
 Required read-only tools:
@@ -277,7 +342,7 @@ though the browser issue routes are implemented.
 
 Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
-modify an agent, record a fix, or register recurrence.
+modify an agent, record a fix, or read/register recurrence monitoring.
 
 The MCP list tools use the same server-side filters, deterministic order,
 stable-snapshot cursor semantics, limits, and completeness rules as the Local
@@ -320,7 +385,8 @@ The implemented Attention Inbox and issue HTTP routes:
   fix-execution action.
 
 MCP issue tools remain future Feature 5 work. Browser-only explicit fix
-recording is implemented by P0-03; recurrence measurement remains P0-04.
+recording is implemented by P0-03, and exact post-attempt recurrence monitoring
+is implemented by P0-04 through Local HTTP only.
 
 ## Launch acceptance
 
@@ -352,6 +418,12 @@ recording is implemented by P0-03; recurrence measurement remains P0-04.
     wording and no free-text field.
 14. Fix history and identical idempotent replay survive a full Local stop and
     restart, while MCP remains exactly six read-only tools.
+15. Monitoring list/detail/observation cursor chains remain snapshot-stable;
+    history survives issue disappearance and restart; retention expiry returns
+    410; and unknown/incomplete comparison never becomes a success claim.
+16. Local HTTP and existing routes are available while historical monitoring
+    catch-up runs, with only monitoring reads returning fixed 503 readiness
+    problems until convergence.
 
 ## Alpha and production gates
 

@@ -80,6 +80,49 @@ func TestOpaqueIdentitiesAreStableDomainSeparatedAndStoreLocal(t *testing.T) {
 	zeroBytes(commandKey)
 }
 
+func TestRecurrenceIdentitiesAreStableAndDomainSeparated(t *testing.T) {
+	store := openStorageTestStore(t)
+	annotationID, err := store.deriveFixAnnotationID(
+		"00000000-0000-4000-8000-000000040001",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := store.deriveFixRecurrenceID(annotationID, "occ_stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := store.deriveFixRecurrenceID(annotationID, "occ_stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.deriveFixRecurrenceJobID("session-stable", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation != repeated ||
+		!validOpaquePrefixedID(observation, "fxo_") ||
+		!validOpaquePrefixedID(job, "fxj_") ||
+		observation == job {
+		t.Fatalf("recurrence identities = %q / %q / %q",
+			observation, repeated, job)
+	}
+	observationKey, err := store.derivedKey(fixRecurrenceIDKeyDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobKey, err := store.derivedKey(fixRecurrenceJobIDKeyDomain)
+	if err != nil {
+		zeroBytes(observationKey)
+		t.Fatal(err)
+	}
+	defer zeroBytes(observationKey)
+	defer zeroBytes(jobKey)
+	if string(observationKey) == string(jobKey) {
+		t.Fatal("recurrence observation and job domains share a key")
+	}
+}
+
 func TestProjectPathNormalization(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

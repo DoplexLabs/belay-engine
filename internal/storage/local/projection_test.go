@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,8 +44,8 @@ func TestMigration005AndAppendEventResolved(t *testing.T) {
 	).Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 10 {
-		t.Fatalf("migration count = %d, want 10", migrations)
+	if migrations != 11 {
+		t.Fatalf("migration count = %d, want 11", migrations)
 	}
 
 	event := storageTestEvent(
@@ -645,6 +646,13 @@ func testIssueOccurrence(
 		FirstObservedAt:  observedAt,
 		LastObservedAt:   observedAt,
 		EvidenceComplete: true,
+		FingerprintScopeID: func() string {
+			if scopeQuality == model.ScopeResolved ||
+				scopeQuality == model.ScopeLexical {
+				return "psc_" + strings.Repeat("a", 52)
+			}
+			return ""
+		}(),
 		Evidence: model.IssueEvidence{
 			CitedEventIDs: []string{eventID},
 			Dimensions:    []string{"opaque-dimension"},

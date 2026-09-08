@@ -87,6 +87,7 @@ func (catalog Catalog) Run(ctx context.Context, input SessionInput) CatalogResul
 		Status:         StatusCurrent,
 		Matches:        []Match{},
 		Failures:       []DetectorFailure{},
+		Applicability:  []DetectorApplicability{},
 	}
 	if ctx == nil {
 		result.Status = StatusFailed
@@ -106,14 +107,29 @@ func (catalog Catalog) Run(ctx context.Context, input SessionInput) CatalogResul
 
 	for _, slot := range catalog.slots {
 		detector := slot.detector
-		matches, code := catalog.runDetector(ctx, slot, session)
+		detectorResult, code := catalog.runDetector(ctx, slot, session)
 		if code != "" {
 			result.Failures = append(result.Failures, DetectorFailure{
 				DetectorID: detector.ID(),
 				Code:       code,
 			})
+			result.Applicability = append(result.Applicability, DetectorApplicability{
+				DetectorID:         detector.ID(),
+				DetectorVersion:    detector.Version(),
+				FingerprintVersion: detector.FingerprintVersion(),
+				AbsenceCapability:  AbsenceIncomplete,
+				UnavailableReason:  code,
+			})
 			continue
 		}
+		result.Applicability = append(result.Applicability, DetectorApplicability{
+			DetectorID:         detector.ID(),
+			DetectorVersion:    detector.Version(),
+			FingerprintVersion: detector.FingerprintVersion(),
+			AbsenceCapability:  detectorResult.AbsenceCapability,
+			UnavailableReason:  detectorResult.UnavailableReason,
+		})
+		matches := detectorResult.Matches
 		for index := range matches {
 			if err := validateMatch(detector, &matches[index]); err != nil {
 				result.Failures = append(result.Failures, DetectorFailure{
@@ -127,6 +143,10 @@ func (catalog Catalog) Run(ctx context.Context, input SessionInput) CatalogResul
 				result.Status = StatusTruncated
 				result.Matches = []Match{}
 				result.Failures = []DetectorFailure{}
+				for index := range result.Applicability {
+					result.Applicability[index].AbsenceCapability = AbsenceIncomplete
+					result.Applicability[index].UnavailableReason = "catalog_truncated"
+				}
 				return result
 			}
 		}
@@ -147,20 +167,20 @@ func (catalog Catalog) Run(ctx context.Context, input SessionInput) CatalogResul
 }
 
 type detectorResult struct {
-	matches []Match
-	err     error
-	panic   bool
+	result DetectorResult
+	err    error
+	panic  bool
 }
 
 type preparedEvaluator interface {
-	evaluatePrepared(context.Context, preparedSession) ([]Match, error)
+	evaluatePrepared(context.Context, preparedSession) (DetectorResult, error)
 }
 
 func (catalog Catalog) runDetector(
 	parent context.Context,
 	slot *detectorSlot,
 	session preparedSession,
-) ([]Match, string) {
+) (DetectorResult, string) {
 	detector := slot.detector
 	timeout := catalog.timeout
 	if timeout <= 0 {
@@ -170,16 +190,16 @@ func (catalog Catalog) runDetector(
 	defer cancel()
 	if !slot.tryStart() {
 		if errors.Is(parent.Err(), context.Canceled) {
-			return nil, failureCanceled
+			return DetectorResult{}, failureCanceled
 		}
-		return nil, failureTimeout
+		return DetectorResult{}, failureTimeout
 	}
 	done := make(chan detectorResult, 1)
 	go func() {
 		response := detectorResult{}
 		defer func() {
 			if recover() != nil {
-				response.matches = nil
+				response.result = DetectorResult{}
 				response.err = nil
 				response.panic = true
 			}
@@ -187,29 +207,36 @@ func (catalog Catalog) runDetector(
 			done <- response
 		}()
 		if prepared, ok := detector.(preparedEvaluator); ok {
-			response.matches, response.err = prepared.evaluatePrepared(ctx, session)
+			response.result, response.err = prepared.evaluatePrepared(ctx, session)
 			return
 		}
-		response.matches, response.err = detector.Evaluate(ctx, session.publicInput())
+		response.result, response.err = detector.Evaluate(ctx, session.publicInput())
 	}()
 
 	select {
 	case <-ctx.Done():
 		if errors.Is(parent.Err(), context.Canceled) {
-			return nil, failureCanceled
+			return DetectorResult{}, failureCanceled
 		}
 		if errors.Is(parent.Err(), context.DeadlineExceeded) {
-			return nil, failureTimeout
+			return DetectorResult{}, failureTimeout
 		}
-		return nil, failureTimeout
+		return DetectorResult{}, failureTimeout
 	case response := <-done:
 		switch {
 		case response.panic:
-			return nil, failurePanic
+			return DetectorResult{}, failurePanic
 		case response.err != nil:
-			return nil, failureCode(response.err)
+			return DetectorResult{}, failureCode(response.err)
+		case response.result.AbsenceCapability != AbsenceSupported &&
+			response.result.AbsenceCapability != AbsenceNotApplicable &&
+			response.result.AbsenceCapability != AbsenceIncomplete:
+			return DetectorResult{}, failureInvalidOutput
 		default:
-			return response.matches, ""
+			if response.result.Matches == nil {
+				response.result.Matches = []Match{}
+			}
+			return response.result, ""
 		}
 	}
 }

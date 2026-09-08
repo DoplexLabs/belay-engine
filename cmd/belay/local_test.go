@@ -14,10 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/detection"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
@@ -355,6 +357,150 @@ func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("fix history status = %d body=%s", response.Code, response.Body.String())
+	}
+	monitoringRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/fix-monitoring",
+		nil,
+	)
+	monitoringRequest.RemoteAddr = "127.0.0.1:1234"
+	monitoringRequest.Header.Set("Authorization", "Bearer launch-secret")
+	monitoringResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(monitoringResponse, monitoringRequest)
+	if monitoringResponse.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(
+			monitoringResponse.Body.String(),
+			"belay.local/monitoring-catchup-in-progress",
+		) {
+		t.Fatalf("monitoring capability status = %d body=%s",
+			monitoringResponse.Code, monitoringResponse.Body.String())
+	}
+
+	coreOnly := readmodel.New(store)
+	if _, err := coreOnly.ListFixMonitoring(
+		context.Background(),
+		readmodel.FixMonitoringListRequest{},
+	); err == nil {
+		t.Fatal("core-only readmodel unexpectedly exposes fix monitoring")
+	}
+}
+
+func TestRunLocalRecoveryOrdersAnalysisCatchupAndPeriodicDrain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls []string
+	runLocalRecovery(
+		ctx,
+		localRecoveryActions{
+			analysisStartup: func(context.Context) error {
+				calls = append(calls, "analysis")
+				return nil
+			},
+			monitoringStartup: func(context.Context) error {
+				calls = append(calls, "monitoring-startup")
+				return nil
+			},
+			monitoringDrain: func(context.Context) error {
+				calls = append(calls, "monitoring-drain")
+				cancel()
+				return nil
+			},
+		},
+		time.Millisecond,
+		nil,
+		nil,
+	)
+	if got := strings.Join(calls, ","); got !=
+		"analysis,monitoring-startup,monitoring-drain" {
+		t.Fatalf("recovery order = %q", got)
+	}
+}
+
+func TestRunLocalRecoveryRetriesCatchupAndStopsCleanlyOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	analysisStartups := 0
+	startups := 0
+	warnings := 0
+	runLocalRecovery(
+		ctx,
+		localRecoveryActions{
+			analysisStartup: func(context.Context) error {
+				analysisStartups++
+				if analysisStartups == 1 {
+					return errors.New("analysis pending")
+				}
+				return nil
+			},
+			monitoringStartup: func(context.Context) error {
+				startups++
+				if startups == 1 {
+					return errors.New("catch-up pending")
+				}
+				return nil
+			},
+			monitoringDrain: func(context.Context) error {
+				cancel()
+				return context.Canceled
+			},
+		},
+		time.Millisecond,
+		func() { warnings++ },
+		func() { warnings++ },
+	)
+	if analysisStartups != 2 || startups != 2 || warnings != 2 {
+		t.Fatalf(
+			"analysis/monitoring attempts/warnings = %d/%d/%d, want 2/2/2",
+			analysisStartups,
+			startups,
+			warnings,
+		)
+	}
+
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	warnings = 0
+	runLocalRecovery(
+		canceled,
+		localRecoveryActions{
+			analysisStartup:   func(ctx context.Context) error { return ctx.Err() },
+			monitoringStartup: func(ctx context.Context) error { return ctx.Err() },
+		},
+		time.Millisecond,
+		func() { warnings++ },
+		func() { warnings++ },
+	)
+	if warnings != 0 {
+		t.Fatalf("cancellation emitted %d recovery warnings", warnings)
+	}
+}
+
+func TestRunLocalRecoveryBoundsRepeatedDrainWarnings(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	drains := 0
+	warnings := 0
+	runLocalRecovery(
+		ctx,
+		localRecoveryActions{
+			analysisStartup:   func(context.Context) error { return nil },
+			monitoringStartup: func(context.Context) error { return nil },
+			monitoringDrain: func(context.Context) error {
+				drains++
+				switch drains {
+				case 1, 2, 4:
+					return errors.New("retryable drain failure")
+				case 3:
+					return nil
+				default:
+					cancel()
+					return context.Canceled
+				}
+			},
+		},
+		time.Millisecond,
+		nil,
+		func() { warnings++ },
+	)
+	if drains != 5 || warnings != 2 {
+		t.Fatalf("drains/warnings = %d/%d, want 5/2", drains, warnings)
 	}
 }
 

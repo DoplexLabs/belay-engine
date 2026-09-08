@@ -32,6 +32,7 @@ type Store struct {
 	cipher  *payloadCipher
 	storeID string
 	clock   func() time.Time
+	random  io.Reader
 }
 
 type OpenOptions struct {
@@ -123,7 +124,7 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, errors.New("enable secure local deletion")
 	}
-	store := &Store{db: db, clock: options.Clock}
+	store := &Store{db: db, clock: options.Clock, random: options.Random}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -192,6 +193,10 @@ func (s *Store) AppendEventResolved(
 	ctx context.Context,
 	event model.Event,
 ) (AppendEventResult, error) {
+	occurredAtOrder, validOrder := projectionOrderNS(event.OccurredAt)
+	if !validOrder {
+		return AppendEventResult{}, errors.New("canonical event time is outside supported range")
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return AppendEventResult{}, fmt.Errorf("encode canonical event: %w", err)
@@ -200,7 +205,7 @@ func (s *Store) AppendEventResolved(
 	if err != nil {
 		return AppendEventResult{}, err
 	}
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AppendEventResult{}, errors.New("begin canonical event persistence")
@@ -213,8 +218,9 @@ func (s *Store) AppendEventResolved(
 				event_id, source_deduplication_key, schema_version, installation_id,
 				session_key, occurred_at, observed_at, source_sequence, event_type,
 				actor, action, outcome, source_agent, source_kind, source_record_id,
-				source_run_id, historical, canonical_json, canonical_encoding, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				source_run_id, historical, canonical_json, canonical_encoding, created_at,
+				occurred_at_order_ns
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(source_deduplication_key) DO NOTHING`,
 			event.EventID,
 			event.Source.DeduplicationKey,
@@ -236,6 +242,7 @@ func (s *Store) AppendEventResolved(
 			body,
 			payloadEncodingAESGCM,
 			now,
+			occurredAtOrder,
 		)
 		if err != nil {
 			return fmt.Errorf("append canonical event: %w", err)
@@ -1657,7 +1664,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.resumeFixRecurrenceMigration(ctx)
 }
 
 func boolInt(value bool) int {

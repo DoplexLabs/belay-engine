@@ -86,12 +86,15 @@ type ProjectionReplacement struct {
 }
 
 type SessionProjectionReplacement struct {
-	SessionKey        string
-	ClaimedGeneration int64
-	Status            model.AnalysisStatus
-	ScopeQuality      model.ScopeQuality
-	BelayOccurrences  []model.IssueOccurrence
-	NumbatOccurrences []model.IssueOccurrence
+	SessionKey              string
+	ClaimedGeneration       int64
+	Status                  model.AnalysisStatus
+	ScopeQuality            model.ScopeQuality
+	AnalysisThroughOrderNS  *int64
+	AnalyzedEventGeneration int64
+	BelayOccurrences        []model.IssueOccurrence
+	NumbatOccurrences       []model.IssueOccurrence
+	Capabilities            []model.AnalysisCapability
 }
 
 type ProjectionCommitResult struct {
@@ -107,7 +110,7 @@ func (s *Store) UpsertSessionScope(
 	if sessionKey == "" || !validScope(scope) {
 		return ScopeUpsertResult{}, errors.New("invalid session scope")
 	}
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ScopeUpsertResult{}, errors.New("begin session scope persistence")
@@ -189,6 +192,12 @@ func (s *Store) UpsertSessionScope(
 			}
 		}
 		if result.Changed {
+			if _, err := tx.ExecContext(ctx, `
+					UPDATE issue_projection_metadata
+					SET retention_generation = retention_generation + 1
+					WHERE singleton = 1`); err != nil {
+				return errors.New("expire monitoring snapshots after scope change")
+			}
 			result.TargetGeneration, err = s.markSessionDirtyTx(
 				ctx,
 				tx,
@@ -252,7 +261,7 @@ func (s *Store) UpsertEventEnrichment(
 		!fixedCodePattern.MatchString(enrichment.Version) {
 		return EnrichmentUpsertResult{}, errors.New("event enrichment contains unsupported metadata")
 	}
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return EnrichmentUpsertResult{}, errors.New("begin event enrichment persistence")
@@ -486,7 +495,7 @@ func (s *Store) MarkSessionDirty(
 			sessionKey,
 			reason,
 			s.sessionScopeQualityTx(ctx, tx, sessionKey),
-			formatProjectionTime(time.Now()),
+			formatProjectionTime(s.nowUTC()),
 		)
 		if err != nil {
 			return err
@@ -569,6 +578,21 @@ func (s *Store) ReplaceIssueProjection(
 	if replacement.Origin == "" {
 		replacement.Origin = "belay"
 	}
+	if replacement.Origin == "belay" {
+		for index := range replacement.Occurrences {
+			occurrence := &replacement.Occurrences[index]
+			if occurrence.FingerprintScopeID != "" ||
+				(occurrence.ScopeQuality != model.ScopeResolved &&
+					occurrence.ScopeQuality != model.ScopeLexical) {
+				continue
+			}
+			scopeID, err := s.deriveLegacySessionScopeID(replacement.SessionKey)
+			if err != nil {
+				return ProjectionCommitResult{}, err
+			}
+			occurrence.FingerprintScopeID = scopeID
+		}
+	}
 	if err := validateProjectionReplacement(replacement); err != nil {
 		return ProjectionCommitResult{}, err
 	}
@@ -581,6 +605,9 @@ func (s *Store) ReplaceIssueProjection(
 		map[string][]model.IssueOccurrence{
 			replacement.Origin: replacement.Occurrences,
 		},
+		nil,
+		0,
+		nil,
 	)
 }
 
@@ -603,6 +630,15 @@ func (s *Store) ReplaceSessionProjection(
 			return ProjectionCommitResult{}, err
 		}
 	}
+	if err := validateAnalysisCapabilities(
+		replacement.SessionKey,
+		replacement.Capabilities,
+	); err != nil {
+		return ProjectionCommitResult{}, err
+	}
+	if replacement.AnalyzedEventGeneration < 0 {
+		return ProjectionCommitResult{}, errors.New("projection replacement has invalid event generation")
+	}
 	return s.replaceSessionProjection(
 		ctx,
 		replacement.SessionKey,
@@ -613,6 +649,9 @@ func (s *Store) ReplaceSessionProjection(
 			"belay":  replacement.BelayOccurrences,
 			"numbat": replacement.NumbatOccurrences,
 		},
+		replacement.AnalysisThroughOrderNS,
+		replacement.AnalyzedEventGeneration,
+		replacement.Capabilities,
 	)
 }
 
@@ -623,8 +662,11 @@ func (s *Store) replaceSessionProjection(
 	status model.AnalysisStatus,
 	scopeQuality model.ScopeQuality,
 	origins map[string][]model.IssueOccurrence,
+	analysisThroughOrderNS *int64,
+	analyzedEventGeneration int64,
+	capabilities []model.AnalysisCapability,
 ) (ProjectionCommitResult, error) {
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ProjectionCommitResult{}, errors.New("begin issue projection replacement")
@@ -659,7 +701,7 @@ func (s *Store) replaceSessionProjection(
 		); err != nil {
 			return err
 		}
-		if err := insertAnalysisRevisionTx(
+		revisionID, err := insertAnalysisRevisionTx(
 			ctx,
 			tx,
 			sessionKey,
@@ -670,6 +712,17 @@ func (s *Store) replaceSessionProjection(
 			"",
 			generation,
 			now,
+			analysisThroughOrderNS,
+			analyzedEventGeneration,
+		)
+		if err != nil {
+			return err
+		}
+		if err := insertAnalysisCapabilitiesTx(
+			ctx,
+			tx,
+			revisionID,
+			capabilities,
 		); err != nil {
 			return err
 		}
@@ -690,6 +743,19 @@ func (s *Store) replaceSessionProjection(
 			}
 			for index := range origins[origin] {
 				occurrence := origins[origin][index]
+				if occurrence.FingerprintScopeID == "" &&
+					origin == "belay" &&
+					(occurrence.ScopeQuality == model.ScopeResolved ||
+						occurrence.ScopeQuality == model.ScopeLexical) {
+					occurrence.FingerprintScopeID = s.sessionProjectScopeIDTx(
+						ctx, tx, sessionKey,
+					)
+				}
+				if (occurrence.ScopeQuality == model.ScopeResolved ||
+					occurrence.ScopeQuality == model.ScopeLexical) &&
+					!validProjectScopeID(occurrence.FingerprintScopeID) {
+					return errors.New("projection replacement lacks exact fingerprint scope")
+				}
 				occurrence.AnalysisGeneration = generation
 				occurrence.AnalysisStatus = status
 				if err := s.insertIssueOccurrenceTx(
@@ -698,6 +764,16 @@ func (s *Store) replaceSessionProjection(
 					return err
 				}
 			}
+		}
+		if err := s.enqueueRecurrenceJobTx(
+			ctx,
+			tx,
+			sessionKey,
+			revisionID,
+			generation,
+			now,
+		); err != nil {
+			return err
 		}
 		updated, err := tx.ExecContext(ctx, `
 			UPDATE dirty_sessions
@@ -765,10 +841,11 @@ func (s *Store) insertIssueOccurrenceTx(
 					first_observed_at, last_observed_at, evidence_complete,
 					retained_history_only, experimental, analysis_status,
 					analysis_generation, evidence_payload, evidence_encoding,
-					visible_from_generation, created_at, updated_at
+					visible_from_generation, created_at, updated_at,
+					fingerprint_scope_id
 				) VALUES (
 					?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-					?, ?, ?, ?, ?, ?, ?, ?, ?
+					?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 				)`,
 		revisionID,
 		occurrence.OccurrenceID,
@@ -799,6 +876,7 @@ func (s *Store) insertIssueOccurrenceTx(
 		generation,
 		now,
 		now,
+		nullable(occurrence.FingerprintScopeID),
 	); err != nil {
 		return fmt.Errorf("insert issue occurrence revision: %w", err)
 	}
@@ -832,7 +910,7 @@ func (s *Store) PublishAnalysisFailure(
 	if sessionKey == "" || targetGeneration < 1 || !fixedCodePattern.MatchString(errorCode) {
 		return 0, errors.New("invalid analysis failure")
 	}
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, errors.New("begin analysis failure persistence")
@@ -855,7 +933,7 @@ func (s *Store) PublishAnalysisFailure(
 			return err
 		}
 		analyzed := activeAnalyzedGenerationTx(ctx, tx, sessionKey, generation)
-		if err := insertAnalysisRevisionTx(
+		if _, err := insertAnalysisRevisionTx(
 			ctx,
 			tx,
 			sessionKey,
@@ -866,6 +944,8 @@ func (s *Store) PublishAnalysisFailure(
 			errorCode,
 			generation,
 			now,
+			nil,
+			target,
 		); err != nil {
 			return err
 		}
@@ -905,7 +985,7 @@ func (s *Store) RecordAnalysisDiagnostic(
 		!fixedCodePattern.MatchString(errorCode) {
 		return errors.New("invalid analysis diagnostic")
 	}
-	now := formatProjectionTime(time.Now())
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.New("begin analysis diagnostic persistence")
@@ -999,7 +1079,7 @@ func (s *Store) markSessionDirtyTx(
 	if err := closeActiveAnalysisRevisionTx(ctx, tx, sessionKey, generation, now); err != nil {
 		return 0, err
 	}
-	if err := insertAnalysisRevisionTx(
+	if _, err := insertAnalysisRevisionTx(
 		ctx,
 		tx,
 		sessionKey,
@@ -1010,6 +1090,8 @@ func (s *Store) markSessionDirtyTx(
 		"",
 		generation,
 		now,
+		nil,
+		analyzed,
 	); err != nil {
 		return 0, err
 	}
@@ -1060,7 +1142,9 @@ func insertAnalysisRevisionTx(
 	errorCode string,
 	projectionGeneration int64,
 	now string,
-) error {
+	analysisThroughOrderNS *int64,
+	analyzedEventGeneration int64,
+) (string, error) {
 	revisionID := stableLocalID(
 		"sar_",
 		sessionKey,
@@ -1070,8 +1154,9 @@ func insertAnalysisRevisionTx(
 		INSERT INTO session_analysis_revisions (
 			revision_id, session_key, status, scope_quality, target_generation,
 			analyzed_generation, error_code, visible_from_generation,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			created_at, updated_at, analysis_through_order_ns,
+			analyzed_event_generation
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		revisionID,
 		sessionKey,
 		status,
@@ -1082,10 +1167,137 @@ func insertAnalysisRevisionTx(
 		projectionGeneration,
 		now,
 		now,
+		analysisThroughOrderNS,
+		analyzedEventGeneration,
 	); err != nil {
-		return errors.New("insert session analysis revision")
+		return "", errors.New("insert session analysis revision")
+	}
+	return revisionID, nil
+}
+
+func insertAnalysisCapabilitiesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	revisionID string,
+	capabilities []model.AnalysisCapability,
+) error {
+	for _, capability := range capabilities {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_analysis_capabilities (
+				revision_id, session_id, fingerprint_scope_id, origin,
+				detector_id, detector_version, fingerprint_version,
+				negative_comparison_mode, analysis_through_order_ns
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			revisionID,
+			capability.SessionID,
+			capability.FingerprintScopeID,
+			capability.Origin,
+			capability.DetectorID,
+			capability.DetectorVersion,
+			capability.FingerprintVersion,
+			capability.NegativeComparisonMode,
+			capability.AnalysisThroughOrderNS,
+		); err != nil {
+			return errors.New("insert session analysis capability")
+		}
 	}
 	return nil
+}
+
+func (s *Store) enqueueRecurrenceJobTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	revisionID string,
+	projectionGeneration int64,
+	now string,
+) error {
+	jobID, err := s.deriveFixRecurrenceJobID(sessionID, projectionGeneration)
+	if err != nil {
+		return err
+	}
+	var annotationSnapshot int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(sequence), 0) FROM fix_annotations",
+	).Scan(&annotationSnapshot); err != nil {
+		return errors.New("capture recurrence annotation snapshot")
+	}
+	state := "pending"
+	if annotationSnapshot == 0 {
+		state = "complete"
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO fix_recurrence_jobs (
+			job_id, session_id, revision_id, projection_generation,
+			annotation_snapshot, state, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(job_id) DO NOTHING`,
+		jobID,
+		sessionID,
+		revisionID,
+		projectionGeneration,
+		annotationSnapshot,
+		state,
+		now,
+		now,
+	)
+	if err != nil {
+		return errors.New("enqueue recurrence job")
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return errors.New("inspect recurrence job enqueue")
+	}
+	if inserted == 0 {
+		var existingRevision string
+		if err := tx.QueryRowContext(ctx,
+			"SELECT revision_id FROM fix_recurrence_jobs WHERE job_id = ?",
+			jobID,
+		).Scan(&existingRevision); err != nil || existingRevision != revisionID {
+			return errors.New("recurrence job identity collision")
+		}
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO fix_recurrence_job_events (
+			job_id, event_kind, attempt_number, recorded_at
+		) VALUES (?, 'queued', 0, ?)`,
+		jobID,
+		now,
+	); err != nil {
+		return errors.New("record recurrence job enqueue")
+	}
+	if annotationSnapshot == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO fix_recurrence_job_events (
+				job_id, event_kind, attempt_number, recorded_at
+			) VALUES (?, 'complete', 0, ?)`,
+			jobID,
+			now,
+		); err != nil {
+			return errors.New("complete empty recurrence job")
+		}
+	}
+	return nil
+}
+
+func (s *Store) sessionProjectScopeIDTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+) string {
+	var scope sql.NullString
+	_ = tx.QueryRowContext(ctx, `
+		SELECT project_scope_id
+		FROM session_scopes
+		WHERE session_key = ?
+			AND scope_quality IN ('resolved', 'lexical')`,
+		sessionID,
+	).Scan(&scope)
+	if validProjectScopeID(scope.String) {
+		return scope.String
+	}
+	return ""
 }
 
 func activeAnalyzedGenerationTx(
@@ -1206,6 +1418,17 @@ func validateProjectionReplacement(replacement ProjectionReplacement) error {
 			occurrence.LastObservedAt.Before(occurrence.FirstObservedAt) {
 			return errors.New("projection replacement contains an invalid occurrence")
 		}
+		if occurrence.ScopeQuality == model.ScopeResolved ||
+			occurrence.ScopeQuality == model.ScopeLexical {
+			if occurrence.FingerprintScopeID == "" && occurrence.Origin == "belay" {
+				// Belay's exact scope can be filled transactionally from
+				// session_scopes. Numbat must always carry its finding scope.
+			} else if !validProjectScopeID(occurrence.FingerprintScopeID) {
+				return errors.New("projection replacement lacks exact fingerprint scope")
+			}
+		} else if occurrence.FingerprintScopeID != "" {
+			return errors.New("projection replacement has invalid fingerprint scope")
+		}
 		if len(occurrence.Evidence.CitedEventIDs) > 50 {
 			return errors.New("issue occurrence exceeds citation limit")
 		}
@@ -1217,6 +1440,36 @@ func validateProjectionReplacement(replacement ProjectionReplacement) error {
 		key := occurrence.FingerprintID + "\x00" + occurrence.Origin
 		if _, ok := seen[key]; ok {
 			return errors.New("projection replacement contains duplicate fingerprints")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateAnalysisCapabilities(
+	sessionID string,
+	capabilities []model.AnalysisCapability,
+) error {
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if capability.SessionID != sessionID ||
+			!validProjectScopeID(capability.FingerprintScopeID) ||
+			(capability.Origin != "belay" && capability.Origin != "numbat") ||
+			!fixedCodePattern.MatchString(capability.DetectorID) ||
+			!fixedCodePattern.MatchString(capability.DetectorVersion) ||
+			!fixedCodePattern.MatchString(capability.FingerprintVersion) ||
+			(capability.NegativeComparisonMode != model.FixNegativeComparisonSupported &&
+				capability.NegativeComparisonMode != model.FixNegativeComparisonPositiveOnly) {
+			return errors.New("projection replacement contains an invalid capability")
+		}
+		key := strings.Join([]string{
+			capability.FingerprintScopeID,
+			capability.Origin,
+			capability.DetectorID,
+			capability.FingerprintVersion,
+		}, "\x00")
+		if _, exists := seen[key]; exists {
+			return errors.New("projection replacement contains duplicate capabilities")
 		}
 		seen[key] = struct{}{}
 	}

@@ -33,14 +33,18 @@ type fixHTTPService struct {
 	page        localaction.FixAttemptPage
 	pageErr     error
 
-	recordCalls int
+	recordCalls    int
+	prepareIssueID string
+	prepareClaims  model.IssueViewClaims
 }
 
 func (s *fixHTTPService) PrepareFixAttempt(
-	context.Context,
-	string,
-	model.IssueViewClaims,
+	_ context.Context,
+	issueID string,
+	claims model.IssueViewClaims,
 ) (localaction.FixEligibility, error) {
+	s.prepareIssueID = issueID
+	s.prepareClaims = claims
 	return s.eligibility, s.prepareErr
 }
 

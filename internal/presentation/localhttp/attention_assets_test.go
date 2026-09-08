@@ -216,7 +216,7 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 
 	for _, required := range []string{
 		`closeIssueDetail(false);`,
-		`const [issuesReady, gapsReady] = await Promise.all([`,
+		`const [issuesReady, gapsReady, monitoringReady] = await Promise.all([`,
 		`const refreshGeneration = ++state.attentionRefreshGeneration;`,
 		`if (refreshGeneration !== state.attentionRefreshGeneration) return false;`,
 		`if (!issuesReady || !gapsReady) {`,

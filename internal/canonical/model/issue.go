@@ -80,6 +80,7 @@ type IssueOccurrence struct {
 	AnalysisStatus      AnalysisStatus     `json:"analysis_status"`
 	AnalysisGeneration  int64              `json:"analysis_generation"`
 	Evidence            IssueEvidence      `json:"evidence"`
+	FingerprintScopeID  string             `json:"-"`
 }
 
 type IssueSummary struct {

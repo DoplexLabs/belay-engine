@@ -678,8 +678,8 @@ func (failingDetector) FingerprintVersion() string { return "1" }
 func (failingDetector) Evaluate(
 	context.Context,
 	detection.SessionInput,
-) ([]detection.Match, error) {
-	return nil, errors.New("private detector failure")
+) (detection.DetectorResult, error) {
+	return detection.DetectorResult{}, errors.New("private detector failure")
 }
 
 type singleMatchDetector struct{}
@@ -690,25 +690,28 @@ func (singleMatchDetector) FingerprintVersion() string { return "1" }
 func (singleMatchDetector) Evaluate(
 	_ context.Context,
 	input detection.SessionInput,
-) ([]detection.Match, error) {
+) (detection.DetectorResult, error) {
 	event := input.Events[0]
-	return []detection.Match{{
-		DetectorID:         "single_match_detector",
-		DetectorVersion:    "1",
-		FingerprintVersion: "1",
-		Category:           "test_issue",
-		TitleCode:          "issue.test",
-		Severity:           "low",
-		Confidence:         "high",
-		FirstObservedAt:    event.OccurredAt,
-		LastObservedAt:     event.OccurredAt,
-		CitedEventIDs:      []string{event.EventID},
-		EvidenceComplete:   true,
-		Fingerprint: []detection.FingerprintDimension{{
-			Name:  "session_id",
-			Value: input.SessionID,
+	return detection.DetectorResult{
+		AbsenceCapability: detection.AbsenceSupported,
+		Matches: []detection.Match{{
+			DetectorID:         "single_match_detector",
+			DetectorVersion:    "1",
+			FingerprintVersion: "1",
+			Category:           "test_issue",
+			TitleCode:          "issue.test",
+			Severity:           "low",
+			Confidence:         "high",
+			FirstObservedAt:    event.OccurredAt,
+			LastObservedAt:     event.OccurredAt,
+			CitedEventIDs:      []string{event.EventID},
+			EvidenceComplete:   true,
+			Fingerprint: []detection.FingerprintDimension{{
+				Name:  "session_id",
+				Value: input.SessionID,
+			}},
 		}},
-	}}, nil
+	}, nil
 }
 
 type analysisKeyProvider struct {

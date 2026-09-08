@@ -1,7 +1,7 @@
 # Belay Read API V1 Contract
 
-- **Status:** Implemented Local Alpha surface, including Feature 2 Attention
-  reads and P0-03 browser-only fix-attempt actions
+- **Status:** Implemented Local Alpha surface, including Feature 2 Attention,
+  P0-03 browser-only fix-attempt actions, and P0-04 recurrence-monitoring reads
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -17,6 +17,10 @@ tools: MCP remains exactly six tools until Feature 5.
 
 P0-03 adds four Local-only routes for explicit browser fix-attempt declarations.
 They are not future Teams read-contract claims and do not make MCP write-capable.
+
+P0-04 adds three Local-only, read-only monitoring routes over exact compatible
+fingerprint observations after a recorded attempt. They do not claim semantic
+similarity, resolution, prevention, or fix success and are not exposed to MCP.
 
 ## Implemented Local Alpha routes
 
@@ -35,6 +39,9 @@ They are not future Teams read-contract claims and do not make MCP write-capable
 | `GET /v1/issues/{id}/fixes` | durable, cursor-paginated fix-attempt history |
 | `POST /v1/issues/{id}/fixes` | append one browser-confirmed external fix-attempt declaration |
 | `POST /v1/issues/{id}/fixes/{annotation_id}/retractions` | append one fixed-reason retraction |
+| `GET /v1/fix-monitoring` | grouped, cursor-paginated post-attempt monitoring |
+| `GET /v1/issues/{id}/fix-monitoring` | one issue's durable attempt monitoring/history |
+| `GET /v1/issues/{id}/fixes/{annotation_id}/recurrences` | exact post-baseline observations for one attempt |
 | `GET /v1/stats` | global Local summary only |
 
 ## Other future candidate routes
@@ -415,16 +422,20 @@ Accepted query parameters:
 - `view_cursor`: rowless cursor from `GET /v1/issues`, accepted only for the
   initial detail request.
 
-`cursor` and `view_cursor` are mutually exclusive. Exact issue lookup includes
-experimental and evidence-gap rows because selecting an opaque issue ID is
-explicit intent.
+Each parameter is accepted at most once, unknown or empty parameters return
+`400`, and `limit` must be an integer from 1 through 100. `cursor` and
+`view_cursor` are mutually exclusive; a continuation request contains only
+`cursor`. Exact issue lookup includes experimental and evidence-gap rows
+because selecting an opaque issue ID is explicit intent.
 
 The response contains the issue summary at the cursor snapshot and occurrence
 rows ordered by `last_observed_at DESC, occurrence_id ASC`, followed by the
 common list metadata. The route returns `404 application/problem+json` when the
 issue does not exist at a fresh snapshot. It returns a cursor error, rather
 than `404`, when a supplied cursor is malformed, expired, or belongs to another
-issue.
+issue. Every successful response also returns a rowless `view_cursor` for the
+same exact issue snapshot; Local browser fix eligibility may consume that
+cursor without first locating the issue in a paginated issue list.
 
 ```json
 {
@@ -434,6 +445,7 @@ issue.
     "issue": {},
     "occurrences": []
   },
+  "view_cursor": "opaque-rowless-view-cursor",
   "next_cursor": null,
   "has_more": false,
   "returned_count": 0,
@@ -489,8 +501,7 @@ data, not `404`.
 
 These routes record only a developer declaration that an external change was
 attempted. Belay does not execute the change, inspect a diff, mark the issue
-resolved, suppress future detections, or verify an outcome. Recurrence
-measurement is deferred to P0-04.
+resolved, suppress future detections, or verify an outcome.
 
 All responses use `schema_version=belay.fix.v1`. Fix actions are available only
 through explicitly configured Local HTTP. They are not part of MCP or the CLI.
@@ -760,6 +771,300 @@ replay, and retraction replay survive Local process restart when the same Local
 database and Keychain key are used. A full Local database reset removes them
 with the rest of Local state.
 
+## P0-04 exact recurrence-monitoring contract
+
+These authenticated, loopback-only reads report deterministic exact compatible
+fingerprint observations after a fix-attempt's server-recorded `monitor_from`.
+A matching observation is attention evidence, not proof that a fix failed. No
+later match is not proof that a fix worked.
+`historical_matching_evidence_count` aggregates qualifying post-baseline
+observations across active and retracted attempts; it does not describe
+pre-attempt evidence.
+
+All responses use `schema_version=belay.fix-monitoring.v1`. Lists default to 20
+rows and are bounded to 100. Arrays are non-null. Nullable fields are emitted as
+explicit JSON `null`.
+
+### Fixed monitoring catalogs
+
+`fix_recurrence_state` is one of:
+
+- `matching_evidence_observed`;
+- `monitoring_incomplete`;
+- `awaiting_later_evidence`;
+- `no_later_match_observed`;
+- `comparison_unavailable`;
+- `retracted`.
+
+`future_comparison_unavailable_reason` is null or one of:
+
+- `scope_unavailable`;
+- `source_positive_only`;
+- `capability_unavailable`;
+- `baseline_time_unavailable`;
+- `fingerprint_version_unsupported`.
+
+Future unknown recurrence-state values are exposed as neutral `unknown` so the
+browser can render “Monitoring status unavailable” without inferring a known
+comparison state. Unknown comparison-unavailability reasons fail closed to
+`capability_unavailable`.
+
+Evidence-retention state is `available`, `partial`, `pruned`, or `unknown`.
+Coverage contains `comparable_current`, `comparable_pending`,
+`comparable_failed`, `comparable_truncated`, nullable `analysis_through`, and
+`complete`. `analysis_complete` equals `coverage.complete`.
+`count_is_lower_bound=true` only for a positive observation count with
+incomplete coverage.
+
+### `GET /v1/fix-monitoring`
+
+The top-level list returns one grouped row per issue. By default it includes
+issues with active attempts; `include_retracted=true` also permits all-retracted
+history rows.
+
+Initial query parameters, each accepted at most once:
+
+- `state`: exact recurrence-state catalog value;
+- `change_kind`: exact `fix-change.v1` value;
+- `severity`: `info`, `low`, `medium`, `high`, or `critical`;
+- `harness`: exact normalized harness, maximum 128 bytes;
+- `recorded_after`: RFC3339 instant;
+- `issue_id`: exact canonical issue ID;
+- `include_retracted`: exact lowercase `true` or `false`;
+- `limit`: 1–100.
+
+A continuation request contains only `cursor`. Grouping selects the driving
+attempt before filters. Rows are ordered by state rank, known severity rank,
+`COALESCE(last_recurrence_observed_at, recorded_at) DESC`, then `issue_id ASC`.
+Equal positions remain deterministic.
+
+Response:
+
+```json
+{
+  "schema_version": "belay.fix-monitoring.v1",
+  "data": [{
+    "issue_id": "iss_...",
+    "annotation_id": "fxa_...",
+    "title_code": "explicit_command_failure",
+    "severity": "high",
+    "change_kind": "code_change",
+    "recorded_at": "2026-09-08T18:00:00Z",
+    "monitor_from": "2026-09-08T18:00:00Z",
+    "fix_recurrence_state": "matching_evidence_observed",
+    "fix_recurrence_count": 2,
+    "same_anchor_session_observation_count": 1,
+    "other_session_observation_count": 1,
+    "historical_matching_evidence_count": 2,
+    "active_attempt_count": 2,
+    "observed_attempt_count": 1,
+    "analysis_complete": false,
+    "count_is_lower_bound": true,
+    "future_comparison_available": true,
+    "future_comparison_unavailable_reason": null,
+    "last_recurrence_observed_at": "2026-09-08T19:14:00Z",
+    "coverage": {
+      "comparable_current": 3,
+      "comparable_pending": 1,
+      "comparable_failed": 0,
+      "comparable_truncated": 0,
+      "analysis_through": "2026-09-08T19:16:00Z",
+      "complete": false
+    }
+  }],
+  "returned_count": 1,
+  "limit": 20,
+  "has_more": false,
+  "next_cursor": null,
+  "monitoring_view_cursor": "<opaque>",
+  "evidence_evaluated_at": "2026-09-08T19:17:00Z"
+}
+```
+
+All-retracted grouped rows have zero active/observed-attempt counts, state
+`retracted`, empty current coverage with null `analysis_through`, and may retain
+historical observation counts.
+
+### `GET /v1/issues/{id}/fix-monitoring`
+
+This route paginates attempts ordered by `recorded_at DESC, annotation_id DESC`.
+An initial read accepts optional `limit` and either:
+
+- no cursor, creating a fresh monitoring snapshot; or
+- exactly one `view_cursor` transferred from the top-level
+  `monitoring_view_cursor`.
+
+Continuation accepts only `cursor`. `cursor` and `view_cursor` are mutually
+exclusive.
+
+Response:
+
+```json
+{
+  "schema_version": "belay.fix-monitoring.v1",
+  "issue_id": "iss_...",
+  "current_issue_available": false,
+  "current_issue": null,
+  "data": [{
+    "annotation_id": "fxa_...",
+    "issue_id": "iss_...",
+    "subject": {
+      "title_code": "explicit_command_failure",
+      "severity": "high",
+      "confidence": "high",
+      "anchor_harness": "codex",
+      "origin": "belay",
+      "detector_id": "explicit_command_failure",
+      "detector_version": "1",
+      "fingerprint_version": "1"
+    },
+    "change_kind": "code_change",
+    "recorded_at": "2026-09-08T18:00:00Z",
+    "monitor_from": "2026-09-08T18:00:00Z",
+    "state": "active",
+    "retraction_reason": null,
+    "retracted_at": null,
+    "fix_recurrence_state": "matching_evidence_observed",
+    "fix_recurrence_count": 1,
+    "same_anchor_session_observation_count": 0,
+    "other_session_observation_count": 1,
+    "historical_matching_evidence_count": 1,
+    "analysis_complete": true,
+    "count_is_lower_bound": false,
+    "future_comparison_available": true,
+    "future_comparison_unavailable_reason": null,
+    "last_recurrence_observed_at": "2026-09-08T19:14:00Z",
+    "coverage": {
+      "comparable_current": 1,
+      "comparable_pending": 0,
+      "comparable_failed": 0,
+      "comparable_truncated": 0,
+      "analysis_through": "2026-09-08T19:16:00Z",
+      "complete": true
+    },
+    "anchor_evidence_currently_retained": "available",
+    "recurrence_evidence": {
+      "available": 1,
+      "partial": 0,
+      "pruned": 0,
+      "unknown": 0
+    },
+    "observation_view_cursor": "<opaque>"
+  }],
+  "returned_count": 1,
+  "limit": 20,
+  "has_more": false,
+  "next_cursor": null,
+  "monitoring_view_cursor": "<opaque>",
+  "evidence_evaluated_at": "2026-09-08T19:17:00Z"
+}
+```
+
+`current_issue_available=false` requires `current_issue=null`; history remains
+readable after the issue leaves the current projection. When available,
+`current_issue` is the bounded issue-summary DTO. Nullable subject fields are
+exactly `title_code`, `severity`, `confidence`, and `anchor_harness`. Active
+attempts encode `retraction_reason` and `retracted_at` as null.
+
+### `GET /v1/issues/{id}/fixes/{annotation_id}/recurrences`
+
+The first observation request requires exactly one
+`observation_view_cursor` from its attempt row and may include `limit`.
+Continuation requests contain only `cursor`. Rows are ordered by
+`first_qualifying_event_at DESC, recurrence_id DESC`.
+
+Response:
+
+```json
+{
+  "schema_version": "belay.fix-monitoring.v1",
+  "issue_id": "iss_...",
+  "annotation_id": "fxa_...",
+  "data": [{
+    "recurrence_id": "fxo_...",
+    "occurrence_id": "occ_...",
+    "session_id": "ses_...",
+    "fingerprint_version": "1",
+    "origin": "belay",
+    "detector_id": "explicit_command_failure",
+    "detector_version": "1",
+    "first_qualifying_event_at": "2026-09-08T19:13:00Z",
+    "last_qualifying_event_at": "2026-09-08T19:14:00Z",
+    "qualifying_citation_count": 2,
+    "retained_event_ids": [
+      "019921c0-7abc-7def-8abc-0123456789ab"
+    ],
+    "retained_event_count": 1,
+    "missing_event_count": 1,
+    "evidence_complete": true,
+    "evidence_truncated": false,
+    "evidence_currently_retained": "partial",
+    "same_session_as_anchor": false,
+    "observed_at": "2026-09-08T19:15:00Z"
+  }],
+  "returned_count": 1,
+  "limit": 20,
+  "has_more": false,
+  "next_cursor": null,
+  "evidence_evaluated_at": "2026-09-08T19:17:00Z"
+}
+```
+
+`retained_event_ids` contains at most 50 canonical lowercase UUIDv7 event IDs
+for the row's session. The existing session-constrained lookup route may fetch
+them without scanning a broad timeline. `qualifying_citation_count` is the
+immutable original count. `evidence_complete` records detector completeness at
+observation time. `evidence_truncated=true` means more than 50 retained
+citations exist.
+
+For unknown evidence the exact DTO is:
+
+- `retained_event_ids=[]`;
+- `retained_event_count=null`;
+- `missing_event_count=null`;
+- `evidence_truncated=null`;
+- `evidence_currently_retained="unknown"`.
+
+### Monitoring snapshots, readiness, and errors
+
+Monitoring uses dedicated opaque cursor kinds for the top list, list view,
+issue attempts, per-attempt observation view, and observation pages. Cursors
+bind the endpoint, normalized filters, route IDs, original page size, row
+position, issued-at time, and one snapshot containing issue projection, event,
+retention, annotation, retraction, recurrence-job, job-event, and observation
+high-water marks.
+
+The snapshot lifetime is 15 minutes. A changed retention generation also
+expires the chain. View cursors are rowless snapshot transfers; page cursors
+carry deterministic row position. Monitoring cursors are not accepted by
+legacy session/activity/finding/issue routes, and legacy cursors are not
+accepted here.
+
+Schema migration completes before Local starts. Historical recurrence catch-up
+runs after the HTTP server starts. During `catching_up` or `failed`, only the
+three monitoring routes fail closed; all older Local reads and fix writes
+remain available.
+
+Validation/error precedence is authentication, path syntax, query syntax,
+cursor syntax/binding, readiness, expiry/retention validity, resource
+existence, repository read, then encoding.
+
+| Condition | Status/type |
+|---|---|
+| Missing/invalid bearer | `401 about:blank` |
+| Invalid/repeated/unknown query, ID, limit, filter, or cursor envelope | `400 about:blank` |
+| Catch-up active | `503 belay.local/monitoring-catchup-in-progress` |
+| Catch-up failed awaiting recovery | `503 belay.local/monitoring-catchup-failed` |
+| Expired/compacted/retention-invalid cursor | `410 belay.local/cursor-expired` |
+| Missing issue/history, missing annotation, or route-binding mismatch | `404 about:blank` |
+| Repository/encoding failure | `500 about:blank` |
+
+Problem details and server-generated request IDs never reflect request or
+stored values. Cancellation leaves catch-up durable and retryable rather than
+recording a false failure. Local restart resumes incomplete catch-up. Once
+ready, a failed individual recurrence job contributes incomplete attempt
+coverage and retries independently instead of disabling all monitoring.
+
 ## Authentication
 
 - Local browser requests use a random per-launch token.
@@ -786,6 +1091,9 @@ Implemented Local filters, where applicable:
 - `session_id` for findings
 - issue filters documented under `GET /v1/issues`, including
   `attention_kind` and `experimental`
+- monitoring filters documented under `GET /v1/fix-monitoring`, including
+  exact recurrence state, change kind, recorded-after, issue ID, and
+  include-retracted
 
 ## Errors
 
@@ -818,8 +1126,17 @@ Errors use `application/problem+json` with:
     explicit browser intent.
 13. Fix creation/retraction are append-only, idempotent, payload-free, and
     survive Local restart and ordinary retention.
-14. Fix recording remains browser-only; MCP still exposes exactly six read-only
-    tools, and recurrence remains P0-04.
+14. Fix recording and exact recurrence monitoring remain Local HTTP/browser
+    capabilities; MCP still exposes exactly six read-only tools.
+15. Monitoring cursors bind every documented high-water, route ID, normalized
+    filter, page size, and ordering position for 15 minutes.
+16. Catch-up 503 affects only monitoring routes; cancellation/restart converges
+    without exposing partial history as complete.
+17. Durable observations and attempt history survive restart and issue
+    disappearance; retention changes expire old cursors and truthfully degrade
+    evidence on fresh reads.
+18. Matching evidence is never described as fix failure, and no-match,
+    incomplete, unavailable, or unknown evidence is never described as success.
 
 Teams shape compatibility and cross-workspace authorization remain future
 acceptance requirements, not Local Alpha claims.

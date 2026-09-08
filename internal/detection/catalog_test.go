@@ -26,11 +26,15 @@ func (detector testDetector) FingerprintVersion() string { return "test-fingerpr
 func (detector testDetector) Evaluate(
 	ctx context.Context,
 	input SessionInput,
-) ([]Match, error) {
+) (DetectorResult, error) {
 	if detector.called != nil {
 		*detector.called = true
 	}
-	return detector.evaluate(ctx, input)
+	matches, err := detector.evaluate(ctx, input)
+	return DetectorResult{
+		Matches:           matches,
+		AbsenceCapability: AbsenceSupported,
+	}, err
 }
 
 func TestCatalogIsolatesPanicErrorAndContinues(t *testing.T) {
@@ -72,6 +76,51 @@ func TestCatalogIsolatesPanicErrorAndContinues(t *testing.T) {
 	for _, failure := range result.Failures {
 		if failure.Code == "event-derived secret must not escape" {
 			t.Fatalf("raw error leaked into failure: %+v", failure)
+		}
+	}
+	for _, applicability := range result.Applicability {
+		if applicability.DetectorID == "panic" ||
+			applicability.DetectorID == "error" {
+			if applicability.AbsenceCapability != AbsenceIncomplete {
+				t.Fatalf("failed detector applicability = %+v", applicability)
+			}
+		}
+	}
+}
+
+func TestBuiltinAbsenceCapabilitiesRequireObservedPrerequisites(t *testing.T) {
+	command := testEvent("command", 1, "command.exec")
+	result := DefaultCatalog().Run(context.Background(), testInput(command))
+	requireCurrent(t, result)
+	byID := make(map[string]DetectorApplicability)
+	for _, applicability := range result.Applicability {
+		byID[applicability.DetectorID] = applicability
+	}
+	if byID["explicit_command_failure"].AbsenceCapability != AbsenceSupported {
+		t.Fatalf("command applicability = %+v", byID["explicit_command_failure"])
+	}
+	if byID["repeated_command_attempts"].AbsenceCapability != AbsenceNotApplicable {
+		t.Fatalf("experimental applicability = %+v", byID["repeated_command_attempts"])
+	}
+	if byID["verification_not_observed"].AbsenceCapability != AbsenceNotApplicable {
+		t.Fatalf("verification applicability = %+v", byID["verification_not_observed"])
+	}
+	if byID["unresolved_verification_failure_at_completion"].AbsenceCapability !=
+		AbsenceIncomplete {
+		t.Fatalf("completion applicability = %+v",
+			byID["unresolved_verification_failure_at_completion"])
+	}
+
+	historical := command
+	historical.Historical.IsHistorical = true
+	historicalResult := DefaultCatalog().Run(
+		context.Background(),
+		testInput(historical),
+	)
+	requireCurrent(t, historicalResult)
+	for _, applicability := range historicalResult.Applicability {
+		if applicability.AbsenceCapability == AbsenceSupported {
+			t.Fatalf("historical-only input advertised absence: %+v", applicability)
 		}
 	}
 }

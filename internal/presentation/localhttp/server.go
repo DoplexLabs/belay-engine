@@ -94,6 +94,7 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/findings", s.authorize(http.HandlerFunc(s.listFindings)))
 	mux.Handle("GET /v1/issues", s.authorize(http.HandlerFunc(s.listIssues)))
 	mux.Handle("GET /v1/issues/{id}/occurrences", s.authorize(http.HandlerFunc(s.getIssue)))
+	s.registerFixMonitoringRoutes(mux)
 	mux.Handle("GET /v1/stats", s.authorize(http.HandlerFunc(s.getStats)))
 	if s.fix != nil {
 		s.registerFixRoutes(mux, trustedListener)
@@ -310,13 +311,57 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getIssue(w http.ResponseWriter, r *http.Request) {
+	parameters, err := exactQuery(r, "limit", "cursor", "view_cursor")
+	if err != nil {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	cursor, cursorPresent, err := optionalExactParameter(parameters, "cursor")
+	if err != nil {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	viewCursor, viewPresent, err := optionalExactParameter(parameters, "view_cursor")
+	if err != nil || (cursorPresent && viewPresent) {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	if cursorPresent && len(parameters) != 1 {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	limit := 0
+	if !cursorPresent {
+		value, present, err := optionalExactParameter(parameters, "limit")
+		if err != nil {
+			writeReadInvalidRequest(w, r)
+			return
+		}
+		if present {
+			limit, err = strconv.Atoi(value)
+			if err != nil || limit < 1 || limit > 100 {
+				writeReadInvalidRequest(w, r)
+				return
+			}
+		}
+	}
 	response, err := s.read.GetIssue(r.Context(), readmodel.IssueDetailRequest{
 		IssueID:    r.PathValue("id"),
-		Limit:      boundedInt(r, "limit", 20, 100),
-		Cursor:     queryValue(r, "cursor"),
-		ViewCursor: queryValue(r, "view_cursor"),
+		Limit:      limit,
+		Cursor:     cursor,
+		ViewCursor: viewCursor,
 	})
 	writeReadResult(w, r, response, err)
+}
+
+func writeReadInvalidRequest(w http.ResponseWriter, r *http.Request) {
+	writeProblem(
+		w,
+		r,
+		http.StatusBadRequest,
+		"Invalid request",
+		"The supplied read cursor or filters are invalid.",
+	)
 }
 
 func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {

@@ -27,6 +27,7 @@ Alpha scope:
 - Loopback-only browser with a random per-launch token
 - Attention Inbox with deterministic issues and exact matching sessions
 - Browser-only, append-only fix-attempt declarations with no free-text field
+- Exact post-attempt recurrence monitoring with bounded retained evidence
 - Exactly six read-only MCP tools
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
@@ -157,7 +158,18 @@ Issue detail shows exact matching sessions and retrieves cited evidence through
 a bounded, session-constrained event lookup. Eligible current stable issues can
 record an append-only external fix-attempt declaration using one fixed
 `fix-change.v1` category. The declaration is not a resolution claim and does not
-execute remediation. Recurrence measurement remains future P0-04 work.
+execute remediation.
+
+Belay can subsequently report whether the same exact compatible fingerprint was
+observed after the declaration's server-recorded monitoring baseline. Monitoring
+is grouped by issue and attempt, distinguishes same-anchor-session from
+other-session observations, and reports incomplete or unavailable comparison
+coverage explicitly. A matching observation is attention evidence, not proof
+that a fix failed; no match is not proof that a fix worked. Recurrence
+monitoring reports only post-attempt evidence observed after the recorded
+attempt baseline.
+Monitoring is available through authenticated Local HTTP/browser routes only.
+MCP remains exactly the six read-only tools listed above.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).

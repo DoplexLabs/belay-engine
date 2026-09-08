@@ -36,9 +36,13 @@ func (repository *issueHTTPRepository) QueryIssues(
 	if repository.issueAbsent && query.Filter.IssueID != "" {
 		return model.IssuePage{Snapshot: 31}, nil
 	}
+	issueID := httpTestIssueID("a")
+	if query.Filter.IssueID != "" {
+		issueID = query.Filter.IssueID
+	}
 	return model.IssuePage{
 		Data: []model.IssueSummary{{
-			IssueID:        httpTestIssueID("a"),
+			IssueID:        issueID,
 			FingerprintID:  httpTestFingerprintID("b"),
 			Severity:       "high",
 			SessionCount:   2,
@@ -61,7 +65,7 @@ func (repository *issueHTTPRepository) QueryIssueOccurrences(
 	return model.IssueOccurrencePage{
 		Data: []model.IssueOccurrence{{
 			OccurrenceID:   "occurrence-1",
-			IssueID:        httpTestIssueID("a"),
+			IssueID:        query.IssueID,
 			SessionID:      "session-1",
 			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
 		}},
@@ -89,11 +93,17 @@ func (repository *issueHTTPRepository) LookupSessionEvents(
 func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T) {
 	repository := &issueHTTPRepository{}
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	server, err := New(readmodel.New(
+	readService := readmodel.New(
 		repository,
 		readmodel.WithIssueRepository(repository),
 		readmodel.WithClock(func() time.Time { return now }),
-	), "launch-secret")
+	)
+	fixService := &fixHTTPService{}
+	server, err := New(
+		readService,
+		"launch-secret",
+		WithFixService(fixService),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +183,7 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 		t.Fatal(err)
 	}
 	if detail.Data.Issue.IssueID != httpTestIssueID("a") ||
+		detail.ViewCursor == "" ||
 		len(detail.Data.Occurrences) != 1 ||
 		repository.issueQuery.Snapshot != 31 ||
 		repository.occurrenceQuery.Snapshot != 31 ||
@@ -180,6 +191,48 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 		!repository.occurrenceQuery.IssuedAt.Equal(now) {
 		t.Fatalf("snapshot-stable detail=%+v summary=%+v occurrence=%+v",
 			detail, repository.issueQuery, repository.occurrenceQuery)
+	}
+
+	targetIssueID := httpTestIssueID("c")
+	exactRequest := issueHTTPRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/"+targetIssueID+
+			"/occurrences?limit=1",
+		true,
+	)
+	exactResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(exactResponse, exactRequest)
+	if exactResponse.Code != http.StatusOK {
+		t.Fatalf("fresh exact issue status = %d body=%s",
+			exactResponse.Code, exactResponse.Body.String())
+	}
+	var exact readmodel.IssueDetail
+	if err := json.NewDecoder(exactResponse.Body).Decode(&exact); err != nil {
+		t.Fatal(err)
+	}
+	if exact.Data.Issue.IssueID != targetIssueID ||
+		exact.ViewCursor == "" ||
+		repository.issueQuery.Filter.IssueID != targetIssueID {
+		t.Fatalf("fresh exact issue = %+v query=%+v",
+			exact, repository.issueQuery)
+	}
+	eligibilityRequest := issueHTTPRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/"+targetIssueID+
+			"/fix-eligibility?view_cursor="+exact.ViewCursor,
+		true,
+	)
+	eligibilityResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(eligibilityResponse, eligibilityRequest)
+	if eligibilityResponse.Code != http.StatusOK {
+		t.Fatalf("exact issue eligibility status = %d body=%s",
+			eligibilityResponse.Code, eligibilityResponse.Body.String())
+	}
+	if fixService.prepareIssueID != targetIssueID ||
+		fixService.prepareClaims.Snapshot != 31 ||
+		!fixService.prepareClaims.IssuedAt.Equal(now) {
+		t.Fatalf("exact eligibility handoff issue=%q claims=%+v",
+			fixService.prepareIssueID, fixService.prepareClaims)
 	}
 
 	lookupRequest := issueHTTPRequest(
@@ -277,6 +330,24 @@ func TestIssueHTTPErrorMatrixIsFixedAndNonReflective(t *testing.T) {
 		http.StatusBadRequest,
 		"PRIVATE_PAGE_CURSOR",
 	)
+	for _, query := range []string{
+		"unknown=PRIVATE_QUERY_CANARY",
+		"limit=",
+		"limit=0",
+		"limit=-1",
+		"limit=not-a-number",
+		"limit=101",
+		"limit=1&limit=2",
+		"cursor=",
+		"view_cursor=",
+		"cursor=PRIVATE_PAGE_CURSOR&limit=1",
+	} {
+		assertProblem(
+			"/v1/issues/"+httpTestIssueID("a")+"/occurrences?"+query,
+			http.StatusBadRequest,
+			"PRIVATE_",
+		)
+	}
 
 	repository.issueErr = model.ErrIssueSnapshotExpired
 	expired := assertProblem(

@@ -475,7 +475,8 @@ Procedure:
 
 Pass criteria:
 
-- Issue detail says recurrence monitoring is not yet available.
+- Issue detail presents monitoring as exact post-attempt evidence and does not
+  claim that recording the declaration changed or resolved the issue.
 - The dialog explains that Belay records a declaration and cannot verify the
   change or its effect.
 - No category is preselected; no note, command, path, diff, prompt, output,
@@ -533,7 +534,8 @@ Pass criteria:
 - History remains readable with non-loopback networking disabled.
 - Evidence status may truthfully change only among `available`, `partial`,
   `pruned`, and `unknown`; the declarations themselves remain present.
-- No restart converts a declaration into a resolution or recurrence claim.
+- No restart converts a declaration into a resolution claim or fabricates a
+  recurrence observation.
 - MCP still exposes exactly six read-only tools and no fix-history, record,
   retract, replay, recurrence, write, or remediation tool.
 - The old tokenized browser URL is not used as the restarted launch credential.
@@ -547,6 +549,122 @@ Evidence:
 - Keychain/database reuse evidence:
 - Offline history screenshot:
 - Post-restart MCP tool lists:
+- Notes/defect:
+
+## A07h — P0-04 exact recurrence monitoring
+
+Precondition: use a disposable project and a sanitized stable Belay-origin issue
+with current analysis and a deterministic command-failure fingerprint. Do not
+rerun a destructive command, use a real secret, edit SQLite directly, or treat
+a matching observation as proof that a fix failed.
+
+Procedure:
+
+1. Record an active `code_change` fix-attempt declaration for the issue and
+   record its annotation ID and `monitor_from`.
+2. Open **After attempts** and preserve the top-level monitoring response.
+3. Open the issue's monitoring detail and preserve its
+   `monitoring_view_cursor`, attempt `observation_view_cursor`, coverage, and
+   initial state.
+4. In a disposable directory, run the same harmless failing command through a
+   launch-validated harness after `monitor_from`; wait for live import and
+   analysis.
+5. Refresh monitoring, open the attempt, then open its recurrence evidence.
+6. Fetch any returned retained event IDs through
+   `/v1/sessions/{session_id}/events/lookup` using only repeated `event_id`
+   parameters.
+7. Retract the attempt and compare default monitoring with
+   `include_retracted=true`.
+
+Pass criteria:
+
+- Initial monitoring is neutral: `awaiting_later_evidence`,
+  `monitoring_incomplete`, or `comparison_unavailable` as supported by the
+  captured coverage. It never says fixed, successful, prevented, or safe.
+- The later exact compatible occurrence changes the attempt to
+  `matching_evidence_observed` and adds exactly one durable observation; replay
+  or reanalysis does not duplicate it.
+- The observation distinguishes `same_session_as_anchor`, reports immutable
+  citation count, bounded retained UUIDv7 event IDs, retained/missing counts,
+  truncation, and evidence state.
+- Browser wording describes a match as attention evidence, not proof that the
+  attempted fix failed or that two sessions share a semantic root cause.
+- `historical_matching_evidence_count` aggregates qualifying post-baseline
+  observations across all attempts for the issue, including retracted attempts.
+  It remains separate from the driving attempt's own `fix_recurrence_count`.
+- After retraction, the issue is absent from the default active list unless
+  another active attempt exists. `include_retracted=true` preserves the
+  all-retracted history with zero active/observed-attempt counts.
+- Unknown evidence returns an empty event-ID array and null retained/missing/
+  truncation fields; it is never converted to available evidence.
+- No monitoring request reaches a non-loopback origin.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Sanitized issue/annotation/recurrence IDs:
+- Initial and final monitoring responses:
+- Observation and exact event-lookup responses:
+- Browser screenshots/network recording:
+- Notes/defect:
+
+## A07i — P0-04 catch-up, restart, retention, and isolation
+
+Use the approved sanitized upgrade/catch-up and retention fixtures. Do not
+change monitoring metadata, projection tables, clocks, or retention generation
+with an ad-hoc SQLite client.
+
+Procedure:
+
+1. Start Local on the upgrade fixture and immediately request
+   `/v1/fix-monitoring` plus representative pre-existing session, Attention,
+   fix-history, and health routes.
+2. Record the monitoring readiness response, wait for background analysis then
+   recurrence catch-up, and retry without changing the initial request shape.
+3. Stop Local during a separate catch-up run, restart with the same database and
+   Keychain provider, and wait for convergence.
+4. On the retained-history fixture, capture a list view cursor, detail view
+   cursor, observation view cursor, and at least one continuation cursor.
+5. Stop and restart Local, verify the durable observation/history, then apply
+   the approved retention fixture transition and retry the old cursors.
+6. Refresh without cursors and inspect degraded evidence plus MCP tools.
+
+Pass criteria:
+
+- HTTP starts before background catch-up. During catch-up, only the three
+  monitoring routes return fixed `503
+  belay.local/monitoring-catchup-in-progress`; health, sessions, Attention, and
+  fix history remain available.
+- A failed catch-up returns only fixed `503
+  belay.local/monitoring-catchup-failed`, no internal diagnostic or stored
+  value, and a due retry or restart transitions back through catching-up to
+  ready.
+- Cancellation leaves durable work retryable and is not reported as a false
+  failed state.
+- After readiness, list → detail → observation view handoff preserves one
+  snapshot. Continuations preserve original filters and page size with no
+  equal-time loss or duplication.
+- Close/reopen with the same database and key preserves recurrence IDs,
+  attempt/retraction state, counts, and positive observations.
+- Old monitoring cursors return `410 belay.local/cursor-expired` after the
+  approved retention-generation transition. A fresh read may report
+  `partial`, `pruned`, or `unknown` evidence without deleting the durable
+  observation.
+- History-only detail returns `current_issue_available=false` and
+  `current_issue=null`.
+- MCP still exposes exactly six read-only tools and no monitoring repository,
+  fix, recurrence, write, or remediation tool.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Catch-up/failed/recovery responses:
+- Existing-route availability during catch-up:
+- Restart persistence responses:
+- Retention 410 and fresh degraded-evidence responses:
+- MCP tool lists:
 - Notes/defect:
 
 ## A08 — Explicit live hooks: Codex
@@ -782,6 +900,8 @@ Evidence:
 | A07e Injection rendering | PASS | | |
 | A07f Fix declaration/retraction | PASS | | |
 | A07g Fix restart/MCP isolation | PASS | | |
+| A07h Exact recurrence monitoring | PASS | | |
+| A07i Monitoring catch-up/restart/retention | PASS | | |
 | A08 Codex hooks | PASS | | |
 | A09 Claude hooks | PASS | | |
 | A10 MCP | PASS | | |

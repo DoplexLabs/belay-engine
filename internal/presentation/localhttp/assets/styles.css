@@ -376,7 +376,7 @@ select:focus-visible {
 .attention-filters select,
 .attention-filters input[type="text"] {
   width: 100%;
-  height: 38px;
+  height: 44px;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -436,6 +436,80 @@ select:focus-visible {
 .attention-filter-footer {
   padding-bottom: 8px;
   border-bottom: 0;
+}
+
+.monitoring-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0 13px 10px;
+}
+
+.monitoring-filters label > span {
+  display: block;
+  margin: 0 0 4px 2px;
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.monitoring-filters select,
+.monitoring-filters input[type="text"],
+.monitoring-filters input[type="datetime-local"] {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.monitoring-checkbox {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.monitoring-checkbox > span {
+  margin: 0;
+}
+
+.monitoring-checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.monitoring-filter-footer {
+  grid-column: 1 / -1;
+  padding: 0;
+}
+
+.monitoring-status {
+  margin: 0 13px 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.monitoring-status[data-tone="error"] {
+  border-color: rgba(255, 125, 118, 0.28);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .refresh-notice {
@@ -582,6 +656,23 @@ select:focus-visible {
 .issue-code {
   color: var(--subtle);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.monitoring-state-title {
+  display: block;
+  margin-top: 9px;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.monitoring-card .issue-card-main[data-monitoring-tone="attention"] {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.monitoring-card .issue-card-main[data-monitoring-tone="pending"] {
+  box-shadow: inset 3px 0 0 var(--subtle);
 }
 
 .severity-badge,
@@ -978,6 +1069,43 @@ select:focus-visible {
   margin: 9px 0;
 }
 
+.fix-monitoring-state {
+  margin: 9px 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.fix-monitoring-state[data-tone="attention"] {
+  border-color: rgba(244, 199, 104, 0.24);
+  background: var(--warning-soft);
+}
+
+.fix-monitoring-state strong,
+.fix-monitoring-state p {
+  display: block;
+}
+
+.fix-monitoring-state strong {
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.fix-monitoring-state p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.fix-monitoring-caveat {
+  margin: 9px 0 0;
+  color: var(--warning);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .fix-history-metadata {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1022,6 +1150,39 @@ select:focus-visible {
 .fix-evidence-evaluated {
   margin: 10px 0 0;
   color: var(--subtle);
+}
+
+.fix-observation-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+
+.fix-observation-card {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  scroll-margin: 16px;
+}
+
+.fix-observation-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fix-observation-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.fix-observation-header strong {
+  font-size: 10px;
 }
 
 .matching-section {
@@ -2462,8 +2623,13 @@ h1 {
   }
 
   .attention-filter-row,
-  .advanced-filter-grid {
+  .advanced-filter-grid,
+  .monitoring-filters {
     grid-template-columns: 1fr;
+  }
+
+  .monitoring-filter-footer {
+    grid-column: 1;
   }
 
   .issue-metadata {
@@ -2607,6 +2773,11 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .fix-observation-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .modal-layer {
     padding: 12px;
   }
@@ -2627,6 +2798,10 @@ h1 {
   .attention-filter-row,
   .advanced-filter-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .monitoring-filters {
+    grid-template-columns: 1fr;
   }
 
   .timeline-header {

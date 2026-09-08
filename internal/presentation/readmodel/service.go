@@ -39,10 +39,12 @@ const (
 )
 
 var (
-	ErrInvalidCursor  = errors.New("invalid read cursor")
-	ErrInvalidRequest = errors.New("invalid read request")
-	ErrCursorExpired  = errors.New("read cursor expired")
-	ErrNotFound       = errors.New("read resource not found")
+	ErrInvalidCursor           = errors.New("invalid read cursor")
+	ErrInvalidRequest          = errors.New("invalid read request")
+	ErrCursorExpired           = errors.New("read cursor expired")
+	ErrNotFound                = errors.New("read resource not found")
+	ErrMonitoringCatchingUp    = errors.New("fix monitoring catch-up is in progress")
+	ErrMonitoringCatchupFailed = errors.New("fix monitoring catch-up failed")
 
 	issueIDPattern       = regexp.MustCompile(`^iss_[a-z2-7]{52}$`)
 	fingerprintIDPattern = regexp.MustCompile(`^ifp_[a-z2-7]{52}$`)
@@ -70,10 +72,26 @@ type IssueRepository interface {
 	) (model.EventLookupResult, error)
 }
 
+type FixMonitoringRepository interface {
+	QueryFixMonitoring(
+		context.Context,
+		model.FixMonitoringQuery,
+	) (model.FixMonitoringPage, error)
+	QueryIssueFixMonitoring(
+		context.Context,
+		model.FixMonitoringDetailQuery,
+	) (model.FixMonitoringDetailPage, error)
+	QueryFixRecurrenceObservations(
+		context.Context,
+		model.FixRecurrenceObservationQuery,
+	) (model.FixRecurrenceObservationPage, error)
+}
+
 type Service struct {
-	repository      Repository
-	issueRepository IssueRepository
-	now             func() time.Time
+	repository              Repository
+	issueRepository         IssueRepository
+	fixMonitoringRepository FixMonitoringRepository
+	now                     func() time.Time
 }
 
 type Option func(*Service)
@@ -81,6 +99,12 @@ type Option func(*Service)
 func WithIssueRepository(repository IssueRepository) Option {
 	return func(service *Service) {
 		service.issueRepository = repository
+	}
+}
+
+func WithFixMonitoringRepository(repository FixMonitoringRepository) Option {
+	return func(service *Service) {
+		service.fixMonitoringRepository = repository
 	}
 }
 
@@ -226,6 +250,7 @@ type IssueDetail struct {
 	SchemaVersion     string          `json:"schema_version"`
 	ProjectionVersion string          `json:"projection_version"`
 	Data              IssueDetailData `json:"data"`
+	ViewCursor        string          `json:"view_cursor"`
 	NextCursor        *string         `json:"next_cursor"`
 	HasMore           bool            `json:"has_more"`
 	ReturnedCount     int             `json:"returned_count"`
@@ -761,6 +786,16 @@ func (s *Service) GetIssue(
 	if err != nil {
 		return IssueDetail{}, err
 	}
+	viewCursor, err := encodeCursor(cursorEnvelope{
+		Version:     cursorVersion,
+		Kind:        "issue_view",
+		Snapshot:    summaryPage.Snapshot,
+		Fingerprint: issueViewFingerprint(),
+		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return IssueDetail{}, err
+	}
 	return IssueDetail{
 		SchemaVersion:     SchemaVersion,
 		ProjectionVersion: IssueProjectionVersion,
@@ -768,6 +803,7 @@ func (s *Service) GetIssue(
 			Issue:       summary,
 			Occurrences: nonNil(occurrences),
 		},
+		ViewCursor:    viewCursor,
 		NextCursor:    nextCursor,
 		HasMore:       hasMore,
 		ReturnedCount: len(occurrences),

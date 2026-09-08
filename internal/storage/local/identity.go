@@ -29,6 +29,9 @@ const (
 	fixActionTokenKeyDomain          = "belay.local.fix-action-token.v1"
 	fixRetractionIDKeyDomain         = "belay.local.fix-retraction.v1"
 	fixRetractionRequestKeyDomain    = "belay.local.fix-retraction-request.v1"
+	fixRecurrenceIDKeyDomain         = "belay.local.fix-recurrence-id.v1"
+	fixRecurrenceJobIDKeyDomain      = "belay.local.fix-recurrence-job-id.v1"
+	legacySessionScopeKeyDomain      = "belay.local.legacy-session-scope.v1"
 )
 
 var opaqueBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -165,6 +168,45 @@ func (s *Store) deriveFixRetractionRequestFingerprint(
 			string(reason),
 			recordedVia,
 		}),
+	)
+}
+
+func (s *Store) deriveFixRecurrenceID(
+	annotationID string,
+	occurrenceID string,
+) (string, error) {
+	if !validFixAnnotationID(annotationID) || occurrenceID == "" {
+		return "", errors.New("invalid recurrence identity")
+	}
+	return s.deriveOpaqueID(
+		fixRecurrenceIDKeyDomain,
+		"fxo_",
+		lengthPrefixed([]string{annotationID, occurrenceID}),
+	)
+}
+
+func (s *Store) deriveFixRecurrenceJobID(
+	sessionID string,
+	projectionGeneration int64,
+) (string, error) {
+	if sessionID == "" || projectionGeneration < 1 {
+		return "", errors.New("invalid recurrence job identity")
+	}
+	return s.deriveOpaqueID(
+		fixRecurrenceJobIDKeyDomain,
+		"fxj_",
+		lengthPrefixed([]string{sessionID, fmt.Sprint(projectionGeneration)}),
+	)
+}
+
+func (s *Store) deriveLegacySessionScopeID(sessionID string) (string, error) {
+	if sessionID == "" {
+		return "", errors.New("legacy session scope requires a session")
+	}
+	return s.deriveOpaqueID(
+		legacySessionScopeKeyDomain,
+		"psc_",
+		lengthPrefixed([]string{sessionID}),
 	)
 }
 
