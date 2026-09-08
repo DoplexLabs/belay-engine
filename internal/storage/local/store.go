@@ -405,7 +405,9 @@ func (s *Store) RecordDiagnostic(ctx context.Context, runID string, line int64, 
 }
 
 func (s *Store) ListSessions(ctx context.Context, limit int) ([]model.SessionSummary, time.Time, error) {
-	if limit <= 0 || limit > 100 {
+	// The read model requests one row beyond the public maximum so it can
+	// truthfully report whether a bounded response omits additional sessions.
+	if limit <= 0 || limit > 101 {
 		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx, `
@@ -416,8 +418,14 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]model.SessionSum
 			MAX(occurred_at),
 			COUNT(*),
 			CASE
-				WHEN SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) > 0 THEN 'failed'
-				WHEN SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) > 0 THEN 'succeeded'
+				WHEN SUM(CASE WHEN event_type = 'session.end' THEN 1 ELSE 0 END) = 0
+					THEN 'incomplete'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'failed' THEN 1 ELSE 0 END) > 0
+					THEN 'failed'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'interrupted' THEN 1 ELSE 0 END) > 0
+					THEN 'interrupted'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'succeeded' THEN 1 ELSE 0 END) > 0
+					THEN 'succeeded'
 				ELSE 'unknown'
 			END,
 			MAX(historical)
@@ -472,8 +480,14 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (model.Session
 			MAX(occurred_at),
 			COUNT(*),
 			CASE
-				WHEN SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) > 0 THEN 'failed'
-				WHEN SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) > 0 THEN 'succeeded'
+				WHEN SUM(CASE WHEN event_type = 'session.end' THEN 1 ELSE 0 END) = 0
+					THEN 'incomplete'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'failed' THEN 1 ELSE 0 END) > 0
+					THEN 'failed'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'interrupted' THEN 1 ELSE 0 END) > 0
+					THEN 'interrupted'
+				WHEN SUM(CASE WHEN event_type = 'session.end' AND outcome = 'succeeded' THEN 1 ELSE 0 END) > 0
+					THEN 'succeeded'
 				ELSE 'unknown'
 			END,
 			MAX(historical)
@@ -501,7 +515,9 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (model.Session
 }
 
 func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit int) ([]model.Event, time.Time, error) {
-	if limit <= 0 || limit > 500 {
+	// As with session lists, permit one private look-ahead row beyond the
+	// public maximum so presentation adapters can expose truncation.
+	if limit <= 0 || limit > 501 {
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `

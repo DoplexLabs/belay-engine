@@ -117,13 +117,7 @@ func runLocal(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		fmt.Fprintln(stderr, "belay local: live records will be retried")
 	}
 	if *installHooks {
-		results, hookErr := localapp.ManageHooks(ctx, runtime.client, runtime.paths, "install")
-		if err := writeJSON(stderr, results); err != nil {
-			return err
-		}
-		if hookErr != nil {
-			return hookErr
-		}
+		onboardLocalHooks(ctx, runtime.client, runtime.paths, stderr)
 	}
 	token, err := localhttp.NewLaunchToken()
 	if err != nil {
@@ -153,6 +147,21 @@ func runLocal(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}()
 	}
 	return running.Wait()
+}
+
+func onboardLocalHooks(
+	ctx context.Context,
+	client *numbat.Client,
+	paths localapp.Paths,
+	stderr io.Writer,
+) {
+	results, hookErr := localapp.ManageHooks(ctx, client, paths, "install")
+	if err := writeJSON(stderr, results); err != nil {
+		fmt.Fprintln(stderr, "belay local: hook onboarding results could not be reported; Local remains available")
+	}
+	if hookErr != nil {
+		fmt.Fprintln(stderr, "belay local: hook onboarding incomplete; Local remains available")
+	}
 }
 
 func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error {

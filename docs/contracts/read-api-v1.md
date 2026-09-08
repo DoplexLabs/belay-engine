@@ -28,7 +28,7 @@ side door.
 ## Common response rules
 
 - JSON only in V1.
-- Cursor pagination with deterministic order.
+- Production cursor pagination with deterministic order remains required.
 - Bounded default and maximum page sizes.
 - Explicit `schema_version`, projection/metric versions, and
   coverage/confidence where values are derived.
@@ -43,9 +43,38 @@ List response:
   "schema_version": "belay.read.v1",
   "data": [],
   "next_cursor": null,
+  "has_more": false,
+  "returned_count": 0,
+  "limit": 20,
   "data_through": "2026-09-08T18:12:45Z"
 }
 ```
+
+The Local developer preview adds `has_more`, `returned_count`, and `limit` to
+session-list and session-event responses:
+
+- `returned_count` is the number of rows in `data`.
+- `limit` is the effective bounded request limit.
+- `has_more=true` means additional rows exist or completeness cannot be proven
+  after bounded filtering.
+- `next_cursor` is explicitly `null` because cursor paging is not implemented
+  in the Local preview.
+
+The Local browser currently expands bounded limits and uses one-row look-ahead
+to expose truncation. It does not provide production cursor pagination. Local
+MCP recalculates this metadata after applying `list_sessions` filters and keeps
+`has_more=true` when the underlying bounded page reports more rows.
+
+## Session projection outcomes
+
+Session summaries use projection outcomes. `incomplete` means no
+`session.end` terminal evidence was observed and must not be interpreted as
+success. Completed projections preserve `succeeded`, `failed`, `interrupted`,
+or `unknown` from terminal evidence.
+
+`incomplete` is a session-projection state only. It does not extend the
+canonical event outcome enum, which remains `succeeded`, `failed`,
+`interrupted`, or `unknown`.
 
 ## Authentication
 

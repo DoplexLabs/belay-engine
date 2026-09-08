@@ -148,7 +148,8 @@ func (s *Server) listSessions(
 	if err != nil {
 		return nil, zero, safeReadError(err)
 	}
-	filtered := make([]model.SessionSummary, 0, len(response.Data))
+	filtered := make([]model.SessionSummary, 0, min(limit, len(response.Data)))
+	hasAdditionalMatch := false
 	for _, session := range response.Data {
 		if since != nil && session.EndedAt.Before(*since) {
 			continue
@@ -159,12 +160,17 @@ func (s *Server) listSessions(
 		if input.Outcome != "" && !strings.EqualFold(session.Outcome, input.Outcome) {
 			continue
 		}
-		filtered = append(filtered, session)
 		if len(filtered) == limit {
+			hasAdditionalMatch = true
 			break
 		}
+		filtered = append(filtered, session)
 	}
 	response.Data = filtered
+	response.ReturnedCount = len(filtered)
+	response.Limit = limit
+	response.HasMore = response.HasMore || hasAdditionalMatch
+	response.NextCursor = nil
 	return structuredResult(), wrap(response), nil
 }
 

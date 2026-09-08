@@ -1,165 +1,142 @@
 # Belay Engine
 
-Belay is endpoint-first observability for AI agents.
+Belay Local is private, endpoint-first observability for developers using
+multiple AI agent harnesses. It reconstructs minimized local activity into one
+timeline and exposes the same evidence through a loopback browser and read-only
+MCP.
 
-This repository is the planned public Belay edge: the wrapper around a pinned,
-unmodified Numbat release, the local event store, Belay Local timeline, Local
-read-only MCP server, and the optional Belay Teams uploader.
+This repository contains the public Belay edge. Belay Teams is separate and is
+not part of the individual-developer preview.
 
-Belay Teams is a separate hosted product. Its closed-source control plane will
-live in a separate private repository and consume the public, versioned
-contracts published here.
+## Belay Local
 
-## Product boundaries
+- One machine, accountless, and usable offline
+- No product telemetry or Belay model calls
+- Encrypted local SQLite storage backed by macOS Keychain
+- Historical and explicitly enabled live collection through pristine Numbat
+- Loopback-only browser with a per-launch token
+- Six read-only MCP tools
+- Launch-validated with Codex and Claude Code
 
-### Belay Local
+Belay never sits in the agent action path. It does not provide write-capable
+MCP, enforcement, remediation, fix recording, or recurrence registration.
 
-- Free, one machine, and accountless.
-- Works without a network connection.
-- Sends no product telemetry.
-- Stores only minimized, locally redacted normalized events.
-- Provides a local timeline and read-only MCP.
-- Makes no model calls.
+## Unsigned developer preview
 
-### Belay Teams
+The current community launch is an **unsigned, unnotarized developer preview**
+for individual macOS users. It is not a production release or installer.
 
-- Enabled only through explicit workspace enrollment.
-- Uploads minimized, locally redacted normalized events—not raw prompts,
-  transcripts, secrets, or fingerprint-only substitutes.
-- Adds fleet state, shared timelines, workflow statistics, attended minutes,
-  alerts, exports, and hosted APIs.
-- Makes no Belay-owned or Belay-orchestrated model calls in V1.
+Supported targets:
 
-### Explicitly not V1
+- `darwin/arm64` — Apple Silicon
+- `darwin/amd64` — Intel Mac
 
-- Write-capable MCP
-- Fix execution or fix recording
-- Recurrence registration
-- Prevention or blocking guarantees
-- Customer instrumentation SDKs
-- Cross-customer learning corpora
-- Backstop runtime integration
+Go 1.27 is required to build from source. The preview packages Belay with the
+exact approved, unmodified Numbat research commit:
 
-## Source of truth
-
-Product and architecture precedence:
-
-1. Belay BRD v2.2 (internal)
-2. Belay HLD v1.1 (internal)
-3. Doplex PRFAQ v3 (internal; pending alignment)
-4. The landing-page repository, as a visual and acquisition-story reference
-
-The PRFAQ and landing page still require a later copy-alignment pass. They do
-not override the BRD or HLD.
-
-## Implementation kickoff
-
-The repository is currently in M0: contracts, dependency validation, local
-storage, and Teams ingest foundations.
-
-Start with:
-
-- [`docs/implementation/implementation-plan.md`](docs/implementation/implementation-plan.md)
-- [`docs/implementation/numbat-adapter-spike.md`](docs/implementation/numbat-adapter-spike.md)
-- [`docs/decisions/0001-stack-and-repository-boundaries.md`](docs/decisions/0001-stack-and-repository-boundaries.md)
-- [`docs/storage/local-storage-lifecycle.md`](docs/storage/local-storage-lifecycle.md)
-- [`docs/contracts/event-envelope-v1.md`](docs/contracts/event-envelope-v1.md)
-- [`docs/contracts/transmitted-fields-v1.md`](docs/contracts/transmitted-fields-v1.md)
-- [`docs/contracts/teams-ingest-v1.md`](docs/contracts/teams-ingest-v1.md)
-- [`docs/contracts/read-api-v1.md`](docs/contracts/read-api-v1.md)
-- [`docs/contracts/mcp-v1.md`](docs/contracts/mcp-v1.md)
-
-The M0 foundation now includes strict Numbat ingestion, encrypted Local
-persistence, explicit Local retention primitives, and the Teams ingest
-contracts. The Local launch branch adds automatic agent inventory/backfill,
-monitor-only live hooks, a loopback browser, and read-only MCP. It remains a
-developer preview until licensing, the production Numbat pin, and signed
-macOS packaging are resolved.
-
-## Belay Local developer preview
-
-Current launch validation covers Codex and Claude Code. Stock Numbat may report
-additional parser-backed agents, but Belay labels those as upstream-supported
-until they have Belay end-to-end fixtures.
-
-Prerequisites:
-
-- macOS
-- Go 1.27
-- A stock Numbat binary built from the recorded research commit
-  `f0778c09dc48281aa93a3887d05096c0a1f3f9f7`
-
-Build Belay:
-
-```bash
-CGO_ENABLED=0 go build -trimpath -o ./bin/belay ./cmd/belay
+```text
+f0778c09dc48281aa93a3887d05096c0a1f3f9f7
 ```
 
-Build the currently approved research Numbat dependency from its unmodified
-checkout:
+### Build and package
+
+From a clean checkout:
 
 ```bash
-git clone https://github.com/perplexityai/numbat.git
-git -C numbat checkout f0778c09dc48281aa93a3887d05096c0a1f3f9f7
-CGO_ENABLED=0 go -C numbat build -trimpath -o ../bin/numbat ./cmd/numbat
+make verify
+make preview PREVIEW_VERSION=0.0.1-dev.1 PREVIEW_ARCH=native
+```
+
+Build both macOS architectures:
+
+```bash
+make preview-all PREVIEW_VERSION=0.0.1-dev.1
+```
+
+The build remains local. It does not sign, notarize, publish, tag, deploy, or
+create a GitHub Release. Generated `/dist/` and `/bin/` directories are ignored
+so a normal preview build does not dirty a clean checkout.
+
+### Verify the archive
+
+```bash
+(
+  cd dist
+  shasum -a 256 -c \
+    belay-local-developer-preview-v0.0.1-dev.1-darwin-arm64.tar.gz.sha256
+)
+
+scripts/smoke-developer-preview.sh \
+  dist/belay-local-developer-preview-v0.0.1-dev.1-darwin-arm64.tar.gz
+```
+
+Use the archive matching your Mac's architecture. See
+[`docs/launch/developer-preview.md`](docs/launch/developer-preview.md) for
+Gatekeeper instructions, MCP configuration, offline behavior, uninstall steps,
+known limitations, and the exact archive contract.
+
+## Run Belay Local
+
+After verifying and extracting the archive:
+
+```bash
+cd belay-local-developer-preview-v0.0.1-dev.1-darwin-arm64
 NUMBAT_SHA256="$(shasum -a 256 ./bin/numbat | awk '{print $1}')"
-```
 
-Start the offline Local browser and scan discovered Codex/Claude history:
-
-```bash
 ./bin/belay local \
   --numbat ./bin/numbat \
-  --numbat-sha256 "$NUMBAT_SHA256" \
-  --numbat-version-marker "f0778c09dc48"
+  --numbat-sha256 "${NUMBAT_SHA256}" \
+  --numbat-version-marker f0778c09dc48
 ```
 
-The command prints a loopback URL containing an ephemeral launch token. Belay
-stores no browser token in the database or logs.
-
-Live monitoring is explicit and monitor-only:
+The command initializes private state under `${BELAY_HOME:-~/.belay}`, scans
+supported history, and prints a loopback browser URL. Hook installation remains
+explicit:
 
 ```bash
 ./bin/belay hooks install
 ./bin/belay hooks status
 ```
 
-Belay never passes Numbat enforcement, HTTP delivery, full-content, or reasoning
-capture options. Hook installation changes supported agent configuration and
-therefore never happens unless the user asks for it.
-
-Configure an agent to run the Local MCP server over stdio:
+Run the read-only MCP server over stdio:
 
 ```bash
 ./bin/belay mcp
 ```
 
-The MCP server exposes exactly six read-only tools: `list_sessions`,
-`get_session`, `get_session_timeline`, `query_activity`, `list_findings`, and
-`get_stats`.
+The six tools are `list_sessions`, `get_session`, `get_session_timeline`,
+`query_activity`, `list_findings`, and `get_stats`.
 
-Additional commands:
+## Build integrity and licenses
+
+The packaging script:
+
+- refuses a dirty or wrong Numbat checkout;
+- verifies exact upstream license hashes;
+- builds Belay and Numbat with `CGO_ENABLED=0`, `-trimpath`, and no VCS build
+  stamping;
+- includes both binaries, Belay's Apache-2.0 license, and Numbat's exact license
+  and third-party attribution;
+- creates internal `SHA256SUMS` plus an archive checksum;
+- emits deterministic archive metadata from `SOURCE_DATE_EPOCH`.
+
+Belay is licensed under Apache-2.0. Numbat attribution is vendored under
+[`licenses/numbat`](licenses/numbat).
+
+## Development
 
 ```bash
-./bin/belay agents
-./bin/belay scan
-./bin/belay doctor
-./bin/belay hooks uninstall
+make verify
 ```
 
-See [`docs/launch/local-v0-requirements.md`](docs/launch/local-v0-requirements.md)
-for the launch contract and known blockers.
+The normal CI workflow tests and builds `main`. The separate developer-preview
+workflow is manual-only and uploads short-lived workflow artifacts; it contains
+no release or publishing step.
 
-## Non-negotiable implementation rules
+Architecture and contract references:
 
-1. Numbat is pinned and unmodified and is consumed through its versioned NDJSON
-   process boundary.
-2. Belay never sits in the agent action path.
-3. Collection failure must not affect the harness.
-4. Disclosure failure is fail-closed: unsafe events are not stored or sent.
-5. Local works without an account or hosted dependency.
-6. Teams upload starts only after affirmative enrollment.
-7. Historical Local data requires separate consent before Teams import.
-8. Every timeline row remains traceable to an immutable event ID.
-9. Derived metrics carry version, coverage, and confidence.
-10. The dashboard, MCP adapters, and integrations share one read contract.
+- [`docs/launch/local-v0-requirements.md`](docs/launch/local-v0-requirements.md)
+- [`docs/contracts/event-envelope-v1.md`](docs/contracts/event-envelope-v1.md)
+- [`docs/contracts/read-api-v1.md`](docs/contracts/read-api-v1.md)
+- [`docs/contracts/mcp-v1.md`](docs/contracts/mcp-v1.md)
+- [`docs/storage/local-storage-lifecycle.md`](docs/storage/local-storage-lifecycle.md)

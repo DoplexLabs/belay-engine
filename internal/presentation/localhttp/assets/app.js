@@ -1,12 +1,21 @@
 (() => {
   "use strict";
 
+  const pageLimits = Object.freeze({
+    sessions: { initial: 20, step: 20, maximum: 100 },
+    events: { initial: 100, step: 100, maximum: 500 },
+  });
   const config = globalThis.BELAY_LOCAL_CONFIG || {};
   const state = {
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
     sessions: [],
+    sessionLimit: pageLimits.sessions.initial,
+    sessionHasMore: false,
     selectedSessionID: "",
+    selectedEventTotal: 0,
+    eventLimit: pageLimits.events.initial,
+    eventHasMore: false,
     activeFilter: "all",
     search: "",
     lastAction: "sessions",
@@ -18,6 +27,9 @@
     sessionSearch: document.querySelector("#session-search"),
     filterChips: Array.from(document.querySelectorAll(".filter-chip")),
     sessionList: document.querySelector("#session-list"),
+    sessionsPagination: document.querySelector("#sessions-pagination"),
+    sessionsPageStatus: document.querySelector("#sessions-page-status"),
+    sessionsLoadMore: document.querySelector("#sessions-load-more"),
     sessionsLoading: document.querySelector("#sessions-loading"),
     sessionsEmpty: document.querySelector("#sessions-empty"),
     welcomeState: document.querySelector("#welcome-state"),
@@ -33,6 +45,9 @@
     selectedEndedAt: document.querySelector("#selected-ended-at"),
     timelineFreshness: document.querySelector("#timeline-freshness"),
     eventList: document.querySelector("#event-list"),
+    eventsPagination: document.querySelector("#events-pagination"),
+    eventsPageStatus: document.querySelector("#events-page-status"),
+    eventsLoadMore: document.querySelector("#events-load-more"),
     timelineLoading: document.querySelector("#timeline-loading"),
     eventsEmpty: document.querySelector("#events-empty"),
     errorBanner: document.querySelector("#error-banner"),
@@ -46,6 +61,8 @@
 
   function bindEvents() {
     elements.refreshButton.addEventListener("click", () => loadSessions(true));
+    elements.sessionsLoadMore.addEventListener("click", loadMoreSessions);
+    elements.eventsLoadMore.addEventListener("click", loadMoreEvents);
     elements.backButton.addEventListener("click", closeTimeline);
     elements.errorRetry.addEventListener("click", retryLastAction);
 
@@ -78,12 +95,19 @@
     elements.sessionsEmpty.hidden = true;
     elements.sessionList.hidden = true;
     elements.refreshButton.disabled = true;
+    elements.sessionsLoadMore.disabled = true;
 
     try {
-      const response = await apiGet("/v1/sessions");
+      const response = await apiGet(
+        `/v1/sessions?limit=${encodeURIComponent(state.sessionLimit)}`,
+      );
       state.sessions = Array.isArray(response.data) ? response.data : [];
-      elements.sessionCount.textContent = String(state.sessions.length);
+      state.sessionHasMore = response.has_more === true;
+      elements.sessionCount.textContent = state.sessionHasMore
+        ? `${state.sessions.length}+`
+        : String(state.sessions.length);
       renderSessions();
+      renderSessionPagination();
 
       if (
         preserveSelection &&
@@ -92,18 +116,35 @@
           (session) => readText(session.session_id) === state.selectedSessionID,
         )
       ) {
-        await selectSession(state.selectedSessionID);
+        await selectSession(state.selectedSessionID, true);
       }
     } catch (error) {
       state.sessions = [];
+      state.sessionHasMore = false;
       elements.sessionCount.textContent = "—";
       renderSessions();
+      renderSessionPagination();
       showError("Unable to load sessions", error);
     } finally {
       elements.sessionsLoading.hidden = true;
       elements.sessionList.hidden = false;
       elements.refreshButton.disabled = false;
+      elements.sessionsLoadMore.disabled = false;
     }
+  }
+
+  function loadMoreSessions() {
+    if (
+      !state.sessionHasMore ||
+      state.sessionLimit >= pageLimits.sessions.maximum
+    ) {
+      return;
+    }
+    state.sessionLimit = Math.min(
+      pageLimits.sessions.maximum,
+      state.sessionLimit + pageLimits.sessions.step,
+    );
+    loadSessions(false);
   }
 
   function renderSessions() {
@@ -121,6 +162,27 @@
     if (state.sessions.length === 0 && elements.sessionsLoading.hidden) {
       elements.sessionsEmpty.hidden = false;
     }
+  }
+
+  function renderSessionPagination() {
+    const atMaximum = state.sessionLimit >= pageLimits.sessions.maximum;
+    const expanded = state.sessionLimit > pageLimits.sessions.initial;
+    elements.sessionsPagination.hidden = !state.sessionHasMore && !expanded;
+    elements.sessionsLoadMore.hidden = !state.sessionHasMore || atMaximum;
+
+    if (state.sessionHasMore && atMaximum) {
+      elements.sessionsPageStatus.textContent =
+        `Showing the first ${state.sessions.length} sessions. ` +
+        "Additional older sessions exist beyond the browser limit.";
+      return;
+    }
+    if (state.sessionHasMore) {
+      elements.sessionsPageStatus.textContent =
+        `Showing the first ${state.sessions.length} sessions. More are available.`;
+      return;
+    }
+    elements.sessionsPageStatus.textContent =
+      `Showing all ${state.sessions.length} loaded sessions.`;
   }
 
   function sessionMatches(session) {
@@ -168,7 +230,11 @@
       createElement("small", "", compactID(sessionID)),
     );
 
-    const outcomeBadge = createElement("span", "status-badge", outcome);
+    const outcomeBadge = createElement(
+      "span",
+      "status-badge",
+      displayOutcome(outcome),
+    );
     outcomeBadge.dataset.tone = outcome;
     top.append(avatar, title, outcomeBadge);
 
@@ -201,7 +267,7 @@
     return button;
   }
 
-  async function selectSession(sessionID) {
+  async function selectSession(sessionID, preserveEventLimit = false) {
     const session = state.sessions.find(
       (candidate) => readText(candidate.session_id) === sessionID,
     );
@@ -210,6 +276,10 @@
     }
 
     state.selectedSessionID = sessionID;
+    state.selectedEventTotal = toFiniteNumber(session.event_count);
+    if (!preserveEventLimit) {
+      state.eventLimit = pageLimits.events.initial;
+    }
     state.lastAction = "timeline";
     renderSessions();
     renderSessionHeader(session);
@@ -219,31 +289,54 @@
     elements.timelineLoading.hidden = false;
     elements.eventsEmpty.hidden = true;
     elements.eventList.replaceChildren();
+    elements.eventsPagination.hidden = true;
     document.body.classList.add("is-timeline-open");
+
+    await loadTimeline(sessionID);
+  }
+
+  async function loadTimeline(sessionID) {
+    elements.timelineLoading.hidden = false;
+    elements.eventsLoadMore.disabled = true;
 
     try {
       const response = await apiGet(
-        `/v1/sessions/${encodeURIComponent(sessionID)}/events`,
+        `/v1/sessions/${encodeURIComponent(sessionID)}/events?limit=${encodeURIComponent(state.eventLimit)}`,
       );
       if (state.selectedSessionID !== sessionID) {
         return;
       }
 
       const events = Array.isArray(response.data) ? response.data : [];
+      state.eventHasMore = response.has_more === true;
       renderEvents(events);
+      renderEventPagination(events.length);
       elements.timelineFreshness.textContent = formatFreshness(
         response.data_through,
       );
-      elements.selectedEventCount.textContent = String(events.length);
     } catch (error) {
       if (state.selectedSessionID === sessionID) {
+        state.eventHasMore = false;
+        renderEventPagination(0);
         showError("Unable to load this timeline", error);
       }
     } finally {
       if (state.selectedSessionID === sessionID) {
         elements.timelineLoading.hidden = true;
+        elements.eventsLoadMore.disabled = false;
       }
     }
+  }
+
+  function loadMoreEvents() {
+    if (!state.eventHasMore || state.eventLimit >= pageLimits.events.maximum) {
+      return;
+    }
+    state.eventLimit = Math.min(
+      pageLimits.events.maximum,
+      state.eventLimit + pageLimits.events.step,
+    );
+    loadTimeline(state.selectedSessionID);
   }
 
   function renderSessionHeader(session) {
@@ -254,14 +347,12 @@
 
     elements.selectedAvatar.textContent = harnessInitial(harness);
     elements.selectedHarness.textContent = harness;
-    elements.selectedOutcome.textContent = outcome;
+    elements.selectedOutcome.textContent = displayOutcome(outcome);
     elements.selectedOutcome.dataset.tone = outcome;
     elements.selectedHistorical.hidden = !session.historical;
     elements.selectedSessionID.textContent = readText(session.session_id);
     elements.selectedSessionID.title = readText(session.session_id);
-    elements.selectedEventCount.textContent = String(
-      toFiniteNumber(session.event_count),
-    );
+    elements.selectedEventCount.textContent = String(state.selectedEventTotal);
     elements.selectedDuration.textContent = formatDuration(startedAt, endedAt);
     elements.selectedEndedAt.textContent = endedAt
       ? formatRelativeTime(endedAt)
@@ -275,6 +366,27 @@
     events.forEach((event) => fragment.append(createEventRow(event)));
     elements.eventList.replaceChildren(fragment);
     elements.eventsEmpty.hidden = events.length !== 0;
+  }
+
+  function renderEventPagination(returnedCount) {
+    const atMaximum = state.eventLimit >= pageLimits.events.maximum;
+    const expanded = state.eventLimit > pageLimits.events.initial;
+    elements.eventsPagination.hidden = !state.eventHasMore && !expanded;
+    elements.eventsLoadMore.hidden = !state.eventHasMore || atMaximum;
+
+    if (state.eventHasMore && atMaximum) {
+      elements.eventsPageStatus.textContent =
+        `Showing the first ${returnedCount} of ${state.selectedEventTotal} events. ` +
+        "Additional events exist beyond the browser limit.";
+      return;
+    }
+    if (state.eventHasMore) {
+      elements.eventsPageStatus.textContent =
+        `Showing the first ${returnedCount} of ${state.selectedEventTotal} events.`;
+      return;
+    }
+    elements.eventsPageStatus.textContent =
+      `Showing all ${returnedCount} events in this session.`;
   }
 
   function createEventRow(event) {
@@ -309,7 +421,11 @@
     const actor = readableLabel(observation.actor, "");
     const title = actor ? `${action} · ${actor}` : action;
     const eventTitle = createElement("strong", "", title);
-    const outcomeBadge = createElement("span", "status-badge", outcome);
+    const outcomeBadge = createElement(
+      "span",
+      "status-badge",
+      displayOutcome(outcome),
+    );
     outcomeBadge.dataset.tone = outcome;
     const type = createElement(
       "span",
@@ -363,15 +479,19 @@
 
   function closeTimeline() {
     state.selectedSessionID = "";
+    state.selectedEventTotal = 0;
+    state.eventLimit = pageLimits.events.initial;
+    state.eventHasMore = false;
     document.body.classList.remove("is-timeline-open");
     elements.timelineView.hidden = true;
     elements.welcomeState.hidden = false;
+    elements.eventsPagination.hidden = true;
     renderSessions();
   }
 
   function retryLastAction() {
     if (state.lastAction === "timeline" && state.selectedSessionID) {
-      selectSession(state.selectedSessionID);
+      selectSession(state.selectedSessionID, true);
       return;
     }
     loadSessions();
@@ -539,9 +659,13 @@
 
   function normalizeOutcome(value) {
     const outcome = readText(value).toLocaleLowerCase();
-    return ["succeeded", "failed", "interrupted"].includes(outcome)
+    return ["succeeded", "failed", "interrupted", "incomplete"].includes(outcome)
       ? outcome
       : "unknown";
+  }
+
+  function displayOutcome(outcome) {
+    return outcome === "incomplete" ? "Incomplete" : readableLabel(outcome, "Unknown");
   }
 
   function compactID(value) {
