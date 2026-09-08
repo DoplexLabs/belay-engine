@@ -2,7 +2,7 @@
 
 - **Status:** Implemented Local Alpha surface, including Attention,
   P0-03 browser-only fix-attempt actions, P0-04 recurrence-monitoring reads,
-  and the P0-05 shared issue-evidence readmodel
+  the P0-05 shared issue-evidence readmodel, and P0-07 signal-family reads
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -34,6 +34,8 @@ similarity, resolution, prevention, or fix success and are not exposed to MCP.
 | `GET /v1/sessions/{id}/events/lookup` | bounded exact cited-event lookup within one session |
 | `GET /v1/activity` | filtered, cursor-paginated canonical activity |
 | `GET /v1/findings` | filtered, cursor-paginated local findings |
+| `GET /v1/attention-families` | query-time catalog families over one frozen exact-issue snapshot |
+| `GET /v1/attention-families/{family_id}` | bounded same-snapshot exact members of one mapped family |
 | `GET /v1/issues` | filtered, cursor-paginated deterministic issue summaries |
 | `GET /v1/issues/{id}/occurrences` | issue detail and cursor-paginated exact matching sessions |
 | `GET /v1/issues/{id}/fix-eligibility` | snapshot-bound eligibility and signed browser action token |
@@ -308,9 +310,10 @@ Filters select issue groups. Returned counts and aggregate fields continue to
 describe the complete visible group at the snapshot rather than only the
 occurrences that matched a filter.
 
-### Issue occurrence shape
+### Issue occurrence HTTP shape
 
-An issue occurrence represents one exact fingerprint in one session:
+An issue occurrence represents one exact fingerprint in one session. HTTP
+detail uses the privacy-closed `belay.issue.v2` presentation:
 
 ```json
 {
@@ -335,22 +338,178 @@ An issue occurrence represents one exact fingerprint in one session:
   "confidence": "high",
   "scope_quality": "resolved",
   "analysis_status": "current",
-  "analysis_generation": 42,
   "evidence_complete": true,
   "retained_history_only": false,
   "experimental": false,
   "evidence": {
-    "cited_event_ids": ["01890f2e-6d4b-7c8a-9b0c-123456789abc"],
-    "dimensions": ["cmd_..."]
+    "cited_event_ids": ["01890f2e-6d4b-7c8a-9b0c-123456789abc"]
   }
 }
 ```
 
-For `origin=numbat`, `origin_record_id` references the immutable source finding.
-It is omitted for Belay-origin occurrences. `evidence.cited_event_ids` refer to
-canonical events retrievable through the exact session event lookup route.
-Evidence values and opaque dimensions returned with an occurrence are
-untrusted observations.
+`belay.issue.v2` retains exact fingerprint identity, sanitized detector
+provenance, the required-nullable safe source signal code, and cited canonical
+event IDs. It does not expose `origin_record_id`, evidence dimensions,
+analysis generation, private fingerprint scope, or storage fields.
+`evidence.cited_event_ids` refer to canonical events retrievable through the
+exact session event lookup route. MCP continues to use its separate strict
+allowlisted issue projection; this HTTP revision does not change any MCP tool
+or schema.
+
+## Implemented Attention family HTTP contract
+
+Signal families are a read-only catalog rollup over exact issue summaries and
+occurrences visible at one frozen issue snapshot. They do not replace exact
+issue IDs, establish recurrence, infer one project/configuration/root cause, or
+own fix and recurrence actions.
+
+### `GET /v1/attention-families`
+
+Accepted query parameters:
+
+- `limit`: default 20, maximum 100;
+- `cursor`: opaque family-list continuation;
+- `severity`: effective family severity `info`, `low`, `medium`, `high`, or
+  `critical`;
+- `harness`: case-insensitive exact harness match over visible occurrences;
+- `origin`: `belay` or `numbat`;
+- `analysis_status`: `current`, `pending`, `failed`, or `truncated`;
+- `observed_after`: RFC3339 lower bound over visible occurrences;
+- `attention_kind`: `issue` or `evidence_gap`; default `issue`;
+- `experimental`: `stable` or `include`; default `stable`.
+
+A fresh request may contain filters and an explicit limit. A continuation
+contains only `cursor`; the authenticated family cursor recovers all normalized
+filters, effective limit, catalog version, snapshot metadata, and ordering
+position. Category, recurrence, session, and fingerprint filters are
+intentionally not accepted.
+
+Families are ordered by effective severity descending, matched supporting issue
+count descending, last observed descending, then the private internal family
+key ascending. Grouping happens before `LIMIT`.
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "projection_version": "belay.attention-family.v1",
+  "data": [{
+    "family_id": "atf_...",
+    "kind": "mapped_upstream",
+    "representative_issue_id": "iss_...",
+    "attention_kind": "issue",
+    "severity": "low",
+    "confidence": "high",
+    "first_observed_at": "2026-09-08T17:00:00Z",
+    "last_observed_at": "2026-09-08T18:00:00Z",
+    "supporting_issue_count": 10,
+    "occurrence_count": 10,
+    "session_count": 10,
+    "harnesses": ["claude-code"],
+    "scope": {
+      "resolved": 0,
+      "lexical": 0,
+      "unscoped": 10,
+      "conflict": 0
+    },
+    "analysis_status": "current",
+    "evidence_complete": true,
+    "retained_history_only": false,
+    "experimental": false,
+    "catalog": {
+      "catalog_version": "belay.attention-families.v1",
+      "mapping_key": "attention.agent_guardrails_configuration",
+      "mapping_version": "1",
+      "grouping_version": "1",
+      "display_title": "Agent safety confirmations may be disabled",
+      "observation_statement": "A mapped upstream rule reported retained configuration evidence associated with disabled agent safety confirmations.",
+      "caveat": "This does not establish one shared configuration, project, cause, malicious tampering, or an unsafe action.",
+      "next_evidence_action": "inspect_exact_records"
+    },
+    "view_cursor": "opaque-family-view-cursor"
+  }],
+  "analysis": {
+    "current_sessions": 120,
+    "pending_sessions": 0,
+    "failed_sessions": 0,
+    "truncated_sessions": 0,
+    "unscoped_sessions": 10,
+    "analysis_through": "2026-09-08T18:05:01Z",
+    "complete": true
+  },
+  "selection": {
+    "attention_kind": "issue",
+    "experimental": "stable",
+    "includes_evidence_gaps": false,
+    "includes_experimental": false
+  },
+  "next_cursor": null,
+  "has_more": false,
+  "returned_count": 1,
+  "limit": 20
+}
+```
+
+Stable Belay-native issues appear as one-member `exact_issue` families. Their
+row `view_cursor` is an existing exact `issue_view` cursor and the client opens
+the representative issue directly. Only admitted `mapped_upstream` rows use
+family detail. Unknown, unsupported, missing-finding, mixed-version, or
+otherwise incompatible upstream issues remain inspectable through
+`GET /v1/issues` but are absent from default family Attention.
+
+### `GET /v1/attention-families/{family_id}`
+
+Mapped-family detail accepts exactly:
+
+- initial read: required `view_cursor` from the family list and optional
+  `limit`;
+- continuation: `cursor` only.
+
+No-cursor lookup, both cursor forms together, repeated/empty parameters,
+unknown parameters, and limits outside 1 through 100 return `400`. Validation
+order is request syntax (`400`), authenticated cursor/catalog/snapshot and
+retention validity (`410`), then family existence (`404`). An expired snapshot
+therefore never becomes a misleading not-found result.
+
+The response repeats the family summary and returns exact child issue summaries
+ordered by analysis precedence (`failed`, `pending`, `truncated`, `current`),
+then `last_observed_at DESC`, then `issue_id ASC`. Each child includes a
+same-snapshot exact `issue_view` cursor suitable for
+`GET /v1/issues/{id}/occurrences`.
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "projection_version": "belay.attention-family.v1",
+  "data": {
+    "family": {},
+    "members": [{
+      "issue": {},
+      "catalog": {},
+      "view_cursor": "opaque-exact-issue-view-cursor"
+    }]
+  },
+  "global_analysis_coverage": {},
+  "view_cursor": "opaque-family-view-cursor",
+  "next_cursor": null,
+  "has_more": false,
+  "returned_count": 1,
+  "limit": 20
+}
+```
+
+Family detail exposes no mutation, fix, recurrence, or family-level evidence
+hydration action. The developer must select an exact child before using those
+exact-issue capabilities.
+
+### Family cursor semantics
+
+Family list, mapped-family view, and member continuation cursors use a separate
+strict authenticated envelope from exact issue cursor-v2. They bind the
+database epoch, issue snapshot, retention generation, issued-at time,
+normalized filters, attention kind, catalog version, selected family, page
+size, and complete ordering position as applicable. They expire after 15
+minutes. A compiled family-catalog version change returns `410` for prior
+family cursors without changing or invalidating the exact issue cursor format.
 
 ## Implemented issue HTTP contract
 
@@ -387,7 +546,7 @@ Response:
 ```json
 {
   "schema_version": "belay.read.v1",
-  "projection_version": "belay.issue.v1",
+  "projection_version": "belay.issue.v2",
   "data": [],
   "analysis": {
     "current_sessions": 120,
@@ -1133,6 +1292,8 @@ Implemented Local filters, where applicable:
 - `session_id` for findings
 - issue filters documented under `GET /v1/issues`, including
   `attention_kind` and `experimental`
+- family filters documented under `GET /v1/attention-families`; family and
+  evidence-gap pagination remain independent
 - monitoring filters documented under `GET /v1/fix-monitoring`, including
   exact recurrence state, change kind, recorded-after, issue ID, and
   include-retracted
@@ -1186,6 +1347,16 @@ Errors use `application/problem+json` with:
     `has_more`/`next_cursor` metadata fails closed in browser clients.
 21. Issue detail catalog and global analysis coverage describe the same frozen
     snapshot as the issue and occurrence page.
+22. Family grouping occurs before pagination and admits upstream members only
+    through the fixed catalog plus exact retained raw rule-version validation.
+23. Family list/detail/member cursors preserve one issue snapshot and catalog
+    version; stale authenticated cursors return 410 before family existence is
+    evaluated.
+24. Exact child navigation receives a same-snapshot exact issue view cursor;
+    family routes expose no fix, recurrence, evidence-hydration, or mutation
+    action.
+25. HTTP issue detail emits `belay.issue.v2` and never emits origin record IDs,
+    evidence dimensions, analysis generation, or private fingerprint scope.
 
 Teams shape compatibility and cross-workspace authorization remain future
 acceptance requirements, not Local Alpha claims.

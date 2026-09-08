@@ -78,6 +78,17 @@ type IssueRepository interface {
 	) (model.EventLookupSummary, error)
 }
 
+type AttentionFamilyRepository interface {
+	QueryAttentionFamilies(
+		context.Context,
+		model.AttentionFamilyQuery,
+	) (model.AttentionFamilyPage, error)
+	QueryAttentionFamilyMembers(
+		context.Context,
+		model.AttentionFamilyMemberQuery,
+	) (model.AttentionFamilyMemberPage, error)
+}
+
 type FixMonitoringRepository interface {
 	QueryFixMonitoring(
 		context.Context,
@@ -94,11 +105,12 @@ type FixMonitoringRepository interface {
 }
 
 type Service struct {
-	repository              Repository
-	issueRepository         IssueRepository
-	issueCursorCodec        IssueCursorCodec
-	fixMonitoringRepository FixMonitoringRepository
-	now                     func() time.Time
+	repository                Repository
+	issueRepository           IssueRepository
+	attentionFamilyRepository AttentionFamilyRepository
+	issueCursorCodec          IssueCursorCodec
+	fixMonitoringRepository   FixMonitoringRepository
+	now                       func() time.Time
 }
 
 type Option func(*Service)
@@ -106,6 +118,15 @@ type Option func(*Service)
 func WithIssueRepository(repository IssueRepository) Option {
 	return func(service *Service) {
 		service.issueRepository = repository
+		if familyRepository, ok := repository.(AttentionFamilyRepository); ok {
+			service.attentionFamilyRepository = familyRepository
+		}
+	}
+}
+
+func WithAttentionFamilyRepository(repository AttentionFamilyRepository) Option {
+	return func(service *Service) {
+		service.attentionFamilyRepository = repository
 	}
 }
 

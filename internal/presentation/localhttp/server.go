@@ -94,6 +94,8 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/findings", s.authorize(http.HandlerFunc(s.listFindings)))
 	mux.Handle("GET /v1/issues", s.authorize(http.HandlerFunc(s.listIssues)))
 	mux.Handle("GET /v1/issues/{id}/occurrences", s.authorize(http.HandlerFunc(s.getIssue)))
+	mux.Handle("GET /v1/attention-families", s.authorize(http.HandlerFunc(s.listAttentionFamilies)))
+	mux.Handle("GET /v1/attention-families/{family_id}", s.authorize(http.HandlerFunc(s.getAttentionFamily)))
 	s.registerFixMonitoringRoutes(mux)
 	mux.Handle("GET /v1/stats", s.authorize(http.HandlerFunc(s.getStats)))
 	if s.fix != nil {
@@ -439,7 +441,11 @@ func (s *Server) getIssue(w http.ResponseWriter, r *http.Request) {
 		Cursor:     cursor,
 		ViewCursor: viewCursor,
 	})
-	writeReadResult(w, r, response, err)
+	if err != nil {
+		writeReadResult(w, r, nil, err)
+		return
+	}
+	writeReadResult(w, r, readmodel.PresentIssueDetailV2(response), nil)
 }
 
 func writeReadInvalidRequest(w http.ResponseWriter, r *http.Request) {
