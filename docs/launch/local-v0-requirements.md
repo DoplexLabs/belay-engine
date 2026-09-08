@@ -120,6 +120,12 @@ Required routes:
 The embedded browser is a client of these routes and never reads SQLite
 directly. Event-derived strings render as text, never HTML.
 
+Event rows show prominent outcome badges only when the source explicitly
+reports `succeeded`, `failed`, or `interrupted`. When the source does not report
+an event outcome, the browser preserves the canonical `unknown` value as
+subdued `Outcome · Not reported by source` metadata instead of presenting every
+event as a prominent unknown status. Session outcome badges remain unchanged.
+
 For the Local preview, session-list and session-event responses include
 `has_more`, `returned_count`, and the effective bounded `limit`.
 `next_cursor` remains `null`; production cursor pagination is still required.
