@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const testStoreID = "store_0123456789abcdef0123456789abcdef"
+
 func TestMacOSKeychainProviderLoadAndCreateWithoutRealKeychain(t *testing.T) {
 	key := bytes.Repeat([]byte{0x7b}, 32)
 	runner := &recordingSecurityRunner{
@@ -26,14 +28,14 @@ func TestMacOSKeychainProviderLoadAndCreateWithoutRealKeychain(t *testing.T) {
 		goos:   "darwin",
 	}
 
-	loaded, err := provider.Load(context.Background(), "store_test")
+	loaded, err := provider.Load(context.Background(), testStoreID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if !bytes.Equal(loaded, key) {
 		t.Fatalf("Load() returned unexpected key")
 	}
-	created, err := provider.Create(context.Background(), "store_test")
+	created, err := provider.Create(context.Background(), testStoreID)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -45,26 +47,37 @@ func TestMacOSKeychainProviderLoadAndCreateWithoutRealKeychain(t *testing.T) {
 	}
 	if !slices.Equal(runner.calls[0].args, []string{
 		"find-generic-password",
-		"-a", "store_test",
+		"-a", testStoreID,
 		"-s", keychainService,
 		"-w",
 	}) {
 		t.Fatalf("Load() arguments = %q", runner.calls[0].args)
 	}
-	if slices.Contains(runner.calls[1].args, base64.RawStdEncoding.EncodeToString(key)) {
-		t.Fatal("Create() exposed key material in process arguments")
+	if !slices.Equal(runner.calls[1].args, []string{"-q", "-i"}) {
+		t.Fatalf("Create() arguments = %q, want interactive command-input mode", runner.calls[1].args)
 	}
-	if !slices.Equal(runner.calls[1].args[len(runner.calls[1].args)-1:], []string{"-w"}) {
-		t.Fatalf("Create() must place prompt-only -w last: %q", runner.calls[1].args)
+	encoded := base64.RawStdEncoding.EncodeToString(key)
+	for _, argument := range runner.calls[1].args {
+		if strings.Contains(argument, encoded) {
+			t.Fatal("Create() exposed key material in process arguments")
+		}
 	}
-	wantStdin := base64.RawStdEncoding.EncodeToString(key) + "\n"
+	wantStdin := "add-generic-password -a " + testStoreID +
+		" -s " + keychainService +
+		" -w " + encoded + "\n"
 	if runner.calls[1].stdin != wantStdin {
-		t.Fatalf("Create() stdin = %q, want encoded key", runner.calls[1].stdin)
+		t.Fatalf("Create() stdin = %q, want one complete command", runner.calls[1].stdin)
+	}
+	if strings.Count(runner.calls[1].stdin, "\n") != 1 ||
+		strings.HasSuffix(strings.TrimSuffix(runner.calls[1].stdin, "\n"), " -w") {
+		t.Fatalf("Create() stdin used prompt-only -w behavior: %q", runner.calls[1].stdin)
 	}
 }
 
 func TestMacOSKeychainProviderErrorsArePayloadFree(t *testing.T) {
 	const secretCanary = "KEYCHAIN_ERROR_SECRET_CANARY"
+	key := bytes.Repeat([]byte{0x41}, 32)
+	encodedKey := base64.RawStdEncoding.EncodeToString(key)
 	provider := &MacOSKeychainProvider{
 		runner: &recordingSecurityRunner{
 			results: []securityCommandResult{
@@ -73,39 +86,109 @@ func TestMacOSKeychainProviderErrorsArePayloadFree(t *testing.T) {
 				{stdout: []byte(secretCanary), exitCode: 1, err: errors.New(secretCanary)},
 			},
 		},
-		random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 32)),
+		random: bytes.NewReader(key),
 		goos:   "darwin",
 	}
-	if _, err := provider.Load(context.Background(), "store_missing"); !errors.Is(err, ErrKeyNotFound) {
+	if _, err := provider.Load(context.Background(), testStoreID); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("Load() error = %v, want ErrKeyNotFound", err)
 	}
-	if _, err := provider.Load(context.Background(), "store_error"); err == nil {
+	if _, err := provider.Load(context.Background(), testStoreID); err == nil {
 		t.Fatal("Load() generic error unexpectedly succeeded")
 	} else if strings.Contains(err.Error(), secretCanary) {
 		t.Fatalf("Load() leaked command output in error: %v", err)
 	}
-	if _, err := provider.Create(context.Background(), "store_error"); err == nil {
+	if _, err := provider.Create(context.Background(), testStoreID); err == nil {
 		t.Fatal("Create() unexpectedly succeeded")
-	} else if strings.Contains(err.Error(), secretCanary) {
-		t.Fatalf("Create() leaked command output in error: %v", err)
+	} else if strings.Contains(err.Error(), secretCanary) || strings.Contains(err.Error(), encodedKey) {
+		t.Fatalf("Create() leaked command payload in error: %v", err)
+	}
+}
+
+func TestMacOSKeychainProviderCreateMapsDuplicateExitCode(t *testing.T) {
+	provider := &MacOSKeychainProvider{
+		runner: &recordingSecurityRunner{
+			results: []securityCommandResult{
+				{exitCode: 45, err: errors.New("duplicate command payload")},
+			},
+		},
+		random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 32)),
+		goos:   "darwin",
+	}
+	if _, err := provider.Create(context.Background(), testStoreID); !errors.Is(err, ErrKeyAlreadyExists) {
+		t.Fatalf("Create() error = %v, want ErrKeyAlreadyExists", err)
+	}
+}
+
+func TestMacOSKeychainProviderCreateRejectsInvalidStoreIDBeforeInvocation(t *testing.T) {
+	tests := []string{
+		"",
+		"store_test",
+		"store_0123456789abcdef0123456789abcde",
+		"store_0123456789abcdef0123456789abcdef0",
+		"store_0123456789ABCDEF0123456789ABCDEF",
+		"store_0123456789abcdef;delete-generic",
+		"store_0123456789abcdef\nadd-generic",
+	}
+	for _, storeID := range tests {
+		t.Run(storeID, func(t *testing.T) {
+			runner := &recordingSecurityRunner{}
+			provider := &MacOSKeychainProvider{
+				runner: runner,
+				random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 32)),
+				goos:   "darwin",
+			}
+			if _, err := provider.Create(context.Background(), storeID); err == nil {
+				t.Fatal("Create() error = nil, want invalid store ID rejection")
+			} else if storeID != "" && strings.Contains(err.Error(), storeID) {
+				t.Fatalf("Create() error included untrusted store ID: %v", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("security calls = %d, want zero", len(runner.calls))
+			}
+		})
 	}
 }
 
 func TestMacOSKeychainProviderCommandsHaveBoundedTimeout(t *testing.T) {
-	provider := &MacOSKeychainProvider{
-		runner:  blockingSecurityRunner{},
-		random:  bytes.NewReader(bytes.Repeat([]byte{0x41}, 32)),
-		goos:    "darwin",
-		timeout: 10 * time.Millisecond,
+	tests := []struct {
+		name string
+		call func(*MacOSKeychainProvider) error
+	}{
+		{
+			name: "load",
+			call: func(provider *MacOSKeychainProvider) error {
+				_, err := provider.Load(context.Background(), testStoreID)
+				return err
+			},
+		},
+		{
+			name: "create",
+			call: func(provider *MacOSKeychainProvider) error {
+				_, err := provider.Create(context.Background(), testStoreID)
+				return err
+			},
+		},
 	}
-	started := time.Now()
-	if _, err := provider.Load(context.Background(), "store_timeout"); err == nil {
-		t.Fatal("Load() timeout unexpectedly succeeded")
-	} else if !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("Load() timeout error = %v", err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("Keychain timeout took %s, want bounded execution", elapsed)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &MacOSKeychainProvider{
+				runner:  blockingSecurityRunner{},
+				random:  bytes.NewReader(bytes.Repeat([]byte{0x41}, 32)),
+				goos:    "darwin",
+				timeout: 10 * time.Millisecond,
+			}
+			started := time.Now()
+			err := test.call(provider)
+			if err == nil {
+				t.Fatal("Keychain timeout unexpectedly succeeded")
+			}
+			if !strings.Contains(err.Error(), "timed out") {
+				t.Fatalf("Keychain timeout error = %v", err)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("Keychain timeout took %s, want bounded execution", elapsed)
+			}
+		})
 	}
 }
 

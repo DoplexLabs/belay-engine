@@ -19,8 +19,9 @@ reach SQLite.
   missing or wrong key fails closed; Belay never creates a replacement key or
   opens encrypted rows as plaintext.
 - Keychain command failures return payload-free errors. The key is provided to
-  `/usr/bin/security` through its password prompt on standard input, not in
-  process arguments, and each invocation has a five-second timeout.
+  `/usr/bin/security -q -i` as part of one complete command on standard input,
+  not in process arguments. Command-input mode is noninteractive and must never
+  prompt the user for password data. Each invocation has a five-second timeout.
 - Direct `/usr/bin/security` invocation is an M0 packaging mechanism. Before a
   signed Local application ships, key access must move to signed-app Keychain
   ACL integration and be verified against notarized release artifacts.
