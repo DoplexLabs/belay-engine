@@ -1,0 +1,483 @@
+package local
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+)
+
+func TestAppendOnlyEnforcementOutsideControlledPrune(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	event := storageTestEvent(
+		"00000000-0000-7000-8000-000000000010",
+		"session-append-only",
+		1,
+		time.Date(2026, 9, 8, 8, 0, 0, 0, time.UTC),
+	)
+	if _, err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	finding := Finding{
+		FindingID:     "finding-append-only",
+		SourceRunID:   event.Source.RunID,
+		SessionKey:    event.Session.Key,
+		DetectedAt:    event.OccurredAt,
+		RuleID:        "rule.append-only",
+		RuleVersion:   "1",
+		Severity:      "low",
+		SourceAgent:   "codex",
+		Confidence:    "high",
+		CitedEventIDs: []string{event.EventID},
+	}
+	if _, err := store.RecordFinding(ctx, finding); err != nil {
+		t.Fatalf("RecordFinding() error = %v", err)
+	}
+
+	statements := []string{
+		"UPDATE events SET action = 'changed' WHERE event_id = '" + event.EventID + "'",
+		"DELETE FROM events WHERE event_id = '" + event.EventID + "'",
+		"UPDATE findings SET severity = 'high' WHERE finding_id = '" + finding.FindingID + "'",
+		"DELETE FROM findings WHERE finding_id = '" + finding.FindingID + "'",
+	}
+	for _, statement := range statements {
+		if _, err := store.db.ExecContext(ctx, statement); err == nil {
+			t.Errorf("ordinary mutation unexpectedly succeeded: %s", statement)
+		}
+	}
+
+	result, err := store.Prune(ctx, RetentionPolicy{MaxEventCount: 1}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if result.PrunedEventCount != 0 || result.PrunedFindingCount != 0 {
+		t.Fatalf("non-eligible prune removed records: %+v", result)
+	}
+	injected := errors.New("injected mutation failure")
+	if err := store.mutations.with(mutationRetentionPrune, func() error {
+		return injected
+	}); !errors.Is(err, injected) {
+		t.Fatalf("mutation authorization failure = %v", err)
+	}
+	if store.mutations.mode.Load() != mutationNone {
+		t.Fatal("mutation authorization remained active after failure")
+	}
+}
+
+func TestPruneUsesDeterministicOldestFirstEventOrdering(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	early := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	late := early.Add(time.Hour)
+	latest := late.Add(time.Hour)
+	events := []struct {
+		id       string
+		sequence int64
+		at       time.Time
+	}{
+		{"00000000-0000-7000-8000-000000000013", 2, early},
+		{"00000000-0000-7000-8000-000000000015", 1, latest},
+		{"00000000-0000-7000-8000-000000000012", 1, early},
+		{"00000000-0000-7000-8000-000000000014", 1, late},
+		{"00000000-0000-7000-8000-000000000011", 1, early},
+	}
+	for _, item := range events {
+		event := storageTestEvent(item.id, "session-prune-order", item.sequence, item.at)
+		if _, err := store.AppendEvent(ctx, event); err != nil {
+			t.Fatalf("AppendEvent(%s) error = %v", item.id, err)
+		}
+	}
+
+	result, err := store.Prune(ctx, RetentionPolicy{MaxEventCount: 2}, latest.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if result.PrunedEventCount != 3 {
+		t.Fatalf("pruned events = %d, want 3", result.PrunedEventCount)
+	}
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT event_id FROM events
+		ORDER BY occurred_at, source_sequence, event_id`)
+	if err != nil {
+		t.Fatalf("query remaining events: %v", err)
+	}
+	defer rows.Close()
+	var remaining []string
+	for rows.Next() {
+		var eventID string
+		if err := rows.Scan(&eventID); err != nil {
+			t.Fatalf("scan remaining event: %v", err)
+		}
+		remaining = append(remaining, eventID)
+	}
+	want := []string{
+		"00000000-0000-7000-8000-000000000014",
+		"00000000-0000-7000-8000-000000000015",
+	}
+	if !slices.Equal(remaining, want) {
+		t.Fatalf("remaining events = %q, want %q", remaining, want)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		"DELETE FROM events WHERE event_id = ?",
+		want[0],
+	); err == nil {
+		t.Fatal("ordinary delete succeeded after controlled prune completed")
+	}
+}
+
+func TestRetentionAgeAndByteBoundsCoverEventsAndFindings(t *testing.T) {
+	t.Run("age", func(t *testing.T) {
+		ctx := context.Background()
+		store := openStorageTestStore(t)
+		now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+		old := storageTestEvent(
+			"00000000-0000-7000-8000-000000000020",
+			"session-age",
+			1,
+			now.Add(-48*time.Hour),
+		)
+		recent := storageTestEvent(
+			"00000000-0000-7000-8000-000000000021",
+			"session-age",
+			2,
+			now.Add(-time.Hour),
+		)
+		if _, err := store.AppendEvent(ctx, old); err != nil {
+			t.Fatalf("append old event: %v", err)
+		}
+		if _, err := store.AppendEvent(ctx, recent); err != nil {
+			t.Fatalf("append recent event: %v", err)
+		}
+		if _, err := store.RecordFinding(ctx, Finding{
+			FindingID:     "finding-old",
+			SourceRunID:   old.Source.RunID,
+			SessionKey:    old.Session.Key,
+			DetectedAt:    old.OccurredAt,
+			RuleID:        "rule.age",
+			RuleVersion:   "1",
+			Severity:      "low",
+			SourceAgent:   "codex",
+			Confidence:    "high",
+			CitedEventIDs: []string{old.EventID},
+		}); err != nil {
+			t.Fatalf("record old finding: %v", err)
+		}
+		result, err := store.Prune(ctx, RetentionPolicy{MaxAge: 24 * time.Hour}, now)
+		if err != nil {
+			t.Fatalf("Prune() error = %v", err)
+		}
+		if result.PrunedEventCount != 1 || result.PrunedFindingCount != 1 {
+			t.Fatalf("age prune = %+v", result)
+		}
+	})
+
+	t.Run("bytes", func(t *testing.T) {
+		ctx := context.Background()
+		store := openStorageTestStore(t)
+		now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+		for index, id := range []string{
+			"00000000-0000-7000-8000-000000000030",
+			"00000000-0000-7000-8000-000000000031",
+		} {
+			event := storageTestEvent(id, "session-bytes", int64(index+1), now.Add(time.Duration(index)*time.Minute))
+			if _, err := store.AppendEvent(ctx, event); err != nil {
+				t.Fatalf("AppendEvent() error = %v", err)
+			}
+		}
+		items, err := readRetentionItems(ctx, store.db)
+		if err != nil {
+			t.Fatalf("readRetentionItems() error = %v", err)
+		}
+		var total int64
+		for _, item := range items {
+			total += item.bytes
+		}
+		policy := RetentionPolicy{MaxPayloadBytes: total - items[0].bytes}
+		result, err := store.Prune(ctx, policy, now.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("Prune() error = %v", err)
+		}
+		if result.PrunedEventCount != 1 ||
+			result.AfterPayloadBytes > policy.MaxPayloadBytes {
+			t.Fatalf("byte prune = %+v", result)
+		}
+	})
+}
+
+func TestRetentionByteBoundAccountsForImmediateFindingCascade(t *testing.T) {
+	now := time.Date(2026, 9, 8, 14, 0, 0, 0, time.UTC)
+	items := []retentionItem{
+		{
+			recordType: "event",
+			recordID:   "event-oldest",
+			occurredAt: now.Add(-3 * time.Hour),
+			sequence:   1,
+			bytes:      40,
+		},
+		{
+			recordType: "event",
+			recordID:   "event-second",
+			occurredAt: now.Add(-2 * time.Hour),
+			sequence:   2,
+			bytes:      40,
+		},
+		{
+			recordType: "finding",
+			recordID:   "finding-for-oldest",
+			occurredAt: now.Add(-time.Hour),
+			bytes:      60,
+		},
+	}
+	diagnostics := evaluateRetention(
+		RetentionPolicy{MaxPayloadBytes: 40},
+		now,
+		items,
+		map[string][]string{
+			"event-oldest": {"finding-for-oldest"},
+		},
+	)
+	if diagnostics.EligibleEventCount != 1 ||
+		diagnostics.EligibleFindingCount != 1 ||
+		diagnostics.EligiblePayloadBytes != 100 {
+		t.Fatalf("cascade-aware byte selection = %+v", diagnostics)
+	}
+}
+
+func TestPruneAtomicallyCascadesCanonicallyCitingFindings(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Date(2026, 9, 8, 16, 0, 0, 0, time.UTC)
+	old := storageTestEvent(
+		"00000000-0000-7000-8000-000000000050",
+		"session-cascade",
+		1,
+		now.Add(-time.Hour),
+	)
+	recent := storageTestEvent(
+		"00000000-0000-7000-8000-000000000051",
+		"session-cascade",
+		2,
+		now,
+	)
+	if _, err := store.AppendEvent(ctx, old); err != nil {
+		t.Fatalf("append old event: %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, recent); err != nil {
+		t.Fatalf("append recent event: %v", err)
+	}
+	if _, err := store.RecordFinding(ctx, Finding{
+		FindingID:     "finding-cascade",
+		SourceRunID:   old.Source.RunID,
+		SessionKey:    old.Session.Key,
+		DetectedAt:    now.Add(time.Hour),
+		RuleID:        "rule.cascade",
+		RuleVersion:   "1",
+		Severity:      "medium",
+		SourceAgent:   "codex",
+		Confidence:    "high",
+		CitedEventIDs: []string{old.EventID},
+	}); err != nil {
+		t.Fatalf("RecordFinding() error = %v", err)
+	}
+
+	diagnostics, err := store.RetentionDiagnostics(
+		ctx,
+		RetentionPolicy{MaxEventCount: 1},
+		now.Add(2*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("RetentionDiagnostics() error = %v", err)
+	}
+	if diagnostics.EligibleEventCount != 1 || diagnostics.EligibleFindingCount != 1 {
+		t.Fatalf("cascade diagnostics = %+v", diagnostics)
+	}
+	result, err := store.Prune(
+		ctx,
+		RetentionPolicy{MaxEventCount: 1},
+		now.Add(2*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if result.PrunedEventCount != 1 || result.PrunedFindingCount != 1 {
+		t.Fatalf("cascade prune = %+v", result)
+	}
+	for _, table := range []string{"events", "findings", "finding_event_citations"} {
+		count, err := store.Count(ctx, table)
+		if err != nil {
+			t.Fatalf("Count(%s) error = %v", table, err)
+		}
+		want := 0
+		if table == "events" {
+			want = 1
+		}
+		if count != want {
+			t.Fatalf("%s count = %d, want %d", table, count, want)
+		}
+	}
+}
+
+func TestPruneReportsCommittedDeletionWhenCompactionIsBusy(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "prune-busy.sqlite")
+	store, err := Open(path, newMemoryKeyProvider())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.db.ExecContext(ctx, "PRAGMA busy_timeout = 50"); err != nil {
+		t.Fatalf("set short busy timeout: %v", err)
+	}
+	now := time.Date(2026, 9, 8, 17, 0, 0, 0, time.UTC)
+	for index, eventID := range []string{
+		"00000000-0000-7000-8000-000000000060",
+		"00000000-0000-7000-8000-000000000061",
+	} {
+		event := storageTestEvent(
+			eventID,
+			"session-prune-busy",
+			int64(index+1),
+			now.Add(time.Duration(index)*time.Minute),
+		)
+		if _, err := store.AppendEvent(ctx, event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	dsn, err := sqliteDSN(path)
+	if err != nil {
+		t.Fatalf("sqliteDSN() error = %v", err)
+	}
+	readerDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open concurrent reader: %v", err)
+	}
+	readerTx, err := readerDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		_ = readerDB.Close()
+		t.Fatalf("begin concurrent reader: %v", err)
+	}
+	var snapshotCount int
+	if err := readerTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM events").Scan(&snapshotCount); err != nil {
+		_ = readerTx.Rollback()
+		_ = readerDB.Close()
+		t.Fatalf("establish reader snapshot: %v", err)
+	}
+
+	result, err := store.Prune(ctx, RetentionPolicy{MaxEventCount: 1}, now.Add(time.Hour))
+	if err != nil {
+		_ = readerTx.Rollback()
+		_ = readerDB.Close()
+		t.Fatalf("Prune() error after commit = %v", err)
+	}
+	if result.PrunedEventCount != 1 ||
+		result.AfterEventCount != 1 ||
+		result.Maintenance.State != "pending" ||
+		!result.Maintenance.Retryable {
+		_ = readerTx.Rollback()
+		_ = readerDB.Close()
+		t.Fatalf("busy prune result = %+v", result)
+	}
+	if count, err := store.Count(ctx, "events"); err != nil || count != 1 {
+		_ = readerTx.Rollback()
+		_ = readerDB.Close()
+		t.Fatalf("committed event count = %d, error = %v", count, err)
+	}
+	if err := readerTx.Rollback(); err != nil {
+		_ = readerDB.Close()
+		t.Fatalf("release reader: %v", err)
+	}
+	if err := readerDB.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+		t.Fatalf("restore busy timeout: %v", err)
+	}
+	retry, err := store.Prune(ctx, RetentionPolicy{MaxEventCount: 1}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("maintenance retry Prune() error = %v", err)
+	}
+	if retry.PrunedEventCount != 0 || retry.Maintenance.State != "complete" {
+		t.Fatalf("maintenance retry result = %+v", retry)
+	}
+}
+
+func TestRetentionDoesNotConsultTeamsAcknowledgementState(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Date(2026, 9, 8, 15, 0, 0, 0, time.UTC)
+	for index, id := range []string{
+		"00000000-0000-7000-8000-000000000040",
+		"00000000-0000-7000-8000-000000000041",
+	} {
+		event := storageTestEvent(id, "session-teams-independent", int64(index+1), now.Add(time.Duration(index)*time.Minute))
+		if _, err := store.AppendEvent(ctx, event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TABLE test_teams_state (
+			singleton INTEGER PRIMARY KEY,
+			acknowledged INTEGER NOT NULL
+		);
+		INSERT INTO test_teams_state(singleton, acknowledged) VALUES (1, 0)`,
+	); err != nil {
+		t.Fatalf("create Teams-state sentinel: %v", err)
+	}
+	policy := RetentionPolicy{MaxEventCount: 1}
+	beforeAck, err := store.RetentionDiagnostics(ctx, policy, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("RetentionDiagnostics() before ack error = %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		"UPDATE test_teams_state SET acknowledged = 1 WHERE singleton = 1",
+	); err != nil {
+		t.Fatalf("update Teams-state sentinel: %v", err)
+	}
+	afterAck, err := store.RetentionDiagnostics(ctx, policy, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("RetentionDiagnostics() after ack error = %v", err)
+	}
+	if beforeAck.EligibleEventCount != afterAck.EligibleEventCount ||
+		beforeAck.EligiblePayloadBytes != afterAck.EligiblePayloadBytes {
+		t.Fatalf("retention changed with Teams state: before=%+v after=%+v", beforeAck, afterAck)
+	}
+	result, err := store.Prune(ctx, policy, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if result.PrunedEventCount != 1 {
+		t.Fatalf("Teams-independent prune = %+v", result)
+	}
+}
+
+func TestRetentionRequiresAnExplicitBound(t *testing.T) {
+	store := openStorageTestStore(t)
+	if _, err := store.RetentionDiagnostics(
+		context.Background(),
+		RetentionPolicy{},
+		time.Now().UTC(),
+	); err == nil {
+		t.Fatal("zero retention policy unexpectedly acquired a default")
+	}
+}
+
+func openStorageTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := Open(
+		t.TempDir()+"/belay.sqlite",
+		newMemoryKeyProvider(),
+	)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	return store
+}
