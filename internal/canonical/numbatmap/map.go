@@ -9,11 +9,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/commandsafe"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 )
 
@@ -284,32 +284,11 @@ func removedEnvelopeFields(record numbat.EventRecord) int {
 }
 
 func commandName(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return ""
-	}
-	return bounded(filepath.Base(fields[0]), 128)
+	return commandsafe.Normalize(command).Executable
 }
 
 func commandSummary(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return ""
-	}
-	result := []string{bounded(filepath.Base(fields[0]), 128)}
-	for _, field := range fields[1:] {
-		if !strings.HasPrefix(field, "-") {
-			continue
-		}
-		name, _, _ := strings.Cut(field, "=")
-		if len(name) <= 32 {
-			result = append(result, name)
-		}
-		if len(result) == 8 {
-			break
-		}
-	}
-	return bounded(strings.Join(result, " "), 512)
+	return commandsafe.Normalize(command).Summary
 }
 
 func detailsValue(details *model.Details, field string) string {

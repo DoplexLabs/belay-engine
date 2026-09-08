@@ -209,9 +209,9 @@ func TestMigration009BackfillsActiveAndRetainedExperimentalRevisions(t *testing.
 	).Scan(&experimentalCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 12 || experimentalCount != 2 {
+	if migrationCount != 13 || experimentalCount != 2 {
 		t.Fatalf(
-			"migration count/experimental revisions = %d/%d, want 12/2",
+			"migration count/experimental revisions = %d/%d, want 13/2",
 			migrationCount,
 			experimentalCount,
 		)

@@ -605,6 +605,75 @@ func TestNumbatFindingScopeHintDoesNotOverrideConflictScope(t *testing.T) {
 	}
 }
 
+func TestNumbatFindingSourceSignalIsSafeAndDoesNotChangeFingerprint(t *testing.T) {
+	store := openAnalysisStore(t)
+	event := appendAnalysisEvent(t, store, "session-source-signal", 1)
+	scope := local.SessionScope{
+		SessionKey: event.Session.Key,
+		Quality:    model.ScopeUnscoped,
+	}
+	base := model.FindingSummary{
+		FindingID:     "finding-source-signal",
+		SessionID:     event.Session.Key,
+		DetectedAt:    event.OccurredAt,
+		RuleVersion:   "1",
+		Severity:      "low",
+		Harness:       "codex",
+		Confidence:    "high",
+		CitedEventIDs: []string{event.EventID},
+	}
+
+	base.RuleID = "tamper.guardrails_off"
+	safe, truncated, err := NewReconciler(store).numbatOccurrences(
+		scope,
+		[]model.Event{event},
+		[]model.FindingSummary{base},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated || len(safe) != 1 ||
+		safe[0].SourceSignalCode == nil ||
+		*safe[0].SourceSignalCode != base.RuleID {
+		t.Fatalf("safe source signal occurrence = %+v, truncated=%t", safe, truncated)
+	}
+	material := []string{
+		"rule_id", base.RuleID,
+		"rule_version", base.RuleVersion,
+		"event_type", event.Observation.Type,
+	}
+	wantFingerprint, _, err := store.DeriveIssueIdentity(
+		numbatFingerprintV1,
+		numbatDetectorID,
+		event.Session.Key,
+		material...,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if safe[0].FingerprintID != wantFingerprint {
+		t.Fatalf(
+			"source signal changed fingerprint = %q, want %q",
+			safe[0].FingerprintID,
+			wantFingerprint,
+		)
+	}
+
+	base.FindingID = "finding-source-signal-invalid"
+	base.RuleID = "tamper.guardrails_off\ninjected"
+	invalid, truncated, err := NewReconciler(store).numbatOccurrences(
+		scope,
+		[]model.Event{event},
+		[]model.FindingSummary{base},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated || len(invalid) != 1 || invalid[0].SourceSignalCode != nil {
+		t.Fatalf("invalid source signal occurrence = %+v, truncated=%t", invalid, truncated)
+	}
+}
+
 func TestReconcilerRejectsStaleGenerationThenConverges(t *testing.T) {
 	ctx := context.Background()
 	store := openAnalysisStore(t)

@@ -576,6 +576,7 @@ func (r *Reconciler) numbatOccurrences(
 				},
 				Category:         "numbat_finding",
 				TitleCode:        "issue.numbat_finding",
+				SourceSignalCode: model.SafeSourceSignalCode(finding.RuleID),
 				Severity:         finding.Severity,
 				Confidence:       finding.Confidence,
 				ScopeQuality:     findingScopeQuality,
@@ -593,6 +594,10 @@ func (r *Reconciler) numbatOccurrences(
 					Dimensions: append([]string(nil), material...),
 				},
 			}
+		}
+		incomingSourceSignalCode := model.SafeSourceSignalCode(finding.RuleID)
+		if !sameOptionalString(current.SourceSignalCode, incomingSourceSignalCode) {
+			current.SourceSignalCode = nil
 		}
 		if finding.DetectedAt.Before(current.FirstObservedAt) {
 			current.FirstObservedAt = finding.DetectedAt
@@ -627,6 +632,13 @@ func (r *Reconciler) numbatOccurrences(
 		result = append(result, grouped[key])
 	}
 	return result, truncated, nil
+}
+
+func sameOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (r *Reconciler) analysisCapabilities(

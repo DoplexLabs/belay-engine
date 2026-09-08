@@ -147,10 +147,11 @@ func (s *Store) QueryIssues(
 	args = append(args, summaryArgs...)
 	args = append(args, query.Limit+1)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT
-			sr.issue_id, sr.fingerprint_id, sr.fingerprint_version, sr.origin,
-			sr.detector_id, sr.detector_version, sr.category, sr.title_code,
-			sr.severity, sr.severity_rank, sr.confidence, sr.scope_quality,
+			SELECT
+				sr.issue_id, sr.fingerprint_id, sr.fingerprint_version, sr.origin,
+				sr.detector_id, sr.detector_version, sr.category, sr.title_code,
+				sr.source_signal_code, sr.severity, sr.severity_rank,
+				sr.confidence, sr.scope_quality,
 			sr.first_observed_at, sr.last_observed_at, sr.occurrence_count,
 			sr.session_count, sr.repeated,
 			COALESCE((
@@ -268,8 +269,9 @@ func (s *Store) QueryIssueOccurrences(
 		SELECT
 			io.revision_id, io.occurrence_id, io.issue_id, io.fingerprint_id,
 			io.fingerprint_version, io.origin, COALESCE(io.origin_record_id, ''),
-			io.session_key, io.harness, io.detector_id, io.detector_version,
-			io.projection_version, io.category, io.title_code, io.severity,
+				io.session_key, io.harness, io.detector_id, io.detector_version,
+				io.projection_version, io.category, io.title_code,
+				io.source_signal_code, io.severity,
 			io.confidence, io.scope_quality, io.first_observed_at,
 			io.last_observed_at, io.evidence_complete, io.retained_history_only,
 			io.experimental, sar.status, io.analysis_generation, io.evidence_payload,
@@ -555,6 +557,7 @@ func scanIssueSummary(row rowScanner) (model.IssueSummary, error) {
 	var severityRank, sessionCount, repeated int
 	var firstObserved, lastObserved, harnesses string
 	var evidenceComplete, retainedHistoryOnly, experimental int
+	var sourceSignalCode sql.NullString
 	if err := row.Scan(
 		&result.IssueID,
 		&result.FingerprintID,
@@ -564,6 +567,7 @@ func scanIssueSummary(row rowScanner) (model.IssueSummary, error) {
 		&result.DetectorVersion,
 		&result.Category,
 		&result.TitleCode,
+		&sourceSignalCode,
 		&result.Severity,
 		&severityRank,
 		&result.Confidence,
@@ -580,6 +584,9 @@ func scanIssueSummary(row rowScanner) (model.IssueSummary, error) {
 		&experimental,
 	); err != nil {
 		return model.IssueSummary{}, err
+	}
+	if sourceSignalCode.Valid {
+		result.SourceSignalCode = &sourceSignalCode.String
 	}
 	result.SessionCount = sessionCount
 	result.EvidenceComplete = evidenceComplete == 1
@@ -606,6 +613,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 	var result model.IssueOccurrence
 	var firstObserved, lastObserved, encoding string
 	var evidenceComplete, retainedHistoryOnly, experimental int
+	var sourceSignalCode sql.NullString
 	var evidence []byte
 	if err := row.Scan(
 		&revisionID,
@@ -622,6 +630,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 		&result.Provenance.ProjectionVersion,
 		&result.Category,
 		&result.TitleCode,
+		&sourceSignalCode,
 		&result.Severity,
 		&result.Confidence,
 		&result.ScopeQuality,
@@ -637,6 +646,9 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 		&result.FingerprintScopeID,
 	); err != nil {
 		return model.IssueOccurrence{}, err
+	}
+	if sourceSignalCode.Valid {
+		result.SourceSignalCode = &sourceSignalCode.String
 	}
 	result.Provenance.FingerprintVersion = result.FingerprintVersion
 	result.EvidenceComplete = evidenceComplete == 1

@@ -19,6 +19,7 @@ type issueSummaryProjection struct {
 	detectorVersion     string
 	category            string
 	titleCode           string
+	sourceSignalCode    *string
 	severity            string
 	severityRank        int
 	confidence          string
@@ -210,7 +211,7 @@ func aggregateCurrentIssueSummaryTx(
 	if count == 0 {
 		return issueSummaryProjection{}, false, nil
 	}
-	err := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		WITH visible AS (
 			SELECT io.*, sar.status AS current_status
 			FROM issue_occurrences io
@@ -219,11 +220,17 @@ func aggregateCurrentIssueSummaryTx(
 				AND sar.visible_until_generation IS NULL
 			WHERE io.issue_id = ? AND io.visible_until_generation IS NULL
 		)
-		SELECT
-			MIN(fingerprint_id), MIN(fingerprint_version), MIN(origin),
-			MIN(detector_id), MAX(detector_version), MIN(category),
-			MIN(title_code),
-			MAX(CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4
+			SELECT
+				MIN(fingerprint_id), MIN(fingerprint_version), MIN(origin),
+				MIN(detector_id), MAX(detector_version), MIN(category),
+				MIN(title_code),
+				CASE
+					WHEN COUNT(source_signal_code) = COUNT(*)
+						AND MIN(source_signal_code) = MAX(source_signal_code)
+					THEN MIN(source_signal_code)
+					ELSE NULL
+				END,
+				MAX(CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4
 				WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END),
 			CASE MAX(CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4
 				WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END)
@@ -245,10 +252,13 @@ func aggregateCurrentIssueSummaryTx(
 			MIN(evidence_complete), MIN(retained_history_only), MAX(experimental)
 		FROM visible`,
 		issueID,
-	).Scan(
+	)
+	var sourceSignalCode sql.NullString
+	err := row.Scan(
 		&result.fingerprintID, &result.fingerprintVersion, &result.origin,
 		&result.detectorID, &result.detectorVersion, &result.category,
-		&result.titleCode, &result.severityRank, &result.severity,
+		&result.titleCode, &sourceSignalCode,
+		&result.severityRank, &result.severity,
 		&result.confidence, &result.scopeQuality, &result.firstObservedAt,
 		&result.lastObservedAt, &result.occurrenceCount, &result.sessionCount,
 		&result.repeated, &result.analysisStatus, &result.evidenceComplete,
@@ -256,6 +266,9 @@ func aggregateCurrentIssueSummaryTx(
 	)
 	if err != nil {
 		return issueSummaryProjection{}, false, errors.New("aggregate current issue summary")
+	}
+	if sourceSignalCode.Valid {
+		result.sourceSignalCode = &sourceSignalCode.String
 	}
 	result.issueID = issueID
 	result.harnesses, err = readIssueSummaryRelationValuesTx(
@@ -313,20 +326,22 @@ func readActiveIssueSummaryTx(
 ) (issueSummaryProjection, string, bool, error) {
 	var result issueSummaryProjection
 	var revisionID string
-	err := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		SELECT summary_revision_id, fingerprint_id, fingerprint_version,
 			origin, detector_id, detector_version, category, title_code,
-			severity, severity_rank, confidence, scope_quality,
+			source_signal_code, severity, severity_rank, confidence, scope_quality,
 			first_observed_at, last_observed_at, occurrence_count,
 			session_count, repeated, analysis_status, evidence_complete,
 			retained_history_only, experimental
 		FROM issue_summary_revisions
 		WHERE issue_id = ? AND visible_until_generation IS NULL`,
 		issueID,
-	).Scan(
+	)
+	var sourceSignalCode sql.NullString
+	err := row.Scan(
 		&revisionID, &result.fingerprintID, &result.fingerprintVersion,
 		&result.origin, &result.detectorID, &result.detectorVersion,
-		&result.category, &result.titleCode, &result.severity,
+		&result.category, &result.titleCode, &sourceSignalCode, &result.severity,
 		&result.severityRank, &result.confidence, &result.scopeQuality,
 		&result.firstObservedAt, &result.lastObservedAt,
 		&result.occurrenceCount, &result.sessionCount, &result.repeated,
@@ -338,6 +353,9 @@ func readActiveIssueSummaryTx(
 	}
 	if err != nil {
 		return issueSummaryProjection{}, "", false, errors.New("read active issue summary")
+	}
+	if sourceSignalCode.Valid {
+		result.sourceSignalCode = &sourceSignalCode.String
 	}
 	result.issueID = issueID
 	result.harnesses, err = readStoredIssueSummaryRelationsTx(
@@ -405,20 +423,21 @@ func insertIssueSummaryRevisionTx(
 ) error {
 	revisionID := stableLocalID("isr_", summary.issueID, fmt.Sprint(generation))
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO issue_summary_revisions (
-			summary_revision_id, issue_id, fingerprint_id, fingerprint_version,
-			origin, detector_id, detector_version, category, title_code,
-			severity, severity_rank, confidence, scope_quality,
-			first_observed_at, last_observed_at, occurrence_count,
-			session_count, repeated, analysis_status, evidence_complete,
-			retained_history_only, experimental, visible_from_generation,
-			created_at
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		)`,
+			INSERT INTO issue_summary_revisions (
+				summary_revision_id, issue_id, fingerprint_id, fingerprint_version,
+				origin, detector_id, detector_version, category, title_code,
+				source_signal_code, severity, severity_rank, confidence, scope_quality,
+				first_observed_at, last_observed_at, occurrence_count,
+				session_count, repeated, analysis_status, evidence_complete,
+				retained_history_only, experimental, visible_from_generation,
+				created_at
+			) VALUES (
+				?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			)`,
 		revisionID, summary.issueID, summary.fingerprintID,
 		summary.fingerprintVersion, summary.origin, summary.detectorID,
 		summary.detectorVersion, summary.category, summary.titleCode,
+		nullableOptionalString(summary.sourceSignalCode),
 		summary.severity, summary.severityRank, summary.confidence,
 		summary.scopeQuality, summary.firstObservedAt, summary.lastObservedAt,
 		summary.occurrenceCount, summary.sessionCount, summary.repeated,

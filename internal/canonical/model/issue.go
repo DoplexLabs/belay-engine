@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"regexp"
 	"time"
 )
 
@@ -9,6 +10,8 @@ var (
 	ErrIssueSnapshotExpired = errors.New("issue snapshot has expired")
 	ErrIssueSnapshotInvalid = errors.New("issue snapshot is invalid")
 	ErrIssueCursorInvalid   = errors.New("issue cursor is invalid")
+
+	sourceSignalCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 )
 
 const (
@@ -70,6 +73,7 @@ type IssueOccurrence struct {
 	Provenance          DetectorProvenance `json:"provenance"`
 	Category            string             `json:"category"`
 	TitleCode           string             `json:"title_code"`
+	SourceSignalCode    *string            `json:"source_signal_code"`
 	Severity            string             `json:"severity"`
 	Confidence          string             `json:"confidence"`
 	ScopeQuality        ScopeQuality       `json:"scope_quality"`
@@ -93,6 +97,7 @@ type IssueSummary struct {
 	DetectorVersion     string         `json:"detector_version"`
 	Category            string         `json:"category"`
 	TitleCode           string         `json:"title_code"`
+	SourceSignalCode    *string        `json:"source_signal_code"`
 	Severity            string         `json:"severity"`
 	Confidence          string         `json:"confidence"`
 	ScopeQuality        ScopeQuality   `json:"scope_quality"`
@@ -105,6 +110,18 @@ type IssueSummary struct {
 	EvidenceComplete    bool           `json:"evidence_complete"`
 	RetainedHistoryOnly bool           `json:"retained_history_only"`
 	Experimental        bool           `json:"experimental"`
+}
+
+func IsSafeSourceSignalCode(value string) bool {
+	return sourceSignalCodePattern.MatchString(value)
+}
+
+func SafeSourceSignalCode(value string) *string {
+	if !IsSafeSourceSignalCode(value) {
+		return nil
+	}
+	result := value
+	return &result
 }
 
 type IssueAnalysisCoverage struct {

@@ -847,20 +847,21 @@ func (s *Store) insertIssueOccurrenceTx(
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
-				INSERT INTO issue_occurrences (
-					revision_id, occurrence_id, issue_id, fingerprint_id,
-					fingerprint_version, origin, origin_record_id, session_key,
-					harness, detector_id, detector_version, projection_version,
-					category, title_code, severity, confidence, scope_quality,
-					first_observed_at, last_observed_at, evidence_complete,
-					retained_history_only, experimental, analysis_status,
-					analysis_generation, evidence_payload, evidence_encoding,
-					visible_from_generation, created_at, updated_at,
-					fingerprint_scope_id
-				) VALUES (
-					?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-					?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-				)`,
+					INSERT INTO issue_occurrences (
+						revision_id, occurrence_id, issue_id, fingerprint_id,
+						fingerprint_version, origin, origin_record_id, session_key,
+						harness, detector_id, detector_version, projection_version,
+						category, title_code, source_signal_code, severity,
+						confidence, scope_quality,
+						first_observed_at, last_observed_at, evidence_complete,
+						retained_history_only, experimental, analysis_status,
+						analysis_generation, evidence_payload, evidence_encoding,
+						visible_from_generation, created_at, updated_at,
+						fingerprint_scope_id
+					) VALUES (
+						?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+						?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+					)`,
 		revisionID,
 		occurrence.OccurrenceID,
 		occurrence.IssueID,
@@ -875,6 +876,7 @@ func (s *Store) insertIssueOccurrenceTx(
 		occurrence.Provenance.ProjectionVersion,
 		occurrence.Category,
 		occurrence.TitleCode,
+		nullableOptionalString(occurrence.SourceSignalCode),
 		occurrence.Severity,
 		occurrence.Confidence,
 		occurrence.ScopeQuality,
@@ -1450,6 +1452,11 @@ func validateProjectionReplacement(replacement ProjectionReplacement) error {
 			occurrence.LastObservedAt.Before(occurrence.FirstObservedAt) {
 			return errors.New("projection replacement contains an invalid occurrence")
 		}
+		if occurrence.SourceSignalCode != nil &&
+			(occurrence.Origin != "numbat" ||
+				!model.IsSafeSourceSignalCode(*occurrence.SourceSignalCode)) {
+			return errors.New("projection replacement contains an invalid source signal")
+		}
 		if occurrence.ScopeQuality == model.ScopeResolved ||
 			occurrence.ScopeQuality == model.ScopeLexical {
 			if occurrence.FingerprintScopeID == "" && occurrence.Origin == "belay" {
@@ -1476,6 +1483,13 @@ func validateProjectionReplacement(replacement ProjectionReplacement) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func nullableOptionalString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func validateAnalysisCapabilities(

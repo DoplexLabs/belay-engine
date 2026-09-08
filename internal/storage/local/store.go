@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DoplexLabs/belay-engine/internal/canonical/commandsafe"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/limits"
 )
@@ -1246,7 +1247,33 @@ func (s *Store) decodeEvent(eventID, encoding string, body []byte) (model.Event,
 	if err := json.Unmarshal(body, &event); err != nil {
 		return model.Event{}, fmt.Errorf("decode stored canonical event: %w", err)
 	}
+	normalizeDecodedCommand(&event)
 	return event, nil
+}
+
+func normalizeDecodedCommand(event *model.Event) {
+	if event == nil ||
+		(event.Observation.Type != "command.exec" &&
+			event.Observation.Type != "command.result") {
+		return
+	}
+	candidate := event.Observation.Summary
+	if candidate == "" &&
+		event.Observation.Resource != nil &&
+		event.Observation.Resource.Kind == "command" {
+		candidate = event.Observation.Resource.Name
+	}
+	display := commandsafe.Normalize(candidate)
+	if display.Executable == "" {
+		event.Observation.Summary = ""
+		event.Observation.Resource = nil
+		return
+	}
+	event.Observation.Summary = display.Summary
+	event.Observation.Resource = &model.Resource{
+		Kind: "command",
+		Name: display.Executable,
+	}
 }
 
 func (s *Store) scanFinding(
@@ -1684,7 +1711,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.resumeFixRecurrenceMigration(ctx); err != nil {
 		return err
 	}
-	return s.resumeIssueSummaryMigration(ctx)
+	return s.resumeValueFirstMigration(ctx)
 }
 
 func boolInt(value bool) int {
