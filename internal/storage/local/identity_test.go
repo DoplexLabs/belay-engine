@@ -123,6 +123,56 @@ func TestRecurrenceIdentitiesAreStableAndDomainSeparated(t *testing.T) {
 	}
 }
 
+func TestAttentionFamilyIdentityIsStableDomainSeparatedAndStoreLocal(t *testing.T) {
+	first := openStorageTestStore(t)
+	second := openStorageTestStore(t)
+
+	id, err := first.DeriveAttentionFamilyID(
+		"mapped:attention.agent_guardrails_configuration:1:1:1",
+		"belay.attention-families.v1",
+		"1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := first.DeriveAttentionFamilyID(
+		"mapped:attention.agent_guardrails_configuration:1:1:1",
+		"belay.attention-families.v1",
+		"1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherStore, err := second.DeriveAttentionFamilyID(
+		"mapped:attention.agent_guardrails_configuration:1:1:1",
+		"belay.attention-families.v1",
+		"1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != repeated ||
+		!validOpaquePrefixedID(id, "atf_") ||
+		id == otherStore {
+		t.Fatalf("family identities = %q / %q / %q", id, repeated, otherStore)
+	}
+
+	familyKey, err := first.derivedKey(attentionFamilyKeyDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueKey, err := first.derivedKey(issueFingerprintKeyDomain)
+	if err != nil {
+		zeroBytes(familyKey)
+		t.Fatal(err)
+	}
+	defer zeroBytes(familyKey)
+	defer zeroBytes(issueKey)
+	if string(familyKey) == string(issueKey) {
+		t.Fatal("family and exact issue identities share a key domain")
+	}
+}
+
 func TestProjectPathNormalization(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

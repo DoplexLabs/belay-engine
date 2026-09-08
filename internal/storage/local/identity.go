@@ -24,6 +24,7 @@ const (
 	numbatProjectScopeHashKeyDomain  = "belay.local.numbat-project-scope-hash.v1"
 	commandSignatureKeyDomain        = "belay.local.command-signature.v1"
 	issueFingerprintKeyDomain        = "belay.local.issue-fingerprint.v1"
+	attentionFamilyKeyDomain         = "belay.local.attention-family.v1"
 	issueCursorKeyDomain             = "belay.local.issue-cursor.v2"
 	fixAnnotationIDKeyDomain         = "belay.local.fix-annotation.v1"
 	fixAnnotationRequestKeyDomain    = "belay.local.fix-annotation-request.v1"
@@ -115,6 +116,21 @@ func (s *Store) DeriveIssueIdentity(
 	digest := opaqueDigest(key, material)
 	encoded := strings.ToLower(opaqueBase32.EncodeToString(digest))
 	return "ifp_" + encoded, "iss_" + encoded, nil
+}
+
+func (s *Store) DeriveAttentionFamilyID(
+	groupKey string,
+	catalogVersion string,
+	groupingVersion string,
+) (string, error) {
+	if groupKey == "" || catalogVersion == "" || groupingVersion == "" {
+		return "", errors.New("attention family identity requires group and versions")
+	}
+	return s.deriveOpaqueID(
+		attentionFamilyKeyDomain,
+		"atf_",
+		lengthPrefixed([]string{catalogVersion, groupingVersion, groupKey}),
+	)
 }
 
 func (s *Store) deriveFixAnnotationID(idempotencyKey string) (string, error) {
