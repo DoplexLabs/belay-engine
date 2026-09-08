@@ -489,7 +489,11 @@ func TestBrowserLaunchUXContract(t *testing.T) {
 		`.session-overview {`,
 		`overflow: auto;`,
 		`min-height: 44px;`,
-		`max-height: 55vh;`,
+		`max-height: none;`,
+		`overflow: visible;`,
+		`.timeline-panel {`,
+		`overflow-y: auto;`,
+		`overscroll-behavior: contain;`,
 	} {
 		if !strings.Contains(styles, required) {
 			t.Errorf("responsive browser styles are missing %q", required)

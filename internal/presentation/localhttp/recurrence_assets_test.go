@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRecurrenceBrowserShellPlacementFiltersAndSessionSpread(t *testing.T) {
+func TestRecurrenceBrowserShellPlacementAndIndependentFilters(t *testing.T) {
 	index := readBrowserAsset(t, "assets/index.html")
 
 	for _, required := range []string{
@@ -23,9 +23,6 @@ func TestRecurrenceBrowserShellPlacementFiltersAndSessionSpread(t *testing.T) {
 		`id="fix-monitoring-list"`,
 		`id="fix-monitoring-pagination"`,
 		`id="fix-monitoring-load-more"`,
-		`<span>Session spread</span>`,
-		`<option value="repeated">Exact matches</option>`,
-		`<option value="single">One session</option>`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("recurrence browser shell is missing %q", required)
@@ -34,6 +31,16 @@ func TestRecurrenceBrowserShellPlacementFiltersAndSessionSpread(t *testing.T) {
 	if strings.Index(index, `id="fix-monitoring-section"`) >
 		strings.Index(index, `id="stable-issues-heading"`) {
 		t.Error("After attempts must precede and not replace the Issues section")
+	}
+	for _, forbidden := range []string{
+		`id="issue-filter-recurrence"`,
+		`<span>Session spread</span>`,
+		`<option value="repeated">Exact matches</option>`,
+		`<option value="single">One session</option>`,
+	} {
+		if strings.Contains(index, forbidden) {
+			t.Errorf("default Attention retains removed P0-07 control %q", forbidden)
+		}
 	}
 }
 

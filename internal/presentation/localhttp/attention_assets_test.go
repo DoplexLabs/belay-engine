@@ -220,15 +220,17 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 	)
 
 	for _, required := range []string{
-		`closeIssueDetail(false);`,
+		`closeIssueDetail(false, true);`,
+		`clearAttentionFamilyDetailState();`,
 		`const [issuesReady, gapsReady, monitoringReady] = await Promise.all([`,
 		`const refreshGeneration = ++state.attentionRefreshGeneration;`,
 		`if (refreshGeneration !== state.attentionRefreshGeneration) return false;`,
 		`if (!issuesReady || !gapsReady) {`,
-		`const chainReady = await loadIssuePagesForSelection(`,
-		`const summary = bucket.data.find(`,
+		`const chainReady = await loadFamilyPagesForSelection(`,
+		`const summary = state.issues.data.find(`,
 		`if (!summary) {`,
-		`const detailReady = await selectIssue(summary, selectedKind, false);`,
+		`detailReady = await selectAttentionFamily(summary, false);`,
+		`detailReady = await selectIssue(`,
 		`if (!detailReady) {`,
 		`selected detail is hidden until current data confirms it.`,
 	} {
@@ -239,12 +241,16 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 	if strings.Contains(refresh, "Promise.allSettled") {
 		t.Error("Attention refresh cannot treat failed required reads as success")
 	}
-	closeIndex := strings.Index(refresh, "closeIssueDetail(false);")
+	closeIndex := strings.Index(refresh, "closeIssueDetail(false, true);")
+	clearFamilyIndex := strings.Index(refresh, "clearAttentionFamilyDetailState();")
 	readIndex := strings.Index(refresh, "await Promise.all([")
-	selectIndex := strings.Index(refresh, "await selectIssue(")
+	selectIndex := strings.Index(refresh, "await selectAttentionFamily(")
 	missingIndex := strings.Index(refresh, "if (!summary) {")
 	if closeIndex < 0 || readIndex < 0 || closeIndex > readIndex {
 		t.Error("selected detail is not closed before fresh list reads")
+	}
+	if clearFamilyIndex < 0 || readIndex < 0 || clearFamilyIndex > readIndex {
+		t.Error("selected family detail is not cleared before fresh list reads")
 	}
 	if missingIndex < 0 || selectIndex < 0 || missingIndex > selectIndex {
 		t.Error("selected detail can be retained without confirming list visibility")
@@ -423,6 +429,7 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		`id="issue-evidence-preview"`,
 		`id="issue-evidence-preview-all"`,
 		`id="issue-technical-details"`,
+		`id="fix-attempts-section"`,
 		`<summary>Technical details</summary>`,
 		`id="needs-attention-summary"`,
 		`id="observed-work-summary"`,
@@ -487,6 +494,10 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 	for _, required := range []string{
 		`elements.recordFixAttempt.hidden =`,
 		`serverReportedIneligible`,
+		`const hasDurableHistory =`,
+		`const showFixSection = canResume || canRecord || hasDurableHistory;`,
+		`elements.fixAttemptsSection.hidden = !showFixSection;`,
+		`!canRecord ||`,
 		`renderFixHistory();`,
 		`selectSessionHighlights(state.events)`,
 		`.slice(0, 5)`,
@@ -510,6 +521,25 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		`"event-type"`,
 	) {
 		t.Error("raw event type remains in the primary timeline heading")
+	}
+
+	familyDetail := browserSourceBlock(
+		t,
+		index,
+		`<div class="family-detail" id="family-detail" hidden>`,
+		`<div class="issue-detail" id="issue-detail" hidden>`,
+	)
+	if strings.Contains(familyDetail, `fix-attempt`) {
+		t.Error("mapped family detail exposes an exact fix workflow")
+	}
+
+	for _, required := range []string{
+		`"config.agent": "Agent guardrail configuration observed"`,
+		`This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body.`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("fixed config.agent presentation is missing %q", required)
+		}
 	}
 
 	for _, required := range []string{

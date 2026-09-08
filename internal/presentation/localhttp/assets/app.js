@@ -3523,12 +3523,20 @@
           eligibility.eligible === true &&
           Boolean(eligibility.actionToken) &&
           catalogReady));
+    const hasDurableHistory =
+      state.fixHistory.length > 0 ||
+      (state.selectedIssueSource === "monitoring" &&
+        Boolean(state.selectedDrivingAnnotationID));
+    const showFixSection = canResume || canRecord || hasDurableHistory;
+    elements.fixAttemptsSection.hidden = !showFixSection;
     const serverReportedIneligible =
       state.fixEligibilityStatus === "ready" &&
       eligibility.eligible !== true &&
       !canResume;
     elements.recordFixAttempt.hidden =
-      monitoringCurrentIssueUnavailable || serverReportedIneligible;
+      !canRecord ||
+      monitoringCurrentIssueUnavailable ||
+      serverReportedIneligible;
     elements.recordFixAttempt.disabled = !canRecord;
     elements.recordFixAttempt.textContent = canResume
       ? "Resume fix attempt"
@@ -7059,6 +7067,7 @@
       "file.delete": "Deleted file",
       "permission.request": "Requested permission",
       "permission.decision": "Permission decided",
+      "config.agent": "Agent guardrail configuration observed",
       "network.indicator": "Observed network target",
       "prompt.user": "User input lifecycle",
       "message.assistant": "Assistant lifecycle",
@@ -7066,9 +7075,12 @@
       "reasoning.end": "Reasoning lifecycle ended",
     };
     const label = labels[type] || readableLabel(observation.action, "Activity");
-    const detail = type.startsWith("command.")
-      ? summary || resourceName
-      : resourceName || summary;
+    const detail =
+      type === "config.agent"
+        ? "This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body."
+        : type.startsWith("command.")
+          ? summary || resourceName
+          : resourceName || summary;
     return { label, detail };
   }
 
