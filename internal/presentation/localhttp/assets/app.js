@@ -196,6 +196,9 @@
     selectedIssueSource: "",
     selectedDrivingAnnotationID: "",
     selectedIssue: null,
+    selectedIssueCatalog: null,
+    selectedGlobalAnalysisCoverage: null,
+    selectedIssueViewCursor: "",
     occurrences: [],
     occurrenceNextCursor: "",
     occurrenceHasMore: false,
@@ -516,6 +519,7 @@
       hasMore: false,
       viewCursor: "",
       analysis: null,
+      selection: null,
       status: "idle",
       error: null,
       requestGeneration: 0,
@@ -1128,6 +1132,7 @@
     bucket.hasMore = false;
     bucket.viewCursor = "";
     bucket.analysis = null;
+    bucket.selection = null;
     bucket.status = "idle";
     bucket.error = null;
   }
@@ -1566,16 +1571,27 @@
       const response = await apiGet(buildIssuePath(bucket.kind, cursor));
       if (generation !== bucket.requestGeneration) return false;
       const page = Array.isArray(response.data) ? response.data : [];
+      const pagination = requireCursorPage(
+        response,
+        cursor,
+        bucket.kind === "evidence_gap" ? "evidence-gap" : "issue-list",
+      );
+      const viewCursor = readCursor(response.view_cursor);
+      if (!viewCursor) {
+        throw new Error(
+          "Local API returned issue results without a view cursor.",
+        );
+      }
+      const selection = readIssueSelection(response.selection, bucket.kind);
       bucket.data =
         append && cursor
           ? deduplicateByID(bucket.data.concat(page), "issue_id")
           : deduplicateByID(page, "issue_id");
-      bucket.nextCursor = readCursor(response.next_cursor);
-      bucket.hasMore =
-        response.has_more === true || Boolean(bucket.nextCursor);
-      const viewCursor = readCursor(response.view_cursor);
-      if (viewCursor) bucket.viewCursor = viewCursor;
+      bucket.nextCursor = pagination.nextCursor;
+      bucket.hasMore = pagination.hasMore;
+      bucket.viewCursor = viewCursor;
       bucket.analysis = isRecord(response.analysis) ? response.analysis : null;
+      bucket.selection = selection;
       bucket.status = "ready";
       renderIssueBucket(bucket);
       renderAnalysisCoverage();
@@ -1601,12 +1617,14 @@
   }
 
   function buildIssuePath(kind, cursor) {
+    if (cursor) {
+      return `/v1/issues?${new URLSearchParams({ cursor }).toString()}`;
+    }
     const parameters = new URLSearchParams({
       limit: String(pageLimits.issues.page),
       attention_kind: kind,
       experimental: state.issueFilters.experimental ? "include" : "stable",
     });
-    if (cursor) parameters.set("cursor", cursor);
     if (state.issueFilters.severity) {
       parameters.set("severity", state.issueFilters.severity);
     }
@@ -1629,7 +1647,8 @@
   }
 
   function renderIssueBucket(bucket) {
-    const isGap = bucket.kind === "evidence_gap";
+    const selection = bucket.selection || expectedIssueSelection(bucket.kind);
+    const isGap = selection.attention_kind === "evidence_gap";
     const list = isGap ? elements.evidenceGapList : elements.issueList;
     const loading = isGap
       ? elements.evidenceGapsLoading
@@ -1753,7 +1772,11 @@
   }
 
   function renderAttentionFilters() {
-    const experimental = state.issueFilters.experimental;
+    const selection =
+      state.issues.selection || expectedIssueSelection("issue");
+    const experimental =
+      selection.includes_experimental === true ||
+      state.issueFilters.experimental;
     const active = attentionFiltersActive();
     elements.attentionFilterNote.textContent = experimental
       ? "Experimental signals are included and labeled."
@@ -1877,6 +1900,9 @@
     state.selectedIssueSource = "attention";
     state.selectedDrivingAnnotationID = "";
     state.selectedIssue = issue;
+    state.selectedIssueCatalog = null;
+    state.selectedGlobalAnalysisCoverage = null;
+    state.selectedIssueViewCursor = "";
     state.issueReturnFocus = {
       type: "issue",
       key: issueFocusKey(state.selectedIssueKind, issueID),
@@ -1909,12 +1935,13 @@
     const generation = ++state.occurrenceRequestGeneration;
     state.occurrenceStatus = append ? "loading-more" : "loading";
     renderIssueDetail();
-    const parameters = new URLSearchParams({
-      limit: String(pageLimits.occurrences.page),
-    });
-    if (append && state.occurrenceNextCursor) {
-      parameters.set("cursor", state.occurrenceNextCursor);
-    } else if (viewCursor) {
+    const cursor = append ? state.occurrenceNextCursor : "";
+    const parameters = cursor
+      ? new URLSearchParams({ cursor })
+      : new URLSearchParams({
+          limit: String(pageLimits.occurrences.page),
+        });
+    if (!cursor && viewCursor) {
       parameters.set("view_cursor", viewCursor);
     }
     try {
@@ -1934,17 +1961,43 @@
         : Array.isArray(response.occurrences)
           ? response.occurrences
           : [];
-      if (issue) state.selectedIssue = issue;
+      if (!issue || readText(issue.issue_id) !== issueID) {
+        throw new Error("Local API returned inconsistent issue detail.");
+      }
+      const pagination = requireCursorPage(
+        response,
+        cursor,
+        "issue-occurrence",
+      );
+      const responseViewCursor = readCursor(response.view_cursor);
+      if (!responseViewCursor) {
+        throw new Error(
+          "Local API returned issue detail without a view cursor.",
+        );
+      }
+      const catalog = readIssueCatalog(
+        response.catalog,
+        issue,
+        state.selectedIssueCatalog,
+      );
+      const globalCoverage = readGlobalAnalysisCoverage(
+        response.global_analysis_coverage,
+        state.selectedGlobalAnalysisCoverage ||
+          selectedIssueListCoverage(),
+      );
+      state.selectedIssue = issue;
+      state.selectedIssueCatalog = catalog;
+      state.selectedGlobalAnalysisCoverage = globalCoverage;
+      state.selectedIssueViewCursor = responseViewCursor;
       state.occurrences =
-        append && state.occurrenceNextCursor
+        append && cursor
           ? deduplicateByID(
               state.occurrences.concat(page),
               "occurrence_id",
             )
           : deduplicateByID(page, "occurrence_id");
-      state.occurrenceNextCursor = readCursor(response.next_cursor);
-      state.occurrenceHasMore =
-        response.has_more === true || Boolean(state.occurrenceNextCursor);
+      state.occurrenceNextCursor = pagination.nextCursor;
+      state.occurrenceHasMore = pagination.hasMore;
       state.occurrenceStatus = "ready";
       renderIssueDetail();
       return true;
@@ -1979,7 +2032,10 @@
 
   function renderIssueDetail() {
     const issue = state.selectedIssue || {};
-    const catalog = monitoringSubjectCatalog(issue);
+    const catalog =
+      state.selectedIssueSource === "attention"
+        ? issueDetailCatalog(issue, state.selectedIssueCatalog)
+        : monitoringSubjectCatalog(issue);
     const historyOnly =
       state.fixHistoryCurrentIssueAvailable === false;
     const currentProjectionPending =
@@ -1997,17 +2053,21 @@
     elements.issueDetailHeading.textContent = catalog.title;
     elements.issueExplanation.textContent = catalog.explanation;
     const status = normalizeAnalysisStatus(issue.analysis_status);
+    const coverageQualifier = globalCoverageQualifier(
+      state.selectedGlobalAnalysisCoverage,
+    );
+    const analysisQualifier = analysisQualifiers[status] || "";
     elements.issueAnalysisQualifier.textContent =
       historyOnly
         ? "The current issue projection is unavailable. Durable attempt and observation history remains available."
         : currentProjectionPending
           ? "Checking whether a current issue projection remains available."
-        : analysisQualifiers[status] || "";
+          : [analysisQualifier, coverageQualifier].filter(Boolean).join(" ");
     elements.issueScopeDisclosure.textContent = historyOnly
       ? "Current fix eligibility and matching sessions are unavailable in history-only detail."
       : currentProjectionPending
         ? "Attempt history is loading from the selected monitoring snapshot."
-      : issueScopeDisclosure(issue);
+        : issueScopeDisclosure(issue, catalog.caveat);
     const badges = [
       createToneBadge(issue.severity),
     ];
@@ -2041,6 +2101,17 @@
         ? `issue.${titleCode}`
         : titleCode,
     );
+  }
+
+  function issueDetailCatalog(issue, metadata) {
+    const display = monitoringSubjectCatalog(issue);
+    const catalog = metadata || fallbackIssueCatalog(issue);
+    return {
+      ...display,
+      explanation:
+        readText(catalog.observation_statement) || display.explanation,
+      caveat: readText(catalog.caveat),
+    };
   }
 
   function monitoringAttemptSubjectIssue(attempt) {
@@ -4244,6 +4315,9 @@
     state.selectedIssueSource = "";
     state.selectedDrivingAnnotationID = "";
     state.selectedIssue = null;
+    state.selectedIssueCatalog = null;
+    state.selectedGlobalAnalysisCoverage = null;
+    state.selectedIssueViewCursor = "";
     state.occurrences = [];
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
@@ -4265,7 +4339,7 @@
   async function refreshAttentionAfterExpiry() {
     if (state.attentionExpiryRefresh) return;
     state.attentionExpiryRefresh = true;
-    closeIssueDetail(false);
+    clearExpiredIssueSnapshotState();
     showAttentionNotice(
       "The issue view changed. Refreshing both Attention lists from a current snapshot…",
       "pending",
@@ -4287,6 +4361,31 @@
     } finally {
       state.attentionExpiryRefresh = false;
     }
+  }
+
+  function clearExpiredIssueSnapshotState() {
+    resetIssueBucket(state.issues);
+    resetIssueBucket(state.evidenceGaps);
+    resetFixMonitoringBucket(false);
+    clearExpiredFixDraftState();
+    closeIssueDetail(false);
+  }
+
+  function clearExpiredFixDraftState() {
+    fixDrafts.forEach((draft) => {
+      draft.idempotencyKey = "";
+      draft.actionToken = "";
+      draft.attempted = false;
+      draft.unresolved = false;
+      draft.pending = false;
+    });
+    fixRetractionDrafts.forEach((draft) => {
+      draft.idempotencyKey = "";
+      draft.attempted = false;
+      draft.unresolved = false;
+      draft.pending = false;
+    });
+    state.modalSubmitting = false;
   }
 
   function showAttentionNotice(message, tone = "status", hideAfter = 0) {
@@ -4367,11 +4466,135 @@
     return "";
   }
 
-  function issueScopeDisclosure(issue) {
-    const caveat = issueCaveat(issue);
-    return caveat
-      ? caveat
-      : "This explanation is a fixed detector definition, not a generated diagnosis.";
+  function issueScopeDisclosure(issue, catalogCaveat = "") {
+    const statements = [
+      readText(catalogCaveat),
+      issueCaveat(issue),
+      "This explanation is fixed catalog content, not a generated diagnosis or remediation recommendation.",
+    ].filter(Boolean);
+    return Array.from(new Set(statements)).join(" ");
+  }
+
+  function expectedIssueSelection(kind) {
+    const attentionKind = kind === "evidence_gap" ? "evidence_gap" : "issue";
+    const experimental = state.issueFilters.experimental
+      ? "include"
+      : "stable";
+    return {
+      attention_kind: attentionKind,
+      experimental,
+      includes_evidence_gaps: attentionKind === "evidence_gap",
+      includes_experimental: experimental !== "stable",
+    };
+  }
+
+  function readIssueSelection(value, kind) {
+    const expected = expectedIssueSelection(kind);
+    if (!isRecord(value)) return expected;
+    const selection = {
+      attention_kind: readText(value.attention_kind).toLowerCase(),
+      experimental: readText(value.experimental).toLowerCase(),
+      includes_evidence_gaps: value.includes_evidence_gaps === true,
+      includes_experimental: value.includes_experimental === true,
+    };
+    if (
+      selection.attention_kind !== expected.attention_kind ||
+      selection.experimental !== expected.experimental ||
+      selection.includes_evidence_gaps !==
+        expected.includes_evidence_gaps ||
+      selection.includes_experimental !==
+        expected.includes_experimental
+    ) {
+      throw new Error(
+        "Local API returned issue results for a different normalized selection.",
+      );
+    }
+    return selection;
+  }
+
+  function requireCursorPage(response, currentCursor, label) {
+    const nextCursor = readCursor(response && response.next_cursor);
+    const hasMore = response && response.has_more === true;
+    if (hasMore !== Boolean(nextCursor)) {
+      throw new Error(
+        `Local API returned inconsistent ${label} pagination metadata.`,
+      );
+    }
+    if (currentCursor && nextCursor === currentCursor) {
+      throw new Error(
+        `Local API returned a non-advancing ${label} cursor.`,
+      );
+    }
+    return { nextCursor, hasMore };
+  }
+
+  function readIssueCatalog(value, issue, previous) {
+    if (!isRecord(value)) {
+      return previous || fallbackIssueCatalog(issue);
+    }
+    const catalog = {
+      catalog_version: readText(value.catalog_version),
+      catalog_status: readText(value.catalog_status).toLowerCase(),
+      title_code: readText(value.title_code),
+      observation_statement: readText(value.observation_statement),
+      caveat: readText(value.caveat),
+      next_evidence_action: readText(value.next_evidence_action),
+    };
+    const issueTitleCode = readText(issue && issue.title_code);
+    const actions = new Set([
+      "inspect_cited_events",
+      "inspect_matching_sessions",
+      "inspect_verification_events",
+    ]);
+    if (
+      catalog.catalog_version !== "belay.issue-explanations.v1" ||
+      !["known", "unknown"].includes(catalog.catalog_status) ||
+      !catalog.title_code ||
+      catalog.title_code !== issueTitleCode ||
+      !catalog.observation_statement ||
+      !catalog.caveat ||
+      !actions.has(catalog.next_evidence_action)
+    ) {
+      throw new Error("Local API returned invalid issue catalog metadata.");
+    }
+    return catalog;
+  }
+
+  function fallbackIssueCatalog(issue) {
+    const titleCode = readText(issue && issue.title_code);
+    const display = issueCatalogEntry(titleCode);
+    return {
+      catalog_version: "browser-fallback",
+      catalog_status:
+        display.title === "Detected issue" ? "unknown" : "known",
+      title_code: titleCode,
+      observation_statement: display.explanation,
+      caveat: "",
+      next_evidence_action: "inspect_cited_events",
+    };
+  }
+
+  function readGlobalAnalysisCoverage(value, fallback) {
+    return isRecord(value)
+      ? value
+      : isRecord(fallback)
+        ? fallback
+        : null;
+  }
+
+  function selectedIssueListCoverage() {
+    const bucket =
+      state.selectedIssueKind === "evidence_gap"
+        ? state.evidenceGaps
+        : state.issues;
+    return bucket.analysis;
+  }
+
+  function globalCoverageQualifier(coverage) {
+    if (!isRecord(coverage) || coverage.complete === true) return "";
+    return `Global retained-session analysis is incomplete: ${incompleteCoverageText(
+      coverage,
+    )}.`;
   }
 
   function createToneBadge(value) {

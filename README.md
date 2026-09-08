@@ -28,7 +28,7 @@ Alpha scope:
 - Attention Inbox with deterministic issues and exact matching sessions
 - Browser-only, append-only fix-attempt declarations with no free-text field
 - Exact post-attempt recurrence monitoring with bounded retained evidence
-- Exactly six read-only MCP tools
+- Exactly nine read-only MCP tools, including issue discovery and exact cited-event lookup
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
 part of the alpha support claim until it passes the clean-machine checklist.
@@ -137,13 +137,22 @@ The tools are:
 - `query_activity`
 - `list_findings`
 - `get_stats`
+- `list_issues`
+- `get_issue`
+- `lookup_session_events`
 
-The MCP server exposes exactly the six tools above. Planned `list_issues` and
-`get_issue` tools remain deferred until Feature 5; the implemented Attention
-Inbox and issue HTTP routes do not implicitly expose them through MCP.
+The issue-evidence loop is deliberately structured: call `list_issues`, check
+its normalized selection and analysis coverage, pass its `view_cursor` to
+`get_issue`, then hydrate only needed cited IDs with
+`lookup_session_events`. Matching sessions share an exact compatible
+fingerprint; they are not claimed to be semantically similar or to share a
+root cause.
 
-MCP results are structured and marked as untrusted observations. The alpha
-`get_stats` tool provides global Local summary counts only; time-window and
+MCP results are structured and marked as untrusted observations. Fixed issue
+catalog statements describe what deterministic evidence was reported and its
+caveats; they are not generated diagnosis or remediation advice. The
+configured calling agent may reason over the evidence. The alpha `get_stats`
+tool provides global Local summary counts only; time-window and
 workflow-filtered statistics are not implemented.
 
 Session, timeline, activity, and finding lists use bounded, filter-bound opaque
@@ -169,7 +178,8 @@ that a fix failed; no match is not proof that a fix worked. Recurrence
 monitoring reports only post-attempt evidence observed after the recorded
 attempt baseline.
 Monitoring is available through authenticated Local HTTP/browser routes only.
-MCP remains exactly the six read-only tools listed above.
+MCP remains exactly the nine read-only tools listed above and receives no fix
+recording, fix history, or recurrence-monitoring capability.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).
@@ -177,13 +187,21 @@ Exact Codex and Claude Code configuration examples are in
 ## Privacy and evidence limitations
 
 - Belay Local sends no product telemetry and requires no Doplex service.
+- Belay Local and its MCP server make no product-network request. A configured
+  MCP client or remotely hosted model may process or transmit tool results
+  according to that product's privacy policy and the user's configuration.
 - Prompt bodies, transcripts, file contents, raw endpoint identity, and raw
   evidence paths are excluded from canonical events.
 - Minimized envelope/index fields remain plaintext in SQLite; canonical event
   JSON and finding citations are encrypted.
 - Command summaries may retain the executable name and bounded option names.
   File resources retain a project-relative path or basename, and network
-  resources retain scheme plus host.
+  resources retain scheme plus host. Minimized evidence may also include
+  tool names and model/provider labels.
+- Event-derived evidence is untrusted data. It must not be treated as an
+  instruction or, by itself, as authorization to run a command or use another
+  tool. Belay does not claim prompt-injection immunity for the configured
+  client/model.
 - Event observations are operational evidence, not tamper-proof forensic
   evidence. A process running as the same macOS user can alter or suppress local
   state.

@@ -91,7 +91,7 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 		`evidenceGaps: createIssueBucket("evidence_gap")`,
 		`attention_kind: kind`,
 		`experimental: state.issueFilters.experimental ? "include" : "stable"`,
-		`if (viewCursor) bucket.viewCursor = viewCursor;`,
+		`bucket.viewCursor = viewCursor;`,
 		`parameters.set("view_cursor", viewCursor)`,
 		"`/v1/issues/${encodeURIComponent(issueID)}/occurrences?${parameters.toString()}`",
 		`eventIDs.forEach((eventID) => parameters.append("event_id", eventID));`,
@@ -270,6 +270,155 @@ func TestCursorRefreshNoticeWaitsForRequiredReads(t *testing.T) {
 	successIndex := strings.Index(refresh, `"Attention refreshed from a current snapshot."`)
 	if awaitIndex < 0 || successIndex < 0 || successIndex < awaitIndex {
 		t.Error("cursor refresh reports success before required reads complete")
+	}
+}
+
+func TestAttentionBrowserUsesCursorOnlyContinuationAndAdditiveMetadata(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	listPath := browserSourceBlock(
+		t,
+		app,
+		"  function buildIssuePath(kind, cursor) {",
+		"  function renderIssueBucket(bucket) {",
+	)
+	detail := browserSourceBlock(
+		t,
+		app,
+		"  async function loadIssueDetail(append, viewCursor) {",
+		"  function loadMoreOccurrences() {",
+	)
+
+	for _, required := range []string{
+		`if (cursor) {`,
+		"return `/v1/issues?${new URLSearchParams({ cursor }).toString()}`;",
+		`const parameters = new URLSearchParams({`,
+		`attention_kind: kind,`,
+		`experimental: state.issueFilters.experimental ? "include" : "stable",`,
+	} {
+		if !strings.Contains(listPath, required) {
+			t.Errorf("issue-list cursor-v2 request contract is missing %q", required)
+		}
+	}
+	cursorBranch := listPath[:strings.Index(listPath, "    const parameters =")]
+	for _, forbidden := range []string{"limit:", "attention_kind:", "experimental:"} {
+		if strings.Contains(cursorBranch, forbidden) {
+			t.Errorf("issue-list continuation still sends %q", forbidden)
+		}
+	}
+
+	for _, required := range []string{
+		`const parameters = cursor`,
+		`? new URLSearchParams({ cursor })`,
+		`: new URLSearchParams({`,
+		`limit: String(pageLimits.occurrences.page),`,
+		`const pagination = requireCursorPage(`,
+		`const responseViewCursor = readCursor(response.view_cursor);`,
+		`response.catalog`,
+		`response.global_analysis_coverage`,
+	} {
+		if !strings.Contains(detail, required) {
+			t.Errorf("issue-detail cursor-v2/additive contract is missing %q", required)
+		}
+	}
+	if strings.Contains(detail, `parameters.set("cursor"`) {
+		t.Error("issue occurrence continuation mutates a fresh-request parameter set")
+	}
+
+	for _, required := range []string{
+		`bucket.selection = selection;`,
+		`function readIssueSelection(value, kind)`,
+		`function readIssueCatalog(value, issue, previous)`,
+		`function readGlobalAnalysisCoverage(value, fallback)`,
+		`function globalCoverageQualifier(coverage)`,
+		`"belay.issue-explanations.v1"`,
+		`"inspect_cited_events"`,
+		`"inspect_matching_sessions"`,
+		`"inspect_verification_events"`,
+		`Local API returned issue results without a view cursor.`,
+		`Local API returned issue detail without a view cursor.`,
+		`hasMore !== Boolean(nextCursor)`,
+		`currentCursor && nextCursor === currentCursor`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("browser metadata/cursor consistency contract is missing %q", required)
+		}
+	}
+}
+
+func TestAttentionBrowserCursorExpiryClearsEveryDependentState(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	refresh := browserSourceBlock(
+		t,
+		app,
+		"  async function refreshAttentionAfterExpiry() {",
+		"  function showAttentionNotice(",
+	)
+	clearState := browserSourceBlock(
+		t,
+		app,
+		"  function clearExpiredIssueSnapshotState() {",
+		"  function clearExpiredFixDraftState() {",
+	)
+	clearDrafts := browserSourceBlock(
+		t,
+		app,
+		"  function clearExpiredFixDraftState() {",
+		"  function showAttentionNotice(",
+	)
+	closeDetail := browserSourceBlock(
+		t,
+		app,
+		"  function closeIssueDetail(",
+		"  async function refreshAttentionAfterExpiry()",
+	)
+
+	if !strings.Contains(refresh, "clearExpiredIssueSnapshotState();") {
+		t.Fatal("410 recovery does not clear dependent state before refresh")
+	}
+	for _, required := range []string{
+		`resetIssueBucket(state.issues);`,
+		`resetIssueBucket(state.evidenceGaps);`,
+		`resetFixMonitoringBucket(false);`,
+		`clearExpiredFixDraftState();`,
+		`closeIssueDetail(false);`,
+	} {
+		if !strings.Contains(clearState, required) {
+			t.Errorf("410 state clearing is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`draft.idempotencyKey = "";`,
+		`draft.actionToken = "";`,
+		`draft.attempted = false;`,
+		`draft.unresolved = false;`,
+		`draft.pending = false;`,
+		`state.modalSubmitting = false;`,
+	} {
+		if !strings.Contains(clearDrafts, required) {
+			t.Errorf("410 fix/action-token clearing is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`state.selectedIssueCatalog = null;`,
+		`state.selectedGlobalAnalysisCoverage = null;`,
+		`state.selectedIssueViewCursor = "";`,
+		`state.occurrenceNextCursor = "";`,
+		`resetFixIssueState();`,
+	} {
+		if !strings.Contains(closeDetail, required) {
+			t.Errorf("410 detail clearing is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"submitFixAttempt(",
+		"apiMutation(",
+		"selectIssue(",
+	} {
+		if strings.Contains(refresh, forbidden) ||
+			strings.Contains(clearState, forbidden) ||
+			strings.Contains(clearDrafts, forbidden) {
+			t.Errorf("410 recovery must not automatically invoke %q", forbidden)
+		}
 	}
 }
 

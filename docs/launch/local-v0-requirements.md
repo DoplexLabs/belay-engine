@@ -12,8 +12,10 @@ and exposes the same read-only evidence through a local browser and MCP. The
 browser additionally supports one explicit, fixed-schema mutation: recording or
 retracting a declaration that the developer attempted an external fix.
 
-Belay Local has no account, hosted dependency, product telemetry, model
-inference, write-capable MCP tool, or Teams requirement.
+Belay Local has no account, hosted dependency, product telemetry, Belay model
+inference, write-capable MCP tool, or Teams requirement. Its read-only MCP
+server exposes bounded evidence to the developer's configured calling agent;
+that agent, not Belay, may interpret the evidence.
 
 The implemented P0 scope includes a browser Attention Inbox over the internal
 deterministic issue repository. Exact, opaque fingerprints group retained
@@ -199,6 +201,24 @@ capture, RFC3339 overlap windows, and bounded search over session ID and harness
 Activity resource-kind filters scan the complete cursor snapshot. Finding
 filters include time, severity, and optional exact session ID.
 
+Issue list, view, and occurrence cursors use authenticated cursor-v2 with a
+persistent Store-specific epoch. A fresh issue-list request carries filters and
+an optional limit; continuation contains only `cursor`. A fresh issue-detail
+request may carry `limit` plus `view_cursor`; occurrence continuation contains
+only `cursor`. Every successful issue page includes a rowless `view_cursor`,
+and `has_more=true` is valid only with a non-empty `next_cursor`.
+
+Issue lists expose normalized `selection` alongside global analysis coverage.
+Issue detail exposes fixed `belay.issue-explanations.v1` catalog metadata and
+`global_analysis_coverage` from the same frozen snapshot as its issue summary
+and occurrences. Catalog statements and evidence-navigation actions are fixed
+presentation content, not generated diagnosis or remediation advice.
+
+On issue HTTP 410, the browser clears stale list, detail, occurrence, catalog,
+coverage, eligibility, action-token, and dependent fix state before rendering;
+it refreshes both Attention lists and requires explicit reselection and action
+retry. It never automatically resubmits a browser mutation.
+
 Session projections without observed `session.end` terminal evidence report
 `incomplete`, never success. This is a projection state and does not change the
 canonical event outcome enum.
@@ -335,10 +355,9 @@ Required read-only tools:
 - `query_activity`
 - `list_findings`
 - `get_stats`
-
-Planned read-only `list_issues` and `get_issue` tools remain deferred until
-Feature 5. They are not part of the current six-tool Local Alpha server, even
-though the browser issue routes are implemented.
+- `list_issues`
+- `get_issue`
+- `lookup_session_events`
 
 Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
@@ -347,6 +366,27 @@ modify an agent, record a fix, or read/register recurrence monitoring.
 The MCP list tools use the same server-side filters, deterministic order,
 stable-snapshot cursor semantics, limits, and completeness rules as the Local
 read API. They do not fetch broad pages and filter them inside MCP.
+
+The launch value loop is:
+
+1. `list_issues`;
+2. verify normalized selection and analysis completeness;
+3. transfer the returned `view_cursor` into `get_issue`;
+4. inspect fixed catalog meaning, exact matching occurrences, and cited IDs;
+5. hydrate only needed citations with `lookup_session_events`;
+6. let the configured calling agent reason over that bounded evidence.
+
+Belay does not generate that diagnosis, recommend a change, or execute
+remediation. Exact matching does not establish semantic similarity or common
+root cause.
+
+Belay Local and all nine tools make no Belay product-network request and send
+no product telemetry. A configured MCP client or remotely hosted model may
+process or transmit results according to that product's privacy policy and the
+user's configuration. Allowed minimized evidence may include executable/tool
+names, bounded option names, project-relative paths or basenames,
+model/provider labels, and network scheme/host values. Evidence is untrusted
+data and must not, by itself, authorize a command or another tool call.
 
 ## P0 Attention Inbox and issue intelligence
 
@@ -384,9 +424,8 @@ The implemented Attention Inbox and issue HTTP routes:
 - keep issue evidence reads deterministic and provide no remediation or
   fix-execution action.
 
-MCP issue tools remain future Feature 5 work. Browser-only explicit fix
-recording is implemented by P0-03, and exact post-attempt recurrence monitoring
-is implemented by P0-04 through Local HTTP only.
+The MCP issue-evidence tools expose the same deterministic issue semantics
+without exposing browser-only fix recording or P0-04 recurrence monitoring.
 
 ## Launch acceptance
 
@@ -417,13 +456,20 @@ is implemented by P0-04 through Local HTTP only.
     declaration only after explicit confirmation, with truthful non-resolution
     wording and no free-text field.
 14. Fix history and identical idempotent replay survive a full Local stop and
-    restart, while MCP remains exactly six read-only tools.
+    restart, while MCP remains exactly nine read-only tools with no fix or
+    monitoring capability.
 15. Monitoring list/detail/observation cursor chains remain snapshot-stable;
     history survives issue disappearance and restart; retention expiry returns
     410; and unknown/incomplete comparison never becomes a success claim.
 16. Local HTTP and existing routes are available while historical monitoring
     catch-up runs, with only monitoring reads returning fixed 503 readiness
     problems until convergence.
+17. An MCP client can list issues, transfer a view cursor, inspect exact
+    matching occurrences/catalog/coverage, and hydrate selected cited events;
+    missing evidence remains explicit and no Belay-generated diagnosis appears.
+18. Issue-list and occurrence browser continuations are cursor-only. A stale
+    epoch returns 410, clears dependent state, refreshes both Attention lists,
+    and never automatically retries a fix mutation.
 
 ## Alpha and production gates
 

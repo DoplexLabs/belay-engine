@@ -1,7 +1,8 @@
 # Belay Read API V1 Contract
 
-- **Status:** Implemented Local Alpha surface, including Feature 2 Attention,
-  P0-03 browser-only fix-attempt actions, and P0-04 recurrence-monitoring reads
+- **Status:** Implemented Local Alpha surface, including Attention,
+  P0-03 browser-only fix-attempt actions, P0-04 recurrence-monitoring reads,
+  and the P0-05 shared issue-evidence readmodel
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -11,9 +12,9 @@ Belay has one intended read contract with Local and future Teams adapters. The
 Local Alpha implements only the routes explicitly listed below. Other resources
 must not be represented as available Local Alpha or Teams functionality.
 
-Feature 2 exposes the internal snapshot-queryable issue repository through the
-loopback HTTP API and browser Attention Inbox. This does not add MCP issue
-tools: MCP remains exactly six tools until Feature 5.
+The snapshot-queryable issue repository is shared by the loopback HTTP
+Attention Inbox and the read-only MCP issue-evidence tools. HTTP remains the
+only adapter with browser fix-attempt and recurrence-monitoring capabilities.
 
 P0-03 adds four Local-only routes for explicit browser fix-attempt declarations.
 They are not future Teams read-contract claims and do not make MCP write-capable.
@@ -256,8 +257,8 @@ cause, correctness, safety, intent, or successful remediation.
 
 ### Issue summary shape
 
-The implemented issue HTTP routes use this logical summary. Planned Feature 5
-MCP issue tools may reuse it without changing the current six-tool MCP surface:
+The implemented issue HTTP routes and P0-05 MCP issue tools use this logical
+summary:
 
 ```json
 {
@@ -374,7 +375,9 @@ Accepted query parameters:
 
 Ordering is severity descending (`critical`, `high`, `medium`, `low`, `info`),
 repeated before single within a severity, `last_observed_at DESC`, then
-`issue_id ASC`. All normalized filters are bound into the cursor.
+`issue_id ASC`. A fresh request may include filters and an explicit limit. A
+continuation contains only `cursor`; all normalized filters and the effective
+limit are recovered from authenticated cursor-v2.
 The default response excludes experimental signals and evidence gaps.
 Verification evidence gaps are requested separately with
 `attention_kind=evidence_gap`; they do not inflate the default issue count.
@@ -395,6 +398,12 @@ Response:
     "analysis_through": "2026-09-08T18:05:01Z",
     "complete": false
   },
+  "selection": {
+    "attention_kind": "issue",
+    "experimental": "stable",
+    "includes_evidence_gaps": false,
+    "includes_experimental": false
+  },
   "view_cursor": "opaque-rowless-view-cursor",
   "next_cursor": null,
   "has_more": false,
@@ -408,6 +417,10 @@ truncated at the response snapshot. Unscoped sessions may be fully analyzed but
 cannot support cross-session recurrence. When `complete=false`, an empty result
 means only that no issue is available from the completed portion. Consumers
 must identify incomplete coverage and must not say that no issues exist.
+
+`selection` is the server-normalized issue/evidence-gap and experimental
+selection bound into the cursor. Consumers use it to qualify empty results and
+must not infer a broader selection from client-side controls.
 
 `view_cursor` carries the list's immutable issue-projection snapshot without a
 row position. A client passes it to the initial detail request so list and
@@ -445,6 +458,23 @@ cursor without first locating the issue in a paginated issue list.
     "issue": {},
     "occurrences": []
   },
+  "catalog": {
+    "catalog_version": "belay.issue-explanations.v1",
+    "catalog_status": "known",
+    "title_code": "issue.explicit_command_failure",
+    "observation_statement": "The source explicitly reported a failed command result.",
+    "caveat": "A reported command failure does not by itself establish root cause or whether a later attempt succeeded.",
+    "next_evidence_action": "inspect_cited_events"
+  },
+  "global_analysis_coverage": {
+    "current_sessions": 120,
+    "pending_sessions": 2,
+    "failed_sessions": 1,
+    "truncated_sessions": 0,
+    "unscoped_sessions": 8,
+    "analysis_through": "2026-09-08T18:05:01Z",
+    "complete": false
+  },
   "view_cursor": "opaque-rowless-view-cursor",
   "next_cursor": null,
   "has_more": false,
@@ -453,22 +483,34 @@ cursor without first locating the issue in a paginated issue list.
 }
 ```
 
+`catalog` contains fixed, versioned observation, caveat, and evidence-navigation
+content. It is not generated diagnosis or remediation advice.
+`global_analysis_coverage` describes all retained sessions at the exact frozen
+issue snapshot; filtering for one issue does not narrow that coverage.
+
 ### Issue cursor semantics
 
-Issue cursors carry an immutable projection generation, normalized filters,
-last deterministic sort key, and issued-at time. They expire after 15 minutes.
-Projection revision history is retained for at least one hour, but clients must
-honor the shorter cursor lifetime.
+Issue list, view, and occurrence cursors use authenticated cursor-v2. They
+carry a database-specific epoch, immutable projection generation, retention
+generation, normalized filters and effective limit where applicable, route and
+issue binding, deterministic sort position, and issued-at time. They expire
+after 15 minutes.
 
 - A fresh request without a cursor reads the current projection generation.
+- Issue-list and occurrence continuation requests contain only `cursor`.
 - Reconciliation after page one cannot add, remove, or reorder rows in that
   cursor chain.
-- A malformed, cross-route, issue-mismatched, or filter-mismatched cursor
+- A malformed, bad-MAC, cross-route, issue-mismatched, or filter-mismatched cursor
   returns `400 application/problem+json` without reflecting cursor contents.
-- An expired cursor, or one older than the oldest retained projection
-  generation, returns `410 application/problem+json` with fixed type
+- A valid authenticated cursor with a stale database epoch, expired lifetime,
+  or unavailable retained projection returns `410 application/problem+json`
+  with fixed type
   `belay.local/cursor-expired`.
-- Clients restart pagination without a cursor after expiration.
+- Migration 012 expires every issue cursor-v1 and pre-reset fix eligibility or
+  action token.
+- On 410, the browser clears issue list/detail/occurrence and fix-eligibility
+  state, refreshes both Attention lists, and requires explicit issue reselection
+  and action retry. It never automatically resubmits a mutation.
 
 ### `GET /v1/sessions/{id}/events/lookup`
 
@@ -1127,7 +1169,8 @@ Errors use `application/problem+json` with:
 13. Fix creation/retraction are append-only, idempotent, payload-free, and
     survive Local restart and ordinary retention.
 14. Fix recording and exact recurrence monitoring remain Local HTTP/browser
-    capabilities; MCP still exposes exactly six read-only tools.
+    capabilities; MCP exposes exactly nine read-only tools and receives neither
+    capability.
 15. Monitoring cursors bind every documented high-water, route ID, normalized
     filter, page size, and ordering position for 15 minutes.
 16. Catch-up 503 affects only monitoring routes; cancellation/restart converges
@@ -1137,6 +1180,12 @@ Errors use `application/problem+json` with:
     evidence on fresh reads.
 18. Matching evidence is never described as fix failure, and no-match,
     incomplete, unavailable, or unknown evidence is never described as success.
+19. Issue list and occurrence continuations send only their returned cursor;
+    selection, effective limit, snapshot, and ordering remain cursor-bound.
+20. Every successful issue page includes a view cursor; inconsistent
+    `has_more`/`next_cursor` metadata fails closed in browser clients.
+21. Issue detail catalog and global analysis coverage describe the same frozen
+    snapshot as the issue and occurrence page.
 
 Teams shape compatibility and cross-workspace authorization remain future
 acceptance requirements, not Local Alpha claims.

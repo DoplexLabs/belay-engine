@@ -536,8 +536,8 @@ Pass criteria:
   `pruned`, and `unknown`; the declarations themselves remain present.
 - No restart converts a declaration into a resolution claim or fabricates a
   recurrence observation.
-- MCP still exposes exactly six read-only tools and no fix-history, record,
-  retract, replay, recurrence, write, or remediation tool.
+- MCP still exposes exactly nine read-only tools and no fix-history, record,
+  retract, replay, recurrence-monitoring, write, or remediation tool.
 - The old tokenized browser URL is not used as the restarted launch credential.
 
 Evidence:
@@ -653,7 +653,7 @@ Pass criteria:
   observation.
 - History-only detail returns `current_issue_available=false` and
   `current_issue=null`.
-- MCP still exposes exactly six read-only tools and no monitoring repository,
+- MCP still exposes exactly nine read-only tools and no monitoring repository,
   fix, recurrence, write, or remediation tool.
 
 Evidence:
@@ -718,7 +718,7 @@ Evidence:
 - Timeline event ID/screenshot:
 - Notes/defect:
 
-## A10 — MCP six-tool contract
+## A10 — MCP nine-tool issue-evidence contract
 
 Configure both Codex and Claude Code using the examples in
 `developer-preview.md`, restart each client, and inspect Belay's MCP tools.
@@ -728,15 +728,44 @@ Pass criteria:
 - Both clients connect over stdio.
 - Exactly these tools appear:
   `list_sessions`, `get_session`, `get_session_timeline`, `query_activity`,
-  `list_findings`, and `get_stats`.
+  `list_findings`, `get_stats`, `list_issues`, `get_issue`, and
+  `lookup_session_events`.
 - Representative calls and at least one two-page cursor chain succeed in each
   client.
 - Session, activity, and finding filters match the Local API results.
-- Results contain `untrusted_observations: true`.
+- `list_issues` defaults to stable ordinary issues, returns normalized
+  `selection`, analysis coverage, and a non-empty `view_cursor`.
+- A non-default-limit issue continuation sends only `cursor`; filters and limit
+  remain stable across the chain.
+- `get_issue` accepts the transferred `view_cursor`, returns exact matching
+  occurrences, fixed catalog metadata, snapshot-matched
+  `global_analysis_coverage`, and a new `view_cursor`.
+- Occurrence continuation sends only `issue_id` plus `cursor`.
+- `lookup_session_events` returns only selected cited IDs from the selected
+  session, reports missing IDs explicitly, and states that its current-ingestion
+  snapshot is not issue-snapshot-bound.
+- New-tool results contain `untrusted_observations: true` and trust metadata
+  with `instruction_authority=none`.
+- Catalog text is fixed evidence meaning/caveat, not generated diagnosis or
+  remediation advice.
 - No prompts, resources, fix-history/record/retract tools, other write tools,
-  command execution, remediation, or filesystem access are exposed.
+  recurrence tools, command execution, remediation, or filesystem access are
+  exposed.
 - A filtered `get_stats` request is recorded as an expected alpha limitation;
   unfiltered `get_stats` succeeds.
+
+Cursor-expiry check:
+
+1. Open Attention and retain an issue-list cursor, issue `view_cursor`,
+   occurrence cursor if available, and fix eligibility without submitting.
+2. Apply the approved stale-epoch fixture or use an explicitly prepared
+   pre-migration database.
+3. Retry each stale issue cursor.
+4. Confirm HTTP returns fixed `410 belay.local/cursor-expired`.
+5. Confirm the browser closes selected detail, clears list/detail/occurrence,
+   catalog, coverage, eligibility, action-token, and dependent fix state,
+   refreshes both Attention lists, and requires explicit issue reselection.
+6. Confirm no fix declaration or retraction is automatically submitted.
 
 Evidence:
 
@@ -757,10 +786,13 @@ Pass criteria:
 - Browser refresh and timeline reads succeed.
 - Existing fix-attempt history remains readable; an eligible declaration and
   retraction can be recorded through loopback without hosted access.
-- All six MCP tools remain discoverable and representative session/timeline
-  reads succeed.
+- All nine MCP tools remain discoverable. Representative session/timeline
+  reads and the issue list → detail → cited-event lookup loop succeed.
 - No hosted login or Belay service is requested.
 - A new supported live-hook event can be imported while offline.
+- If the configured client uses a remotely hosted model, distinguish that
+  client's network behavior from Belay Local; it is not evidence of a Belay
+  product-network request.
 
 Evidence:
 
@@ -803,6 +835,14 @@ Pass criteria:
 - The canary is absent from Belay logs.
 - The canary is absent from SQLite database, WAL, and SHM bytes.
 - Minimized event metadata still appears without the prompt body.
+- Allowed MCP evidence is limited to documented minimized fields such as
+  executable/tool names, bounded option names, project-relative paths or
+  basenames, model/provider labels, and network scheme/host values.
+- Evidence strings remain structured untrusted observations and never enter
+  tool descriptions, fixed narrative, errors, or diagnostics.
+- Record separately whether the configured MCP client/model transmitted tool
+  results under its own policy. Do not attribute client/model processing to
+  Belay Local.
 
 Evidence:
 
