@@ -53,6 +53,29 @@ func TestResolveNumbatBinaryPrefersExplicitExecutable(t *testing.T) {
 	}
 }
 
+func TestResolveNumbatBinaryUsesProvidedExecutableSibling(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	belay := filepath.Join(bin, "belay")
+	numbat := filepath.Join(bin, "numbat")
+	if err := os.WriteFile(numbat, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveNumbatBinaryForExecutable(paths, Config{}, "", belay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != numbat {
+		t.Fatalf("binary = %q, want sibling %q", got, numbat)
+	}
+}
+
 func TestResolvePathsUsesBelayHome(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "custom")
 	t.Setenv("BELAY_HOME", root)

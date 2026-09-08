@@ -20,9 +20,16 @@ Inputs:
 
 - `limit` (default 20, maximum 100)
 - `cursor` (optional)
-- `since` (optional timestamp)
+- `since` (compatibility alias for `occurred_after`)
+- `occurred_after` and `occurred_before` (optional RFC3339 overlap window)
 - `harness` (optional)
-- `outcome` (optional)
+- `outcome` (optional raw projection value)
+- `history` (`historical`, `live`, or `mixed`)
+- `query` (maximum 128 bytes; session ID and harness only)
+
+The tool uses the same server-side filters, deterministic ordering, immutable
+snapshot, cursor validation, and completeness semantics as
+`GET /v1/sessions`. It does not fetch a broad page and filter it in MCP.
 
 ### `get_session`
 
@@ -54,7 +61,11 @@ Inputs:
 - `harness` (optional)
 - `resource_kind` (optional)
 - `outcome` (optional)
+- `cursor` (optional)
 - `limit` (default 50, maximum 200)
+
+Resource-kind matches are exhaustive within the cursor snapshot; an internal
+candidate window must not silently omit older matches.
 
 ### `list_findings`
 
@@ -64,17 +75,22 @@ Inputs:
 
 - `since` (optional)
 - `severity` (optional)
+- `session_id` (optional exact Belay session identifier)
+- `cursor` (optional)
 - `limit` (default 20, maximum 100)
+
+The cursor is bound to the normalized time, severity, and session filters.
 
 ### `get_stats`
 
-Returns versioned Local or Teams summary metrics with coverage and confidence.
+Returns versioned global Local summary metrics.
 
 Inputs:
 
-- `occurred_after`
-- `occurred_before`
-- `workflow_id` (optional)
+- none
+
+Local V1 does not advertise time or workflow filters for `get_stats`. Those
+inputs may be added only when the corresponding projections are implemented.
 
 ## Response safety
 
@@ -86,6 +102,10 @@ Every tool response:
 - Includes pagination/truncation state.
 - Applies response-size limits.
 - Never interprets event content as instructions.
+
+List tools return `next_cursor` exactly when `has_more=true`. Cursors are opaque
+and filter-bound; malformed or mismatched cursors fail with a payload-free
+input error.
 
 ## Explicitly absent
 

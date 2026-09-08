@@ -1,6 +1,7 @@
-# Belay Local V0 Launch Requirements
+# Belay Local Developer Alpha Requirements
 
-Status: implementation contract for the individual-developer launch slice.
+Status: implementation contract for the Apple Silicon individual-developer
+alpha slice.
 
 ## Product promise
 
@@ -37,6 +38,13 @@ inference, write-capable MCP tool, or Teams requirement.
 Numbat may discover and parse additional supported harnesses. They are reported
 as upstream-supported until Belay adds a sanitized end-to-end launch fixture.
 
+### Launch-validated platform
+
+- Apple Silicon macOS (`darwin/arm64`)
+
+Intel macOS remains an engineering build target, not an alpha support claim,
+until the clean-machine checklist passes on Intel hardware.
+
 ### Deferred
 
 - Belay Teams enrollment, upload, API, UI, billing, or deployment
@@ -51,6 +59,7 @@ as upstream-supported until Belay adds a sanitized end-to-end launch fixture.
 The launch CLI must converge on these stable workflows:
 
 ```text
+belay quickstart
 belay local
 belay local --install-hooks
 belay scan
@@ -60,10 +69,18 @@ belay mcp
 belay doctor
 ```
 
+`belay quickstart` is the packaged one-command onboarding path. Invoking it is
+explicit consent to initialize private Local state, verify the packaged sibling
+Numbat using the checksum and version marker embedded at build time, install
+reversible monitor-only hooks for detected Codex and Claude Code installations,
+scan supported history, start Local, print the loopback URL, and attempt to open
+the dashboard. Browser-open failure is non-fatal because the URL remains
+printed.
+
 `belay local` initializes Local state if necessary, performs a historical scan,
 imports any new live records, starts the loopback API, and prints the local URL.
-It never edits an agent configuration unless `--install-hooks` was explicitly
-provided.
+It is the lower-side-effect path: it does not open a browser and never edits an
+agent configuration unless `--install-hooks` was explicitly provided.
 
 ## Local filesystem contract
 
@@ -114,6 +131,7 @@ Required routes:
 - `GET /v1/sessions`
 - `GET /v1/sessions/{id}`
 - `GET /v1/sessions/{id}/events`
+- `GET /v1/activity`
 - `GET /v1/findings`
 - `GET /v1/stats`
 
@@ -126,11 +144,16 @@ an event outcome, the browser preserves the canonical `unknown` value as
 subdued `Outcome · Not reported by source` metadata instead of presenting every
 event as a prominent unknown status. Session outcome badges remain unchanged.
 
-For the Local preview, session-list and session-event responses include
-`has_more`, `returned_count`, and the effective bounded `limit`.
-`next_cursor` remains `null`; production cursor pagination is still required.
-The browser safely expands bounded limits up to 100 sessions and 500 events,
-then explicitly discloses when additional rows remain.
+Session, session-event, activity, and finding responses include `has_more`,
+`next_cursor`, `returned_count`, and the effective bounded `limit`. A non-empty
+opaque `next_cursor` is returned exactly when another matching row exists in the
+stable ingestion snapshot. Cursors are endpoint-specific and bound to normalized
+filters; malformed, cross-endpoint, or filter-mismatched cursors fail closed.
+
+Session filters include harness, raw projection outcome, historical/live/mixed
+capture, RFC3339 overlap windows, and bounded search over session ID and harness.
+Activity resource-kind filters scan the complete cursor snapshot. Finding
+filters include time, severity, and optional exact session ID.
 
 Session projections without observed `session.end` terminal evidence report
 `incomplete`, never success. This is a projection state and does not change the
@@ -151,15 +174,16 @@ Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
 modify an agent, record a fix, or register recurrence.
 
-Local preview `list_sessions` recalculates `returned_count`, `limit`, and
-`has_more` after filtering. It conservatively reports `has_more=true` when its
-underlying bounded page may contain unread rows. Cursor paging remains
-unavailable in the preview.
+The MCP list tools use the same server-side filters, deterministic order,
+stable-snapshot cursor semantics, limits, and completeness rules as the Local
+read API. They do not fetch broad pages and filter them inside MCP.
 
 ## Launch acceptance
 
-1. On a macOS account with Codex and Claude Code history, one Local invocation
-   discovers both and renders sessions from both without an account.
+1. On a macOS account with Codex and Claude Code history, one packaged
+   `belay quickstart` invocation needs no manual Numbat path or pin flags,
+   discovers both harnesses, installs monitor-only hooks, and renders sessions
+   from both without an account.
 2. Re-running the scan inserts no duplicate canonical events.
 3. With networking disabled, browser and MCP session reads still work.
 4. Explicit hook installation records a new supported agent action without
@@ -174,13 +198,19 @@ unavailable in the preview.
    test.
 10. The release contains the selected Belay license plus Numbat license and
     third-party attribution.
+11. Every distributable archive is built from a clean checkout and records
+    `belay_dirty=false`; dirty validation artifacts are never distributed.
 
-## Release blockers
+## Alpha and production gates
 
-- Belay edge license selection
-- Time-bounded approval for the checksum-verified Numbat research commit, or a
-  released upstream tag with schema 0.3.0
-- Apple Developer ID credentials for a signed/notarized public macOS package
+- Belay is licensed under Apache-2.0; license selection is complete.
+- The checksum-verified Numbat research commit is an explicit Developer Alpha
+  exception. A released upstream tag with schema 0.3.0, or a renewed exception,
+  remains a production gate.
+- Apple Developer ID signing and notarization remain production gates, not
+  requirements for the explicitly unsigned Developer Alpha.
+- Repository visibility, artifact publication, naming clearance, and external
+  tester authorization remain human-owned launch gates.
 
-These block a production-style public package, but not implementation or an
-unsigned developer preview.
+The objective clean-machine evidence is recorded in
+`docs/launch/clean-machine-alpha-qa.md`.

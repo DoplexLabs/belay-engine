@@ -3,7 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +16,231 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 )
+
+func TestPrepareRuntimeBootstrapsVerifiedPackagedSiblingPin(t *testing.T) {
+	home := t.TempDir()
+	belayExecutable, numbatExecutable, checksum := packagedNumbatFixture(
+		t,
+		"numbat packaged-marker",
+	)
+	setCompiledNumbatTestState(t, checksum, "packaged-marker", belayExecutable)
+	t.Setenv("BELAY_NUMBAT_BIN", "")
+
+	runtime, err := prepareRuntime(
+		context.Background(),
+		testRuntimeFlags(home, "", "", "", false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.NumbatSHA256 != checksum ||
+		runtime.config.NumbatVersionMarker != "packaged-marker" {
+		t.Fatalf("bootstrapped config = %+v", runtime.config)
+	}
+	if runtime.config.NumbatBinary == numbatExecutable ||
+		!strings.HasPrefix(runtime.config.NumbatBinary, runtime.paths.BundledBin+"-") {
+		t.Fatalf("materialized binary = %q", runtime.config.NumbatBinary)
+	}
+	if info, err := os.Stat(runtime.config.NumbatBinary); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("materialized binary is unavailable: %v", err)
+	}
+
+	persisted, err := localapp.LoadOrCreateConfig(runtime.paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted != runtime.config {
+		t.Fatalf("persisted config = %+v, want %+v", persisted, runtime.config)
+	}
+}
+
+func TestPrepareRuntimeRefusesCompiledPinForNonSiblingBinary(t *testing.T) {
+	home := t.TempDir()
+	belayExecutable, _, _ := packagedNumbatFixture(t, "numbat packaged-marker")
+	otherBinary := filepath.Join(t.TempDir(), "numbat")
+	checksum := writeVersionedNumbat(t, otherBinary, "numbat packaged-marker")
+	setCompiledNumbatTestState(t, checksum, "packaged-marker", belayExecutable)
+	t.Setenv("BELAY_NUMBAT_BIN", otherBinary)
+
+	_, err := prepareRuntime(
+		context.Background(),
+		testRuntimeFlags(home, "", "", "", false),
+	)
+	if err == nil || !strings.Contains(err.Error(), "packaged sibling") {
+		t.Fatalf("prepareRuntime() error = %v, want sibling refusal", err)
+	}
+	config, loadErr := localapp.LoadOrCreateConfig(mustResolvePaths(t, home))
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if config.NumbatSHA256 != "" || config.NumbatVersionMarker != "" {
+		t.Fatalf("failed bootstrap persisted compiled pin: %+v", config)
+	}
+}
+
+func TestPrepareRuntimeRefusesBadPackagedHashAndVersion(t *testing.T) {
+	tests := []struct {
+		name   string
+		hash   func(string) string
+		marker string
+	}{
+		{
+			name: "hash",
+			hash: func(string) string {
+				return strings.Repeat("0", 64)
+			},
+			marker: "packaged-marker",
+		},
+		{
+			name:   "version",
+			hash:   func(value string) string { return value },
+			marker: "wrong-marker",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			belayExecutable, _, checksum := packagedNumbatFixture(
+				t,
+				"numbat packaged-marker",
+			)
+			setCompiledNumbatTestState(
+				t,
+				test.hash(checksum),
+				test.marker,
+				belayExecutable,
+			)
+			t.Setenv("BELAY_NUMBAT_BIN", "")
+
+			_, err := prepareRuntime(
+				context.Background(),
+				testRuntimeFlags(home, "", "", "", false),
+			)
+			if err == nil {
+				t.Fatal("prepareRuntime() succeeded with invalid packaged pin")
+			}
+			config, loadErr := localapp.LoadOrCreateConfig(mustResolvePaths(t, home))
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if config.NumbatSHA256 != "" || config.NumbatVersionMarker != "" {
+				t.Fatalf("failed verification persisted pin: %+v", config)
+			}
+		})
+	}
+}
+
+func TestPrepareRuntimePreservesExplicitPinForSourceBuild(t *testing.T) {
+	home := t.TempDir()
+	binary := filepath.Join(t.TempDir(), "custom-numbat")
+	checksum := writeVersionedNumbat(t, binary, "numbat source-marker")
+	setCompiledNumbatTestState(
+		t,
+		"",
+		"",
+		filepath.Join(t.TempDir(), "bin", "belay"),
+	)
+
+	runtime, err := prepareRuntime(
+		context.Background(),
+		testRuntimeFlags(home, binary, checksum, "source-marker", false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.NumbatSHA256 != checksum ||
+		runtime.config.NumbatVersionMarker != "source-marker" {
+		t.Fatalf("explicit config = %+v", runtime.config)
+	}
+}
+
+func TestQuickstartAndLocalLaunchModes(t *testing.T) {
+	original := launchLocal
+	t.Cleanup(func() { launchLocal = original })
+	var captured []localLaunchOptions
+	launchLocal = func(
+		_ context.Context,
+		options localLaunchOptions,
+		_, _ io.Writer,
+	) error {
+		captured = append(captured, options)
+		return nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run(
+		context.Background(),
+		[]string{"quickstart"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(
+		context.Background(),
+		[]string{"quickstart", "--no-open"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLocal(context.Background(), nil, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLocal(
+		context.Background(),
+		[]string{"--install-hooks", "--no-scan"},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 4 {
+		t.Fatalf("captured launches = %d, want 4", len(captured))
+	}
+	if !captured[0].installHooks || !captured[0].historicalScan ||
+		!captured[0].openBrowser || captured[0].commandName != "quickstart" {
+		t.Fatalf("quickstart launch = %+v", captured[0])
+	}
+	if captured[1].openBrowser || !captured[1].installHooks ||
+		!captured[1].historicalScan {
+		t.Fatalf("quickstart --no-open launch = %+v", captured[1])
+	}
+	if captured[2].installHooks || captured[2].openBrowser ||
+		!captured[2].historicalScan || captured[2].commandName != "local" {
+		t.Fatalf("normal local launch changed = %+v", captured[2])
+	}
+	if !captured[3].installHooks || captured[3].historicalScan ||
+		captured[3].openBrowser || captured[3].commandName != "local" {
+		t.Fatalf("explicit local flags changed = %+v", captured[3])
+	}
+}
+
+func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runQuickstart(
+		context.Background(),
+		[]string{"--help"},
+		&stdout,
+		&stderr,
+	)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("runQuickstart(--help) error = %v, want flag.ErrHelp", err)
+	}
+	for _, required := range []string{
+		"monitor-only hooks",
+		"Codex and Claude Code",
+		"loopback-only",
+		"No prompts, completions, file contents, or telemetry",
+		"-no-open",
+	} {
+		if !strings.Contains(stderr.String(), required) {
+			t.Fatalf("quickstart help missing %q:\n%s", required, stderr.String())
+		}
+	}
+}
 
 func TestOnboardLocalHooksReportsPartialFailureAndReturns(t *testing.T) {
 	root := t.TempDir()
@@ -72,6 +301,80 @@ exit 7`)
 	if strings.Contains(output, "private-discovery-error") {
 		t.Fatalf("onboarding output leaked discovery stderr:\n%s", output)
 	}
+}
+
+func testRuntimeFlags(
+	home string,
+	binary string,
+	checksum string,
+	marker string,
+	allowUnverified bool,
+) localRuntimeFlags {
+	return localRuntimeFlags{
+		home:            &home,
+		numbatBinary:    &binary,
+		numbatSHA256:    &checksum,
+		versionMarker:   &marker,
+		allowUnverified: &allowUnverified,
+	}
+}
+
+func setCompiledNumbatTestState(
+	t *testing.T,
+	checksum string,
+	marker string,
+	executable string,
+) {
+	t.Helper()
+	oldChecksum := bundledNumbatSHA256
+	oldMarker := bundledNumbatVersionMarker
+	oldExecutable := currentExecutablePath
+	bundledNumbatSHA256 = checksum
+	bundledNumbatVersionMarker = marker
+	currentExecutablePath = func() (string, error) { return executable, nil }
+	t.Cleanup(func() {
+		bundledNumbatSHA256 = oldChecksum
+		bundledNumbatVersionMarker = oldMarker
+		currentExecutablePath = oldExecutable
+	})
+}
+
+func packagedNumbatFixture(t *testing.T, versionOutput string) (string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	belayExecutable := filepath.Join(bin, "belay")
+	numbatExecutable := filepath.Join(bin, "numbat")
+	checksum := writeVersionedNumbat(t, numbatExecutable, versionOutput)
+	return belayExecutable, numbatExecutable, checksum
+}
+
+func writeVersionedNumbat(t *testing.T, path, versionOutput string) string {
+	t.Helper()
+	body := []byte(fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "version" ]; then
+	printf '%%s\n' %q
+	exit 0
+fi
+exit 0
+`, versionOutput))
+	if err := os.WriteFile(path, body, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func mustResolvePaths(t *testing.T, root string) localapp.Paths {
+	t.Helper()
+	paths, err := localapp.ResolvePaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paths
 }
 
 func newLocalHookClient(t *testing.T, body string) *numbat.Client {

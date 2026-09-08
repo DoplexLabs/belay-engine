@@ -19,7 +19,7 @@ fi
 
 [[ "$(uname -s)" == "Darwin" ]] || die "runtime smoke tests require macOS"
 for required in \
-  awk basename chmod cut dirname env file find grep mkdir mktemp pwd rm shasum \
+  basename chmod cut dirname env file find grep mkdir mktemp pwd rm shasum \
   sort tar uname; do
   require_command "${required}"
 done
@@ -56,7 +56,9 @@ required_entries=(
   "${package_name}/licenses/numbat/LICENSE"
   "${package_name}/licenses/numbat/THIRD_PARTY_LICENSES.txt"
   "${package_name}/README.md"
-  "${package_name}/docs/developer-preview.md"
+  "${package_name}/llms.txt"
+  "${package_name}/docs/developer-alpha.md"
+  "${package_name}/docs/clean-machine-alpha-qa.md"
   "${package_name}/BUILD-INFO.txt"
   "${package_name}/SHA256SUMS"
 )
@@ -110,30 +112,43 @@ run_without_network() {
   fi
 }
 
-numbat_sha256="$(shasum -a 256 "${numbat}" | awk '{print $1}')"
 run_without_network "${numbat}" version | grep -Fq "${NUMBAT_VERSION_MARKER}" ||
   die "packaged Numbat version marker mismatch"
-run_without_network "${belay}" verify-numbat \
-  --binary "${numbat}" \
-  --sha256 "${numbat_sha256}" \
-  --version-marker "${NUMBAT_VERSION_MARKER}"
-run_without_network "${belay}" help >/dev/null
+run_without_network "${belay}" help | grep -Fq "quickstart" ||
+  die "packaged Belay does not advertise quickstart"
 
 # This initializes only disposable user and Belay homes and performs read-only
-# agent inventory. It never sees the real user home, invokes hook installation,
-# or opens the Local database.
+# agent inventory through the same runtime preparation used by quickstart. It
+# proves the embedded pin resolves and verifies sibling bin/numbat without
+# manual pin flags. It never sees the real user home, invokes hook installation,
+# opens the Local database or Keychain, or opens a browser.
 smoke_user_home="${smoke_tmp}/user-home"
 smoke_home="${smoke_tmp}/belay-home"
 mkdir -p -- "${smoke_user_home}"
 chmod 0700 "${smoke_user_home}"
 run_without_network env HOME="${smoke_user_home}" "${belay}" agents \
   --home "${smoke_home}" \
-  --numbat "${numbat}" \
-  --numbat-sha256 "${numbat_sha256}" \
-  --numbat-version-marker "${NUMBAT_VERSION_MARKER}" \
   >/dev/null
 
 [[ -f "${smoke_home}/config.json" ]] || die "safe first-run config was not created"
+numbat_sha256="$(shasum -a 256 "${numbat}" | cut -d ' ' -f1)"
+grep -Fq "\"numbat_sha256\": \"${numbat_sha256}\"" \
+  "${smoke_home}/config.json" ||
+  die "safe first-run config did not materialize the embedded checksum"
+grep -Fq "\"numbat_version_marker\": \"${NUMBAT_VERSION_MARKER}\"" \
+  "${smoke_home}/config.json" ||
+  die "safe first-run config did not materialize the embedded version marker"
+materialized_numbat="$(find "${smoke_home}/bin" -type f -name 'numbat-*' -print)"
+[[ "$(printf '%s\n' "${materialized_numbat}" | grep -c .)" == "1" ]] ||
+  die "safe first-run did not materialize exactly one pinned Numbat binary"
+materialized_name="$(basename -- "${materialized_numbat}")"
+grep -Fq "/bin/${materialized_name}\"" "${smoke_home}/config.json" ||
+  die "safe first-run config did not record materialized packaged sibling Numbat"
+[[ "$(shasum -a 256 "${materialized_numbat}" | cut -d ' ' -f1)" == "${numbat_sha256}" ]] ||
+  die "materialized Numbat checksum differs from packaged sibling"
+run_without_network "${materialized_numbat}" version |
+  grep -Fq "${NUMBAT_VERSION_MARKER}" ||
+  die "materialized Numbat version marker mismatch"
 [[ ! -e "${smoke_home}/live/codex.ndjson" && ! -e "${smoke_home}/live/claude.ndjson" ]] ||
   die "smoke test unexpectedly created live-hook spool files"
 [[ -z "$(find "${smoke_user_home}" -mindepth 1 -print -quit)" ]] ||

@@ -1,28 +1,33 @@
-name: developer-preview
+name: developer-alpha
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Developer-preview version label
+        description: Developer Alpha version label
         required: true
-        default: 0.0.1-dev.1
+        default: 0.0.1-alpha.1
         type: string
 
 permissions:
   contents: read
 
 env:
-  PREVIEW_VERSION: ${{ inputs.version }}
+  ALPHA_VERSION: ${{ inputs.version }}
 
 jobs:
   build:
-    name: Build unsigned macOS preview
+    name: Validate unsigned Apple Silicon alpha
     runs-on: macos-15
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require native Apple Silicon runner
+        run: |
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
 
       - uses: actions/setup-go@v5
         with:
@@ -33,6 +38,9 @@ jobs:
         run: |
           bash -n scripts/build-developer-preview.sh
           bash -n scripts/smoke-developer-preview.sh
+          bash -n scripts/alpha-readiness.sh
+          bash -n scripts/validate-alpha-surface.sh
+          scripts/validate-alpha-surface.sh
 
       - name: Test
         env:
@@ -42,27 +50,30 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build arm64 and amd64 preview archives
+      - name: Build Apple Silicon alpha archive
         run: |
           scripts/build-developer-preview.sh \
-            --arch all \
-            --version "${PREVIEW_VERSION}" \
+            --arch arm64 \
+            --version "${ALPHA_VERSION}" \
             --output-dir dist
 
-      - name: Smoke-test native archive without network
+      - name: Verify archive checksum
         run: |
-          case "$(uname -m)" in
-            arm64) preview_arch=arm64 ;;
-            x86_64) preview_arch=amd64 ;;
-            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
+          (
+            cd dist
+            shasum -a 256 -c \
+              "belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz.sha256"
+          )
+
+      - name: Smoke-test Apple Silicon archive
+        run: |
           scripts/smoke-developer-preview.sh \
-            "dist/belay-local-developer-preview-v${PREVIEW_VERSION}-darwin-${preview_arch}.tar.gz"
+            "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz"
 
       - name: Upload short-lived workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: belay-local-developer-preview
+          name: belay-local-developer-alpha
           path: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256

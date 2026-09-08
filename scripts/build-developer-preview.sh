@@ -7,17 +7,17 @@ readonly NUMBAT_COMMIT="f0778c09dc48281aa93a3887d05096c0a1f3f9f7"
 readonly NUMBAT_VERSION_MARKER="f0778c09dc48"
 readonly NUMBAT_LICENSE_SHA256="c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 readonly NUMBAT_THIRD_PARTY_SHA256="c2732acc87437d691ad1c5fc70cd1c6596a8999a1926721a2004f3e7b7692c77"
-readonly DEFAULT_VERSION="0.0.1-dev.1"
+readonly DEFAULT_VERSION="0.0.1-alpha.1"
 
 usage() {
   cat <<'EOF'
 usage: scripts/build-developer-preview.sh [options]
 
-Build unsigned Belay Local developer-preview archives without publishing them.
+Build unsigned Belay Local Developer Alpha archives without publishing them.
 
 Options:
   --arch arm64|amd64|all  Target macOS architecture (default: native)
-  --version VERSION       Artifact version label (default: 0.0.1-dev.1)
+  --version VERSION       Artifact version label (default: 0.0.1-alpha.1)
   --output-dir PATH       Output directory (default: ./dist)
   --numbat-source PATH    Use an existing pristine Numbat checkout
   -h, --help              Show this help
@@ -154,21 +154,9 @@ mkdir -p -- "${output_dir}"
 output_dir="$(cd -- "${output_dir}" && pwd -P)"
 
 for architecture in "${architectures[@]}"; do
-  package_name="belay-local-developer-preview-v${preview_version}-darwin-${architecture}"
+  package_name="belay-local-developer-alpha-v${preview_version}-darwin-${architecture}"
   package_root="${preview_tmp}/${package_name}"
   mkdir -p -- "${package_root}/bin" "${package_root}/licenses/numbat" "${package_root}/docs"
-
-  env \
-    CGO_ENABLED=0 \
-    GOFLAGS= \
-    GOOS=darwin \
-    GOARCH="${architecture}" \
-    go -C "${repository_root}" build \
-      -buildvcs=false \
-      -trimpath \
-      -ldflags="-s -w" \
-      -o "${package_root}/bin/belay" \
-      ./cmd/belay
 
   # The approved commit predates cel-go's repository move. This command-scoped
   # redirect resolves the same module without modifying the pristine checkout.
@@ -188,23 +176,46 @@ for architecture in "${architectures[@]}"; do
       -o "${package_root}/bin/numbat" \
       ./cmd/numbat
 
+  numbat_binary_sha256="$(
+    shasum -a 256 "${package_root}/bin/numbat" | awk '{print $1}'
+  )"
+  [[ "${numbat_binary_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+    die "built Numbat checksum is not a lowercase SHA-256"
+
+  env \
+    CGO_ENABLED=0 \
+    GOFLAGS= \
+    GOOS=darwin \
+    GOARCH="${architecture}" \
+    go -C "${repository_root}" build \
+      -buildvcs=false \
+      -trimpath \
+      -ldflags="-s -w -X main.bundledNumbatSHA256=${numbat_binary_sha256} -X main.bundledNumbatVersionMarker=${NUMBAT_VERSION_MARKER}" \
+      -o "${package_root}/bin/belay" \
+      ./cmd/belay
+
   install -m 0644 "${repository_root}/LICENSE" "${package_root}/LICENSE"
   install -m 0644 "${repository_root}/licenses/numbat/LICENSE" "${package_root}/licenses/numbat/LICENSE"
   install -m 0644 \
     "${repository_root}/licenses/numbat/THIRD_PARTY_LICENSES.txt" \
     "${package_root}/licenses/numbat/THIRD_PARTY_LICENSES.txt"
   install -m 0644 "${repository_root}/README.md" "${package_root}/README.md"
+  install -m 0644 "${repository_root}/llms.txt" "${package_root}/llms.txt"
   install -m 0644 \
     "${repository_root}/docs/launch/developer-preview.md" \
-    "${package_root}/docs/developer-preview.md"
+    "${package_root}/docs/developer-alpha.md"
+  install -m 0644 \
+    "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+    "${package_root}/docs/clean-machine-alpha-qa.md"
 
   cat > "${package_root}/BUILD-INFO.txt" <<EOF
-Belay Local developer preview
+Belay Local Developer Alpha
 version=${preview_version}
 target=darwin/${architecture}
 belay_commit=${belay_commit}
 belay_dirty=${belay_dirty}
 numbat_commit=${NUMBAT_COMMIT}
+numbat_binary_sha256=${numbat_binary_sha256}
 numbat_version_marker=${NUMBAT_VERSION_MARKER}
 source_date_epoch=${source_date_epoch}
 signed=false
