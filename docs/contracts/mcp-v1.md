@@ -247,18 +247,66 @@ The result states:
 - `evidence_evaluated_at`;
 - `missing_semantics=unavailable_from_selected_retained_session`.
 
-The MCP event DTO is a closed allowlist containing:
+The MCP event DTO is a recursively closed allowlist with this exact field tree:
 
-- event ID, schema version, session ID, harness, timestamp;
-- source kind/version/sequence;
-- coverage depth/confidence;
-- redaction policy and removed-field/secret counts;
-- historical flag and reconstruction source;
-- observation type, actor, action, outcome, optional exit code/duration;
-- minimized summary;
-- optional resource kind/name;
-- optional decision, approval, MCP server/tool, model/provider, CLI version,
-  sub-agent, diff-byte count, and bounded tags.
+- top level:
+  - `schema_version`;
+  - `event_id`;
+  - `occurred_at`;
+  - `observed_at`;
+  - `session_id`;
+  - `source`;
+  - `observation`;
+  - `coverage`;
+  - `redaction`;
+  - `historical`;
+- `source`:
+  - `engine`;
+  - `engine_version`;
+  - `schema_version`;
+  - `record_type`;
+  - `kind`;
+  - `agent`;
+  - `adapter_version`;
+  - `sequence`;
+- `observation`:
+  - `type`;
+  - `actor`;
+  - `action`;
+  - `outcome`;
+  - optional `exit_code`;
+  - optional `duration_ms`;
+  - optional `summary`;
+  - optional `resource`;
+  - optional `details`;
+- `observation.resource`:
+  - `kind`;
+  - `name`;
+- `observation.details`:
+  - optional `decision`;
+  - optional `approval_required`;
+  - optional `approval_decision`;
+  - optional `mcp_server`;
+  - optional `mcp_tool`;
+  - optional `model`;
+  - optional `model_provider`;
+  - optional `cli_version`;
+  - optional `sub_agent`;
+  - optional `diff_bytes`;
+  - optional bounded `tags`;
+- `coverage`:
+  - `depth`;
+  - `confidence`;
+- `redaction`:
+  - `policy_version`;
+  - `fields_removed`;
+  - `secrets_removed`;
+- `historical`:
+  - `is_historical`;
+  - optional `reconstruction_source`.
+
+There is no top-level `harness` field. `session_id` remains top-level, and the
+agent value appears only as `source.agent`.
 
 Installation IDs, source run/record IDs, deduplication keys, tool-call IDs,
 diff hashes, prompt bodies, transcripts, completions, reasoning, command

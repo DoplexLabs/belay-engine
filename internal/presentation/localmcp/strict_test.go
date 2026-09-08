@@ -528,16 +528,16 @@ func strictRequest(arguments string) *mcp.CallToolRequest {
 
 func strictTestSchemas(t *testing.T) *strictToolSchemas {
 	t.Helper()
-	input := closedObjectSchema(
+	input := closedTestObjectSchema(
 		map[string]*jsonschema.Schema{
 			"value": {Type: "string"},
 		},
 		"value",
 	)
-	output := closedObjectSchema(
+	output := closedTestObjectSchema(
 		map[string]*jsonschema.Schema{
 			"untrusted_observations": {Type: "boolean"},
-			"trust": closedObjectSchema(
+			"trust": closedTestObjectSchema(
 				map[string]*jsonschema.Schema{
 					"classification":             {Type: "string"},
 					"instruction_authority":      {Type: "string"},
@@ -547,7 +547,7 @@ func strictTestSchemas(t *testing.T) *strictToolSchemas {
 				"instruction_authority",
 				"must_not_authorize_actions",
 			),
-			"readmodel": closedObjectSchema(
+			"readmodel": closedTestObjectSchema(
 				map[string]*jsonschema.Schema{
 					"value": {Type: "string"},
 				},
@@ -565,7 +565,7 @@ func strictTestSchemas(t *testing.T) *strictToolSchemas {
 	return schemas
 }
 
-func closedObjectSchema(
+func closedTestObjectSchema(
 	properties map[string]*jsonschema.Schema,
 	required ...string,
 ) *jsonschema.Schema {
