@@ -1,6 +1,24 @@
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrIssueSnapshotExpired = errors.New("issue snapshot has expired")
+	ErrIssueSnapshotInvalid = errors.New("issue snapshot is invalid")
+)
+
+const (
+	AttentionKindIssue       = "issue"
+	AttentionKindEvidenceGap = "evidence_gap"
+	AttentionKindAll         = "all"
+
+	ExperimentalStable  = "stable"
+	ExperimentalInclude = "include"
+	ExperimentalOnly    = "only"
+)
 
 type ScopeQuality string
 
@@ -58,6 +76,7 @@ type IssueOccurrence struct {
 	LastObservedAt      time.Time          `json:"last_observed_at"`
 	EvidenceComplete    bool               `json:"evidence_complete"`
 	RetainedHistoryOnly bool               `json:"retained_history_only"`
+	Experimental        bool               `json:"experimental"`
 	AnalysisStatus      AnalysisStatus     `json:"analysis_status"`
 	AnalysisGeneration  int64              `json:"analysis_generation"`
 	Evidence            IssueEvidence      `json:"evidence"`
@@ -83,6 +102,7 @@ type IssueSummary struct {
 	AnalysisStatus      AnalysisStatus `json:"analysis_status"`
 	EvidenceComplete    bool           `json:"evidence_complete"`
 	RetainedHistoryOnly bool           `json:"retained_history_only"`
+	Experimental        bool           `json:"experimental"`
 }
 
 type IssueAnalysisCoverage struct {
@@ -106,6 +126,8 @@ type IssueFilter struct {
 	SessionID      string
 	FingerprintID  string
 	IssueID        string
+	AttentionKind  string
+	Experimental   string
 }
 
 type IssuePosition struct {

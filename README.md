@@ -23,6 +23,7 @@ Alpha scope:
 - Encrypted local SQLite payloads backed by macOS Keychain
 - Historical scanning and explicit monitor-only live hooks
 - Loopback-only browser with a random per-launch token
+- Attention Inbox with deterministic issues and exact matching sessions
 - Exactly six read-only MCP tools
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
@@ -30,10 +31,12 @@ part of the alpha support claim until it passes the clean-machine checklist.
 Linux, Windows, Teams, enforcement, remediation, and write-capable MCP are out
 of scope.
 
-The approved P0 issue-intelligence foundation is internal: deterministic
-detectors and opaque fingerprints group exact matching-session evidence without
-claiming shared root cause. It does not add a browser attention inbox, public
-issue routes, or MCP issue tools to this alpha.
+The Attention Inbox turns the private deterministic issue projection into a
+browser triage surface. It groups only exact compatible fingerprints, links
+matching sessions and bounded cited events, and never claims semantic
+similarity or shared root cause. Experimental signals are hidden by default,
+verification evidence gaps appear separately, and incomplete analysis is
+reported rather than converted into a complete "no issues" claim.
 
 The alpha packages the exact approved, unmodified Numbat research commit:
 
@@ -131,9 +134,9 @@ The tools are:
 - `list_findings`
 - `get_stats`
 
-Two additional read-only contracts, `list_issues` and `get_issue`, are approved
-for the next presentation feature but are **not implemented**. The current MCP
-server still exposes exactly the six tools above.
+The MCP server exposes exactly the six tools above. Planned `list_issues` and
+`get_issue` tools remain deferred until Feature 5; the implemented Attention
+Inbox and issue HTTP routes do not implicitly expose them through MCP.
 
 MCP results are structured and marked as untrusted observations. The alpha
 `get_stats` tool provides global Local summary counts only; time-window and
@@ -145,11 +148,11 @@ harness, projection outcome, historical/live/mixed capture, RFC3339 overlap
 windows, and bounded search over session ID and harness. Resource-kind activity
 queries scan the complete cursor snapshot rather than a fixed candidate window.
 
-The internal issue repository uses a separate revisioned projection snapshot
-with explicit current, pending, failed, truncated, and unscoped analysis
-coverage. Future issue consumers must call exact fingerprint matches "matching
-sessions," never semantic similarity or shared root cause, and must not report a
-complete empty inbox while analysis is incomplete.
+The browser Attention Inbox uses a separate revisioned projection snapshot with
+explicit current, pending, failed, truncated, and unscoped analysis coverage.
+Issue detail shows exact matching sessions and retrieves cited evidence through
+a bounded, session-constrained event lookup. Fix recording and recurrence
+measurement remain future capabilities.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).

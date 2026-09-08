@@ -265,7 +265,10 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	localServer, err := localhttp.New(readmodel.New(store), token)
+	localServer, err := localhttp.New(readmodel.New(
+		store,
+		readmodel.WithIssueRepository(store),
+	), token)
 	if err != nil {
 		return err
 	}

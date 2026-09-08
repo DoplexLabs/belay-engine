@@ -7,6 +7,7 @@ import "time"
 const (
 	EventSchemaVersion = "belay.event.v1"
 	RedactionVersion   = "belay.redaction.v1"
+	MaxEventLookupIDs  = 50
 )
 
 type Event struct {
@@ -198,6 +199,20 @@ type EventPage struct {
 	Data        []Event
 	Snapshot    int64
 	DataThrough time.Time
+}
+
+type EventLookupQuery struct {
+	SessionID string
+	EventIDs  []string
+}
+
+type EventLookupResult struct {
+	Data            []Event   `json:"data"`
+	RequestedCount  int       `json:"requested_count"`
+	FoundCount      int       `json:"found_count"`
+	MissingCount    int       `json:"missing_count"`
+	MissingEventIDs []string  `json:"missing_event_ids"`
+	DataThrough     time.Time `json:"data_through"`
 }
 
 type ActivityQuery struct {

@@ -1,0 +1,424 @@
+package localhttp
+
+import (
+	"io/fs"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+func TestAttentionBrowserShellContract(t *testing.T) {
+	index := readBrowserAsset(t, "assets/index.html")
+
+	for _, required := range []string{
+		`<nav class="primary-nav" aria-label="Belay Local views">`,
+		`id="nav-attention"`,
+		`aria-current="page"`,
+		`id="nav-sessions"`,
+		`id="attention-view"`,
+		`id="sessions-view" hidden`,
+		`id="issue-list"`,
+		`id="issues-pagination"`,
+		`id="evidence-gap-list"`,
+		`id="evidence-gaps-pagination"`,
+		`id="issue-detail-heading" tabindex="-1"`,
+		`id="occurrence-list"`,
+		`id="occurrences-pagination"`,
+		`id="findings-pagination"`,
+		`id="findings-load-more"`,
+		`id="attention-refresh-notice"`,
+		`aria-live="polite"`,
+		`Include experimental signals`,
+		`Precision is still being validated.`,
+	} {
+		if !strings.Contains(index, required) {
+			t.Errorf("Attention browser shell is missing %q", required)
+		}
+	}
+
+	idPattern := regexp.MustCompile(`\sid="([^"]+)"`)
+	seen := make(map[string]struct{})
+	for _, match := range idPattern.FindAllStringSubmatch(index, -1) {
+		if _, duplicate := seen[match[1]]; duplicate {
+			t.Errorf("browser shell contains duplicate id %q", match[1])
+		}
+		seen[match[1]] = struct{}{}
+	}
+}
+
+func TestAttentionBrowserFrozenContract(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+
+	catalog := map[string][]string{
+		"issue.explicit_command_failure": {
+			"Command failed",
+			"The source explicitly reported a failed command result.",
+		},
+		"issue.repeated_command_attempts": {
+			"Command repeatedly attempted",
+			"The same private command signature was observed multiple times in one bounded interval.",
+		},
+		"issue.explicit_permission_denial": {
+			"Permission denied",
+			"The source explicitly reported a denied permission event.",
+		},
+		"issue.verification_not_observed": {
+			"Verification evidence not observed",
+			"A supported live session ended without the required verification evidence.",
+		},
+		"issue.unresolved_verification_failure_at_completion": {
+			"Verification still failed at session end",
+			"A verification command explicitly failed and no later successful verification was observed before session end.",
+		},
+		"issue.numbat_finding": {
+			"Numbat finding",
+			"A retained upstream Numbat finding was reported.",
+		},
+	}
+	for code, values := range catalog {
+		if !strings.Contains(app, `"`+code+`"`) {
+			t.Errorf("fixed issue catalog is missing %q", code)
+		}
+		for _, value := range values {
+			if !strings.Contains(app, value) {
+				t.Errorf("fixed issue catalog entry %q is missing %q", code, value)
+			}
+		}
+	}
+
+	for _, required := range []string{
+		`issues: createIssueBucket("issue")`,
+		`evidenceGaps: createIssueBucket("evidence_gap")`,
+		`attention_kind: kind`,
+		`experimental: state.issueFilters.experimental ? "include" : "stable"`,
+		`if (viewCursor) bucket.viewCursor = viewCursor;`,
+		`parameters.set("view_cursor", viewCursor)`,
+		"`/v1/issues/${encodeURIComponent(issueID)}/occurrences?${parameters.toString()}`",
+		`eventIDs.forEach((eventID) => parameters.append("event_id", eventID));`,
+		"`/v1/sessions/${encodeURIComponent(sessionID)}/events/lookup?${parameters.toString()}`",
+		`occurrenceEventIDs(occurrence).slice(0, 50)`,
+		`error.status === 410`,
+		`error.problemType === "belay.local/cursor-expired"`,
+		`title: "Detected issue"`,
+		`return /^[a-z0-9_]{1,64}$/.test(code)`,
+		`return "Evidence completeness is unavailable.";`,
+		`: "unknown";`,
+		`pending: "Prior retained result while reanalysis is pending."`,
+		`failed: "Prior retained result; the latest analysis failed."`,
+		`truncated: "Partial analysis; additional signals may be absent."`,
+		`"Analysis status is unavailable; result freshness and completeness are uncertain."`,
+		`return "Analysis status unavailable";`,
+		`return "Session count unavailable";`,
+		`"No issues match these filters"`,
+		`"No issues reported by configured detectors"`,
+		`"No issues are available from completed analysis"`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("Attention browser data contract is missing %q", required)
+		}
+	}
+}
+
+func TestAttentionBrowserAccessibilityAndSafeRendering(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	styles := readBrowserAsset(t, "assets/styles.css")
+
+	for _, required := range []string{
+		`element.inert = !visible;`,
+		`element.setAttribute("aria-hidden", "true");`,
+		`const focusRegistry = {`,
+		`focusRegistry.issueCards.get(reference.key)`,
+		`focusRegistry.occurrenceActions.get(reference.key)`,
+		`focusRegistry.sessionCards.get(reference.sessionID)`,
+		`clearIssueFocusRegistry(bucket.kind);`,
+		`focusRegistry.occurrenceActions.clear();`,
+		`focusRegistry.sessionCards.clear();`,
+		`state.issueReturnFocus = {`,
+		`key: issueFocusKey(state.selectedIssueKind, issueID),`,
+		`state.sessionReturnFocus = { type: "session", sessionID };`,
+		`state.sessionReturnFocus = { type: "occurrence", key: focusKey };`,
+		`!element.isConnected`,
+		`element.closest("[hidden]")`,
+		`element.closest('[aria-hidden="true"]')`,
+		`if (current.inert === true) return false;`,
+		`focusCurrentElement(resolveFocusReference(reference))`,
+		`restoreLogicalFocus(returnFocus, elements.navAttention);`,
+		`inspect.setAttribute("aria-expanded", "false");`,
+		`severity.dataset.tone = severityTone(issue.severity);`,
+		`["critical", "high", "medium", "low", "info"].includes(severity)`,
+		`["current", "pending", "failed", "truncated"].includes(status)`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("Attention accessibility/safety contract is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"issueOriginButton",
+		"sessionOriginButton",
+		"An immutable upstream Numbat rule emitted a finding.",
+	} {
+		if strings.Contains(app, forbidden) {
+			t.Errorf("browser asset retains stale contract %q", forbidden)
+		}
+	}
+	if got := strings.Count(app, ".focus();"); got != 1 ||
+		!strings.Contains(app, "element.focus();") {
+		t.Errorf("focus must be centralized behind current-DOM checks; source has %d direct focus calls", got)
+	}
+	for _, forbidden := range []string{
+		"innerHTML",
+		"outerHTML",
+		"insertAdjacentHTML",
+		"document.write",
+		"eval(",
+	} {
+		if strings.Contains(app, forbidden) {
+			t.Errorf("browser asset contains unsafe rendering primitive %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		`.primary-nav-button[aria-current="page"]`,
+		`body.is-attention-detail-open .attention-detail-panel`,
+		`@media (prefers-reduced-motion: reduce)`,
+		`@media (max-height: 700px)`,
+		`height: 100dvh;`,
+		`overscroll-behavior: contain;`,
+		`min-height: 44px;`,
+	} {
+		if !strings.Contains(styles, required) {
+			t.Errorf("Attention styles are missing %q", required)
+		}
+	}
+	for _, block := range []struct {
+		start string
+		end   string
+	}{
+		{".primary-nav-button {", ".primary-nav-button:hover {"},
+		{".issue-card-main {", `.issue-card-main[aria-pressed="true"] {`},
+		{".fingerprint-panel button,", ".primary-button {"},
+		{".pagination-bar button {", ".pagination-bar button:hover {"},
+	} {
+		section := browserSourceBlock(t, styles, block.start, block.end)
+		if !strings.Contains(section, "min-height: 44px;") {
+			t.Errorf("primary touch target %q is smaller than 44px", block.start)
+		}
+	}
+}
+
+func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	refresh := browserSourceBlock(
+		t,
+		app,
+		"  async function refreshAttention(preserveSelection, suppressFailureNotice = false) {",
+		"  async function loadIssuePagesForSelection(",
+	)
+
+	for _, required := range []string{
+		`closeIssueDetail(false);`,
+		`const [issuesReady, gapsReady] = await Promise.all([`,
+		`const refreshGeneration = ++state.attentionRefreshGeneration;`,
+		`if (refreshGeneration !== state.attentionRefreshGeneration) return false;`,
+		`if (!issuesReady || !gapsReady) {`,
+		`const chainReady = await loadIssuePagesForSelection(`,
+		`const summary = bucket.data.find(`,
+		`if (!summary) {`,
+		`const detailReady = await selectIssue(summary, selectedKind, false);`,
+		`if (!detailReady) {`,
+		`selected detail is hidden until current data confirms it.`,
+	} {
+		if !strings.Contains(refresh, required) {
+			t.Errorf("current-chain refresh contract is missing %q", required)
+		}
+	}
+	if strings.Contains(refresh, "Promise.allSettled") {
+		t.Error("Attention refresh cannot treat failed required reads as success")
+	}
+	closeIndex := strings.Index(refresh, "closeIssueDetail(false);")
+	readIndex := strings.Index(refresh, "await Promise.all([")
+	selectIndex := strings.Index(refresh, "await selectIssue(")
+	missingIndex := strings.Index(refresh, "if (!summary) {")
+	if closeIndex < 0 || readIndex < 0 || closeIndex > readIndex {
+		t.Error("selected detail is not closed before fresh list reads")
+	}
+	if missingIndex < 0 || selectIndex < 0 || missingIndex > selectIndex {
+		t.Error("selected detail can be retained without confirming list visibility")
+	}
+}
+
+func TestCursorRefreshNoticeWaitsForRequiredReads(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	refresh := browserSourceBlock(
+		t,
+		app,
+		"  async function refreshAttentionAfterExpiry() {",
+		"  function showAttentionNotice(",
+	)
+
+	for _, required := range []string{
+		`"The issue view changed. Refreshing both Attention lists from a current snapshot…"`,
+		`const refreshed = await refreshAttention(false, true);`,
+		`if (refreshed) {`,
+		`"Attention refreshed from a current snapshot."`,
+		`"Attention refresh failed. Retry before relying on the issue lists."`,
+	} {
+		if !strings.Contains(refresh, required) {
+			t.Errorf("cursor refresh status contract is missing %q", required)
+		}
+	}
+	awaitIndex := strings.Index(refresh, "await refreshAttention(false, true)")
+	successIndex := strings.Index(refresh, `"Attention refreshed from a current snapshot."`)
+	if awaitIndex < 0 || successIndex < 0 || successIndex < awaitIndex {
+		t.Error("cursor refresh reports success before required reads complete")
+	}
+}
+
+func TestAttentionUnknownCountsAndAnalysisStayUncertain(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	recurrence := browserSourceBlock(
+		t,
+		app,
+		"  function issueRecurrenceLabel(issue) {",
+		"  function issueHarnessLabel(",
+	)
+	analysis := browserSourceBlock(
+		t,
+		app,
+		"  function normalizeAnalysisStatus(value) {",
+		"  function safeCatalogCode(",
+	)
+
+	for _, required := range []string{
+		`const sessions = Number(issue && issue.session_count);`,
+		`if (!Number.isFinite(sessions) || sessions < 1) {`,
+		`return "Session count unavailable";`,
+	} {
+		if !strings.Contains(recurrence, required) {
+			t.Errorf("uncertain session-count contract is missing %q", required)
+		}
+	}
+	if strings.Index(recurrence, `return "Session count unavailable";`) >
+		strings.Index(recurrence, `"Observed in one session"`) {
+		t.Error("missing or zero session count can be presented as one session")
+	}
+	for _, required := range []string{
+		`: "unknown";`,
+		`if (status === "unknown") return "Analysis status unavailable";`,
+	} {
+		if !strings.Contains(analysis, required) {
+			t.Errorf("unknown analysis status contract is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`elements.issueAnalysisQualifier.textContent =`,
+		`analysisQualifiers[status] || "";`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("issue detail uncertainty qualifier is missing %q", required)
+		}
+	}
+}
+
+func TestAttentionDirectSessionOpeningFetchesBeforeRendering(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	openSession := browserSourceBlock(
+		t,
+		app,
+		"  function openSession(sessionID, optionalKnownSummary) {",
+		"  function beginSessionSelection(",
+	)
+	directLoad := browserSourceBlock(
+		t,
+		app,
+		"  async function loadDirectSession(sessionID, generation) {",
+		"  async function loadFindings(",
+	)
+
+	for _, required := range []string{
+		`if (!known) {`,
+		`void loadDirectSession(sessionID, generation);`,
+		`beginSessionSelection(sessionID, known);`,
+	} {
+		if !strings.Contains(openSession, required) {
+			t.Errorf("direct session opening is missing %q", required)
+		}
+	}
+	fetchIndex := strings.Index(
+		directLoad,
+		"`/v1/sessions/${encodeURIComponent(sessionID)}`",
+	)
+	renderIndex := strings.Index(
+		directLoad,
+		"beginSessionSelection(sessionID, detail);",
+	)
+	if fetchIndex < 0 || renderIndex < 0 || fetchIndex > renderIndex {
+		t.Error("an unloaded occurrence session is rendered before its detail fetch")
+	}
+	for _, required := range []string{
+		`const returnFocus = state.sessionReturnFocus;`,
+		`setActiveView("attention", false);`,
+		`restoreLogicalFocus(`,
+		`showError("Unable to open selected session", error);`,
+	} {
+		if !strings.Contains(directLoad, required) {
+			t.Errorf("direct session failure handling is missing %q", required)
+		}
+	}
+	activateIndex := strings.Index(directLoad, `setActiveView("attention", false);`)
+	restoreIndex := strings.Index(directLoad, "restoreLogicalFocus(")
+	if activateIndex < 0 || restoreIndex < 0 || activateIndex > restoreIndex {
+		t.Error("direct session failure restores focus before the mobile pane is active")
+	}
+}
+
+func TestSessionFindingsRemainBoundedAndExplicitlyPaginated(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	findings := browserSourceBlock(
+		t,
+		app,
+		"  async function loadFindings(sessionID) {",
+		"  function loadMoreFindings() {",
+	)
+
+	if got := strings.Count(findings, "await apiGet("); got != 1 {
+		t.Fatalf("session findings page performs %d API requests; want exactly one", got)
+	}
+	for _, forbidden := range []string{"while (", "do {", "pageLimits.findings.maximum"} {
+		if strings.Contains(findings, forbidden) {
+			t.Errorf("session findings loader contains unbounded behavior %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		`findings: { page: 20 }`,
+		`session_id: sessionID`,
+		`parameters.set("cursor", cursor)`,
+		`state.findingNextCursor`,
+		`state.findingHasMore`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("bounded findings contract is missing %q", required)
+		}
+	}
+}
+
+func readBrowserAsset(t *testing.T, name string) string {
+	t.Helper()
+	body, err := fs.ReadFile(assetFiles, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func browserSourceBlock(t *testing.T, source, start, end string) string {
+	t.Helper()
+	startIndex := strings.Index(source, start)
+	if startIndex < 0 {
+		t.Fatalf("browser source is missing section start %q", start)
+	}
+	endOffset := strings.Index(source[startIndex:], end)
+	if endOffset < 0 {
+		t.Fatalf("browser source is missing section end %q", end)
+	}
+	return source[startIndex : startIndex+endOffset]
+}

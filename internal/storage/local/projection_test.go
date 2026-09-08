@@ -43,8 +43,8 @@ func TestMigration005AndAppendEventResolved(t *testing.T) {
 	).Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 8 {
-		t.Fatalf("migration count = %d, want 8", migrations)
+	if migrations != 9 {
+		t.Fatalf("migration count = %d, want 9", migrations)
 	}
 
 	event := storageTestEvent(
@@ -404,7 +404,7 @@ func TestIssueSnapshotExpiryAndMutationAuthorization(t *testing.T) {
 	if _, err := store.QueryIssues(ctx, model.IssueQuery{
 		Snapshot: current,
 		IssuedAt: time.Now().UTC().Add(time.Minute),
-	}); !errors.Is(err, ErrIssueSnapshotExpired) {
+	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
 		t.Fatalf("future-issued snapshot error = %v", err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
@@ -883,7 +883,7 @@ func TestIssueCoverageIncludesEventSessionsWithoutAnalysisRevision(t *testing.T)
 	}
 	if _, err := store.QueryIssues(ctx, model.IssueQuery{
 		Snapshot: page.Snapshot,
-	}); !errors.Is(err, ErrIssueSnapshotExpired) {
+	}); !errors.Is(err, model.ErrIssueSnapshotInvalid) {
 		t.Fatalf("snapshot without issued_at error = %v", err)
 	}
 }

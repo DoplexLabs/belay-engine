@@ -459,6 +459,7 @@ func (r *Reconciler) detectorOccurrences(
 			FirstObservedAt:  match.FirstObservedAt,
 			LastObservedAt:   match.LastObservedAt,
 			EvidenceComplete: match.EvidenceComplete,
+			Experimental:     match.Experimental,
 			Evidence: model.IssueEvidence{
 				CitedEventIDs: append([]string(nil), match.CitedEventIDs...),
 				Dimensions:    evidenceDimensions,

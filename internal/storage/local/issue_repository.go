@@ -15,19 +15,25 @@ import (
 
 const issueCursorLifetime = 15 * time.Minute
 
-var ErrIssueSnapshotExpired = errors.New("issue snapshot has expired")
+var (
+	ErrIssueSnapshotExpired = model.ErrIssueSnapshotExpired
+	ErrIssueSnapshotInvalid = model.ErrIssueSnapshotInvalid
+)
 
 func (s *Store) QueryIssues(
 	ctx context.Context,
 	query model.IssueQuery,
 ) (model.IssuePage, error) {
 	query.Limit = boundedReadLimit(query.Limit, 20, 100)
+	if err := normalizeIssueFilterModes(&query.Filter); err != nil {
+		return model.IssuePage{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return model.IssuePage{}, errors.New("begin issue snapshot read")
 	}
 	defer tx.Rollback()
-	snapshot, err := issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
+	snapshot, err := s.issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
 	if err != nil {
 		return model.IssuePage{}, err
 	}
@@ -44,6 +50,20 @@ func (s *Store) QueryIssues(
 	if query.Filter.SessionID != "" {
 		matchClauses = append(matchClauses, "session_key = ?")
 		matchArgs = append(matchArgs, query.Filter.SessionID)
+	}
+	switch query.Filter.AttentionKind {
+	case model.AttentionKindIssue:
+		matchClauses = append(matchClauses, "category <> 'evidence_gap'")
+	case model.AttentionKindEvidenceGap:
+		matchClauses = append(matchClauses, "category = 'evidence_gap'")
+	case model.AttentionKindAll:
+	}
+	switch query.Filter.Experimental {
+	case model.ExperimentalStable:
+		matchClauses = append(matchClauses, "experimental = 0")
+	case model.ExperimentalOnly:
+		matchClauses = append(matchClauses, "experimental = 1")
+	case model.ExperimentalInclude:
 	}
 
 	summaryClauses := []string{"1 = 1"}
@@ -140,6 +160,7 @@ func (s *Store) QueryIssues(
 				io.last_observed_at,
 				io.evidence_complete,
 				io.retained_history_only,
+				io.experimental,
 				sar.status AS analysis_status,
 				CASE sar.status
 					WHEN 'failed' THEN 4
@@ -215,7 +236,8 @@ func (s *Store) QueryIssues(
 					ELSE 'current'
 				END AS analysis_status,
 				MIN(v.evidence_complete) AS evidence_complete,
-				MIN(v.retained_history_only) AS retained_history_only
+				MIN(v.retained_history_only) AS retained_history_only,
+				MAX(v.experimental) AS experimental
 			FROM visible v
 			JOIN eligible e ON e.issue_id = v.issue_id
 			GROUP BY v.issue_id
@@ -225,7 +247,8 @@ func (s *Store) QueryIssues(
 			detector_id, detector_version, category, title_code, severity,
 			severity_rank, confidence, scope_quality, first_observed_at,
 			last_observed_at, occurrence_count, session_count, repeated,
-			harnesses, analysis_status, evidence_complete, retained_history_only
+			harnesses, analysis_status, evidence_complete, retained_history_only,
+			experimental
 		FROM grouped
 		WHERE `+strings.Join(summaryClauses, " AND ")+`
 		ORDER BY severity_rank DESC, repeated DESC, last_observed_at DESC, issue_id ASC
@@ -279,7 +302,7 @@ func (s *Store) QueryIssueOccurrences(
 		return model.IssueOccurrencePage{}, errors.New("begin issue occurrence snapshot read")
 	}
 	defer tx.Rollback()
-	snapshot, err := issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
+	snapshot, err := s.issueSnapshot(ctx, tx, query.Snapshot, query.IssuedAt)
 	if err != nil {
 		return model.IssueOccurrencePage{}, err
 	}
@@ -308,7 +331,7 @@ func (s *Store) QueryIssueOccurrences(
 			io.projection_version, io.category, io.title_code, io.severity,
 			io.confidence, io.scope_quality, io.first_observed_at,
 			io.last_observed_at, io.evidence_complete, io.retained_history_only,
-			sar.status, io.analysis_generation, io.evidence_payload,
+			io.experimental, sar.status, io.analysis_generation, io.evidence_payload,
 			io.evidence_encoding
 		FROM issue_occurrences io
 		JOIN session_analysis_revisions sar ON sar.session_key = io.session_key
@@ -346,7 +369,7 @@ func (s *Store) QueryIssueOccurrences(
 	}, nil
 }
 
-func issueSnapshot(
+func (s *Store) issueSnapshot(
 	ctx context.Context,
 	queryer queryRower,
 	requested int64,
@@ -363,19 +386,47 @@ func issueSnapshot(
 	if requested == 0 {
 		return current, nil
 	}
+	if requested < 0 {
+		return 0, model.ErrIssueSnapshotInvalid
+	}
 	if issuedAt.IsZero() {
-		return 0, ErrIssueSnapshotExpired
+		return 0, model.ErrIssueSnapshotInvalid
 	}
-	if requested < oldest || requested > current {
-		return 0, ErrIssueSnapshotExpired
+	if requested < oldest {
+		return 0, model.ErrIssueSnapshotExpired
 	}
-	if !issuedAt.IsZero() {
-		now := time.Now()
-		if issuedAt.After(now) || now.Sub(issuedAt) > issueCursorLifetime {
-			return 0, ErrIssueSnapshotExpired
-		}
+	if requested > current {
+		return 0, model.ErrIssueSnapshotInvalid
+	}
+	now := s.nowUTC()
+	issuedAt = issuedAt.UTC()
+	if issuedAt.After(now) {
+		return 0, model.ErrIssueSnapshotInvalid
+	}
+	if now.Sub(issuedAt) > issueCursorLifetime {
+		return 0, model.ErrIssueSnapshotExpired
 	}
 	return requested, nil
+}
+
+func normalizeIssueFilterModes(filter *model.IssueFilter) error {
+	if filter.AttentionKind == "" {
+		filter.AttentionKind = model.AttentionKindIssue
+	}
+	switch filter.AttentionKind {
+	case model.AttentionKindIssue, model.AttentionKindEvidenceGap, model.AttentionKindAll:
+	default:
+		return errors.New("unsupported issue attention kind")
+	}
+	if filter.Experimental == "" {
+		filter.Experimental = model.ExperimentalStable
+	}
+	switch filter.Experimental {
+	case model.ExperimentalStable, model.ExperimentalInclude, model.ExperimentalOnly:
+	default:
+		return errors.New("unsupported issue experimental mode")
+	}
+	return nil
 }
 
 func issueAnalysisCoverage(
@@ -434,7 +485,7 @@ func scanIssueSummary(row rowScanner) (model.IssueSummary, error) {
 	var result model.IssueSummary
 	var severityRank, sessionCount, repeated int
 	var firstObserved, lastObserved, harnesses string
-	var evidenceComplete, retainedHistoryOnly int
+	var evidenceComplete, retainedHistoryOnly, experimental int
 	if err := row.Scan(
 		&result.IssueID,
 		&result.FingerprintID,
@@ -457,12 +508,14 @@ func scanIssueSummary(row rowScanner) (model.IssueSummary, error) {
 		&result.AnalysisStatus,
 		&evidenceComplete,
 		&retainedHistoryOnly,
+		&experimental,
 	); err != nil {
 		return model.IssueSummary{}, err
 	}
 	result.SessionCount = sessionCount
 	result.EvidenceComplete = evidenceComplete == 1
 	result.RetainedHistoryOnly = retainedHistoryOnly == 1
+	result.Experimental = experimental == 1
 	var err error
 	result.FirstObservedAt, err = parseProjectionTime(firstObserved)
 	if err != nil {
@@ -483,7 +536,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 	var revisionID string
 	var result model.IssueOccurrence
 	var firstObserved, lastObserved, encoding string
-	var evidenceComplete, retainedHistoryOnly int
+	var evidenceComplete, retainedHistoryOnly, experimental int
 	var evidence []byte
 	if err := row.Scan(
 		&revisionID,
@@ -507,6 +560,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 		&lastObserved,
 		&evidenceComplete,
 		&retainedHistoryOnly,
+		&experimental,
 		&result.AnalysisStatus,
 		&result.AnalysisGeneration,
 		&evidence,
@@ -517,6 +571,7 @@ func (s *Store) scanIssueOccurrence(row rowScanner) (model.IssueOccurrence, erro
 	result.Provenance.FingerprintVersion = result.FingerprintVersion
 	result.EvidenceComplete = evidenceComplete == 1
 	result.RetainedHistoryOnly = retainedHistoryOnly == 1
+	result.Experimental = experimental == 1
 	var err error
 	result.FirstObservedAt, err = parseProjectionTime(firstObserved)
 	if err != nil {

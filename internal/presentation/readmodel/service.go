@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 const SchemaVersion = "belay.read.v1"
+const IssueProjectionVersion = "belay.issue.v1"
 
 const (
 	defaultSessionLimit  = 20
@@ -29,6 +31,9 @@ const (
 	maxActivityLimit     = 200
 	defaultFindingLimit  = 20
 	maxFindingLimit      = 100
+	defaultIssueLimit    = 20
+	maxIssueLimit        = 100
+	issueCursorLifetime  = 15 * time.Minute
 	cursorVersion        = 1
 	maxCursorBytes       = 2048
 )
@@ -36,6 +41,12 @@ const (
 var (
 	ErrInvalidCursor  = errors.New("invalid read cursor")
 	ErrInvalidRequest = errors.New("invalid read request")
+	ErrCursorExpired  = errors.New("read cursor expired")
+	ErrNotFound       = errors.New("read resource not found")
+
+	issueIDPattern       = regexp.MustCompile(`^iss_[a-z2-7]{52}$`)
+	fingerprintIDPattern = regexp.MustCompile(`^ifp_[a-z2-7]{52}$`)
+	categoryPattern      = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 )
 
 type Repository interface {
@@ -47,8 +58,38 @@ type Repository interface {
 	GetStats(context.Context) (model.LocalStats, time.Time, error)
 }
 
+type IssueRepository interface {
+	QueryIssues(context.Context, model.IssueQuery) (model.IssuePage, error)
+	QueryIssueOccurrences(
+		context.Context,
+		model.IssueOccurrenceQuery,
+	) (model.IssueOccurrencePage, error)
+	LookupSessionEvents(
+		context.Context,
+		model.EventLookupQuery,
+	) (model.EventLookupResult, error)
+}
+
 type Service struct {
-	repository Repository
+	repository      Repository
+	issueRepository IssueRepository
+	now             func() time.Time
+}
+
+type Option func(*Service)
+
+func WithIssueRepository(repository IssueRepository) Option {
+	return func(service *Service) {
+		service.issueRepository = repository
+	}
+}
+
+func WithClock(clock func() time.Time) Option {
+	return func(service *Service) {
+		if clock != nil {
+			service.now = clock
+		}
+	}
 }
 
 type SessionListRequest struct {
@@ -79,6 +120,34 @@ type FindingListRequest struct {
 	Since     *time.Time
 	Severity  string
 	SessionID string
+}
+
+type IssueListRequest struct {
+	Limit          int
+	Cursor         string
+	Severity       string
+	Category       string
+	Harness        string
+	Origin         string
+	AnalysisStatus string
+	ObservedAfter  *time.Time
+	Recurrence     string
+	SessionID      string
+	FingerprintID  string
+	AttentionKind  string
+	Experimental   string
+}
+
+type IssueDetailRequest struct {
+	IssueID    string
+	Limit      int
+	Cursor     string
+	ViewCursor string
+}
+
+type EventLookupRequest struct {
+	SessionID string
+	EventIDs  []string
 }
 
 type SessionList struct {
@@ -136,18 +205,67 @@ type StatsResponse struct {
 	DataThrough   time.Time        `json:"data_through"`
 }
 
-type cursorEnvelope struct {
-	Version     int    `json:"v"`
-	Kind        string `json:"k"`
-	Snapshot    int64  `json:"s"`
-	Fingerprint string `json:"f"`
-	Time        string `json:"t"`
-	Sequence    int64  `json:"q,omitempty"`
-	ID          string `json:"i"`
+type IssueList struct {
+	SchemaVersion     string                      `json:"schema_version"`
+	ProjectionVersion string                      `json:"projection_version"`
+	Data              []model.IssueSummary        `json:"data"`
+	Analysis          model.IssueAnalysisCoverage `json:"analysis"`
+	ViewCursor        string                      `json:"view_cursor"`
+	NextCursor        *string                     `json:"next_cursor"`
+	HasMore           bool                        `json:"has_more"`
+	ReturnedCount     int                         `json:"returned_count"`
+	Limit             int                         `json:"limit"`
 }
 
-func New(repository Repository) *Service {
-	return &Service{repository: repository}
+type IssueDetailData struct {
+	Issue       model.IssueSummary      `json:"issue"`
+	Occurrences []model.IssueOccurrence `json:"occurrences"`
+}
+
+type IssueDetail struct {
+	SchemaVersion     string          `json:"schema_version"`
+	ProjectionVersion string          `json:"projection_version"`
+	Data              IssueDetailData `json:"data"`
+	NextCursor        *string         `json:"next_cursor"`
+	HasMore           bool            `json:"has_more"`
+	ReturnedCount     int             `json:"returned_count"`
+	Limit             int             `json:"limit"`
+}
+
+type EventLookup struct {
+	SchemaVersion   string        `json:"schema_version"`
+	Data            []model.Event `json:"data"`
+	RequestedCount  int           `json:"requested_count"`
+	FoundCount      int           `json:"found_count"`
+	MissingCount    int           `json:"missing_count"`
+	MissingEventIDs []string      `json:"missing_event_ids"`
+	DataThrough     time.Time     `json:"data_through"`
+}
+
+type cursorEnvelope struct {
+	Version      int    `json:"v"`
+	Kind         string `json:"k"`
+	Snapshot     int64  `json:"s"`
+	Fingerprint  string `json:"f"`
+	Time         string `json:"t,omitempty"`
+	Sequence     int64  `json:"q,omitempty"`
+	ID           string `json:"i,omitempty"`
+	IssuedAt     string `json:"a,omitempty"`
+	SeverityRank int    `json:"r,omitempty"`
+	Repeated     bool   `json:"p,omitempty"`
+}
+
+func New(repository Repository, options ...Option) *Service {
+	service := &Service{
+		repository: repository,
+		now:        time.Now,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *Service) ListSessions(ctx context.Context, limit int) (SessionList, error) {
@@ -424,6 +542,267 @@ func (s *Service) ListFindingsPage(
 	}, nil
 }
 
+func (s *Service) ListIssues(
+	ctx context.Context,
+	request IssueListRequest,
+) (IssueList, error) {
+	request = normalizeIssueListRequest(request)
+	if err := validateIssueListRequest(request); err != nil {
+		return IssueList{}, err
+	}
+
+	fingerprint := issueFingerprint(request)
+	issuedAt := s.nowUTC()
+	query := model.IssueQuery{
+		Filter: model.IssueFilter{
+			Severity:       request.Severity,
+			Category:       request.Category,
+			Harness:        request.Harness,
+			Origin:         request.Origin,
+			AnalysisStatus: model.AnalysisStatus(request.AnalysisStatus),
+			ObservedAfter:  request.ObservedAfter,
+			Recurrence:     request.Recurrence,
+			SessionID:      request.SessionID,
+			FingerprintID:  request.FingerprintID,
+			AttentionKind:  request.AttentionKind,
+			Experimental:   request.Experimental,
+		},
+		Limit:    request.Limit,
+		IssuedAt: issuedAt,
+	}
+	if request.Cursor != "" {
+		cursor, err := decodeIssueCursor(
+			request.Cursor,
+			fingerprint,
+			issuedAt,
+		)
+		if err != nil {
+			return IssueList{}, err
+		}
+		cursorTime, _ := time.Parse(time.RFC3339Nano, cursor.Time)
+		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		query.Snapshot = cursor.Snapshot
+		query.IssuedAt = issuedAt
+		query.Cursor = &model.IssuePosition{
+			SeverityRank: cursor.SeverityRank,
+			Repeated:     cursor.Repeated,
+			LastObserved: cursorTime,
+			IssueID:      cursor.ID,
+		}
+	}
+	if s.issueRepository == nil {
+		return IssueList{}, errors.New("issue read repository is unavailable")
+	}
+
+	page, err := s.issueRepository.QueryIssues(ctx, query)
+	if err != nil {
+		return IssueList{}, mapIssueRepositoryError(err)
+	}
+	if page.Snapshot < 0 {
+		return IssueList{}, errors.New("issue repository returned an invalid snapshot")
+	}
+	data, hasMore := boundedIssuePage(page.Data, request.Limit, page.HasMore)
+	normalizeIssueSummaries(data)
+	nextCursor, err := issueNextCursor(
+		data,
+		hasMore,
+		page.Snapshot,
+		fingerprint,
+		issuedAt,
+	)
+	if err != nil {
+		return IssueList{}, err
+	}
+	viewCursor, err := encodeCursor(cursorEnvelope{
+		Version:     cursorVersion,
+		Kind:        "issue_view",
+		Snapshot:    page.Snapshot,
+		Fingerprint: issueViewFingerprint(),
+		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return IssueList{}, err
+	}
+	return IssueList{
+		SchemaVersion:     SchemaVersion,
+		ProjectionVersion: IssueProjectionVersion,
+		Data:              nonNil(data),
+		Analysis:          page.Analysis,
+		ViewCursor:        viewCursor,
+		NextCursor:        nextCursor,
+		HasMore:           hasMore,
+		ReturnedCount:     len(data),
+		Limit:             request.Limit,
+	}, nil
+}
+
+func (s *Service) GetIssue(
+	ctx context.Context,
+	request IssueDetailRequest,
+) (IssueDetail, error) {
+	request.IssueID = strings.ToLower(strings.TrimSpace(request.IssueID))
+	request.Cursor = strings.TrimSpace(request.Cursor)
+	request.ViewCursor = strings.TrimSpace(request.ViewCursor)
+	request.Limit = boundedLimit(request.Limit, defaultIssueLimit, maxIssueLimit)
+	if !issueIDPattern.MatchString(request.IssueID) {
+		return IssueDetail{}, invalidRequest("issue_id is malformed")
+	}
+	if request.Cursor != "" && request.ViewCursor != "" {
+		return IssueDetail{}, invalidRequest("cursor and view_cursor are mutually exclusive")
+	}
+
+	issuedAt := s.nowUTC()
+	snapshot := int64(0)
+	var position *model.IssueOccurrencePosition
+	if request.Cursor != "" {
+		cursor, err := decodeOccurrenceCursor(
+			request.Cursor,
+			request.IssueID,
+			issuedAt,
+		)
+		if err != nil {
+			return IssueDetail{}, err
+		}
+		cursorTime, _ := time.Parse(time.RFC3339Nano, cursor.Time)
+		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		snapshot = cursor.Snapshot
+		position = &model.IssueOccurrencePosition{
+			LastObserved: cursorTime,
+			OccurrenceID: cursor.ID,
+		}
+	} else if request.ViewCursor != "" {
+		cursor, err := decodeViewCursor(request.ViewCursor, issuedAt)
+		if err != nil {
+			return IssueDetail{}, err
+		}
+		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		snapshot = cursor.Snapshot
+		if snapshot == 0 {
+			return IssueDetail{}, notFound()
+		}
+	}
+	if s.issueRepository == nil {
+		return IssueDetail{}, errors.New("issue read repository is unavailable")
+	}
+
+	summaryPage, err := s.issueRepository.QueryIssues(ctx, model.IssueQuery{
+		Filter: model.IssueFilter{
+			IssueID:       request.IssueID,
+			AttentionKind: model.AttentionKindAll,
+			Experimental:  model.ExperimentalInclude,
+		},
+		Limit:    1,
+		Snapshot: snapshot,
+		IssuedAt: issuedAt,
+	})
+	if err != nil {
+		return IssueDetail{}, mapIssueRepositoryError(err)
+	}
+	if len(summaryPage.Data) == 0 {
+		return IssueDetail{}, notFound()
+	}
+	if summaryPage.Snapshot < 0 ||
+		summaryPage.Data[0].IssueID != request.IssueID {
+		return IssueDetail{}, errors.New("issue repository returned an inconsistent summary")
+	}
+	summary := summaryPage.Data[0]
+	normalizeIssueSummary(&summary)
+
+	occurrencePage, err := s.issueRepository.QueryIssueOccurrences(
+		ctx,
+		model.IssueOccurrenceQuery{
+			IssueID:  request.IssueID,
+			Limit:    request.Limit,
+			Snapshot: summaryPage.Snapshot,
+			IssuedAt: issuedAt,
+			Cursor:   position,
+		},
+	)
+	if err != nil {
+		return IssueDetail{}, mapIssueRepositoryError(err)
+	}
+	if occurrencePage.Snapshot != summaryPage.Snapshot {
+		return IssueDetail{}, errors.New("issue repository changed snapshots during detail read")
+	}
+	occurrences, hasMore := boundedOccurrencePage(
+		occurrencePage.Data,
+		request.Limit,
+		occurrencePage.HasMore,
+	)
+	normalizeIssueOccurrences(occurrences)
+	nextCursor, err := occurrenceNextCursor(
+		occurrences,
+		hasMore,
+		summaryPage.Snapshot,
+		request.IssueID,
+		issuedAt,
+	)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	return IssueDetail{
+		SchemaVersion:     SchemaVersion,
+		ProjectionVersion: IssueProjectionVersion,
+		Data: IssueDetailData{
+			Issue:       summary,
+			Occurrences: nonNil(occurrences),
+		},
+		NextCursor:    nextCursor,
+		HasMore:       hasMore,
+		ReturnedCount: len(occurrences),
+		Limit:         request.Limit,
+	}, nil
+}
+
+func (s *Service) LookupSessionEvents(
+	ctx context.Context,
+	request EventLookupRequest,
+) (EventLookup, error) {
+	request.SessionID = strings.TrimSpace(request.SessionID)
+	if request.SessionID == "" || len(request.SessionID) > 256 {
+		return EventLookup{}, invalidRequest("session_id is required and must not exceed 256 bytes")
+	}
+	if len(request.EventIDs) == 0 ||
+		len(request.EventIDs) > model.MaxEventLookupIDs {
+		return EventLookup{}, invalidRequest("event_id must be supplied between one and 50 times")
+	}
+	eventIDs := make([]string, 0, len(request.EventIDs))
+	seen := make(map[string]struct{}, len(request.EventIDs))
+	for _, value := range request.EventIDs {
+		eventID := strings.TrimSpace(value)
+		if !model.IsCanonicalUUIDv7(eventID) {
+			return EventLookup{}, invalidRequest("event_id is malformed")
+		}
+		if _, exists := seen[eventID]; exists {
+			continue
+		}
+		seen[eventID] = struct{}{}
+		eventIDs = append(eventIDs, eventID)
+	}
+	if s.issueRepository == nil {
+		return EventLookup{}, errors.New("issue read repository is unavailable")
+	}
+	result, err := s.issueRepository.LookupSessionEvents(
+		ctx,
+		model.EventLookupQuery{
+			SessionID: request.SessionID,
+			EventIDs:  eventIDs,
+		},
+	)
+	if err != nil {
+		return EventLookup{}, err
+	}
+	return EventLookup{
+		SchemaVersion:   SchemaVersion,
+		Data:            nonNil(result.Data),
+		RequestedCount:  result.RequestedCount,
+		FoundCount:      result.FoundCount,
+		MissingCount:    result.MissingCount,
+		MissingEventIDs: nonNil(result.MissingEventIDs),
+		DataThrough:     result.DataThrough,
+	}, nil
+}
+
 func (s *Service) GetStats(ctx context.Context) (StatsResponse, error) {
 	data, dataThrough, err := s.repository.GetStats(ctx)
 	return StatsResponse{
@@ -482,6 +861,250 @@ func eventNextCursor(
 		return nil, err
 	}
 	return &encoded, nil
+}
+
+func issueNextCursor(
+	data []model.IssueSummary,
+	hasMore bool,
+	snapshot int64,
+	fingerprint string,
+	issuedAt time.Time,
+) (*string, error) {
+	if !hasMore {
+		return nil, nil
+	}
+	if len(data) == 0 || snapshot <= 0 {
+		return nil, errors.New("issue repository reported an unusable continuation")
+	}
+	last := data[len(data)-1]
+	if !issueIDPattern.MatchString(last.IssueID) {
+		return nil, errors.New("issue repository returned a malformed issue ID")
+	}
+	rank := severityRank(last.Severity)
+	if rank == 0 || last.LastObservedAt.IsZero() {
+		return nil, errors.New("issue repository returned an invalid position")
+	}
+	encoded, err := encodeCursor(cursorEnvelope{
+		Version:      cursorVersion,
+		Kind:         "issues",
+		Snapshot:     snapshot,
+		Fingerprint:  fingerprint,
+		Time:         last.LastObservedAt.UTC().Format(time.RFC3339Nano),
+		ID:           last.IssueID,
+		IssuedAt:     issuedAt.UTC().Format(time.RFC3339Nano),
+		SeverityRank: rank,
+		Repeated:     last.SessionCount >= 2,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &encoded, nil
+}
+
+func occurrenceNextCursor(
+	data []model.IssueOccurrence,
+	hasMore bool,
+	snapshot int64,
+	issueID string,
+	issuedAt time.Time,
+) (*string, error) {
+	if !hasMore {
+		return nil, nil
+	}
+	if len(data) == 0 || snapshot <= 0 {
+		return nil, errors.New("issue repository reported an unusable occurrence continuation")
+	}
+	last := data[len(data)-1]
+	if last.OccurrenceID == "" ||
+		len(last.OccurrenceID) > 256 ||
+		last.LastObservedAt.IsZero() {
+		return nil, errors.New("issue repository returned an invalid occurrence position")
+	}
+	encoded, err := encodeCursor(cursorEnvelope{
+		Version:     cursorVersion,
+		Kind:        "issue_occurrences",
+		Snapshot:    snapshot,
+		Fingerprint: occurrenceFingerprint(issueID),
+		Time:        last.LastObservedAt.UTC().Format(time.RFC3339Nano),
+		ID:          last.OccurrenceID,
+		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &encoded, nil
+}
+
+func normalizeIssueListRequest(request IssueListRequest) IssueListRequest {
+	request.Limit = boundedLimit(request.Limit, defaultIssueLimit, maxIssueLimit)
+	request.Cursor = strings.TrimSpace(request.Cursor)
+	request.Severity = strings.ToLower(strings.TrimSpace(request.Severity))
+	request.Category = strings.ToLower(strings.TrimSpace(request.Category))
+	request.Harness = strings.TrimSpace(request.Harness)
+	request.Origin = strings.ToLower(strings.TrimSpace(request.Origin))
+	request.AnalysisStatus = strings.ToLower(strings.TrimSpace(request.AnalysisStatus))
+	request.ObservedAfter = utcTime(request.ObservedAfter)
+	request.Recurrence = strings.ToLower(strings.TrimSpace(request.Recurrence))
+	request.SessionID = strings.TrimSpace(request.SessionID)
+	request.FingerprintID = strings.ToLower(strings.TrimSpace(request.FingerprintID))
+	request.AttentionKind = strings.ToLower(strings.TrimSpace(request.AttentionKind))
+	request.Experimental = strings.ToLower(strings.TrimSpace(request.Experimental))
+	if request.AttentionKind == "" {
+		request.AttentionKind = model.AttentionKindIssue
+	}
+	if request.Experimental == "" {
+		request.Experimental = model.ExperimentalStable
+	}
+	return request
+}
+
+func validateIssueListRequest(request IssueListRequest) error {
+	switch request.Severity {
+	case "", "info", "low", "medium", "high", "critical":
+	default:
+		return invalidRequest("severity is unsupported")
+	}
+	if len(request.Severity) > 16 {
+		return invalidRequest("severity must not exceed 16 bytes")
+	}
+	if request.Category != "" && !categoryPattern.MatchString(request.Category) {
+		return invalidRequest("category is malformed")
+	}
+	if len(request.Harness) > 128 {
+		return invalidRequest("harness must not exceed 128 bytes")
+	}
+	switch request.Origin {
+	case "", "belay", "numbat":
+	default:
+		return invalidRequest("origin is unsupported")
+	}
+	switch request.AnalysisStatus {
+	case "", string(model.AnalysisCurrent), string(model.AnalysisPending),
+		string(model.AnalysisFailed), string(model.AnalysisTruncated):
+	default:
+		return invalidRequest("analysis_status is unsupported")
+	}
+	switch request.Recurrence {
+	case "", "single", "repeated":
+	default:
+		return invalidRequest("recurrence is unsupported")
+	}
+	if len(request.SessionID) > 256 {
+		return invalidRequest("session_id must not exceed 256 bytes")
+	}
+	if request.FingerprintID != "" &&
+		!fingerprintIDPattern.MatchString(request.FingerprintID) {
+		return invalidRequest("fingerprint_id is malformed")
+	}
+	switch request.AttentionKind {
+	case model.AttentionKindIssue, model.AttentionKindEvidenceGap,
+		model.AttentionKindAll:
+	default:
+		return invalidRequest("attention_kind is unsupported")
+	}
+	switch request.Experimental {
+	case model.ExperimentalStable, model.ExperimentalInclude,
+		model.ExperimentalOnly:
+	default:
+		return invalidRequest("experimental is unsupported")
+	}
+	return nil
+}
+
+func issueFingerprint(request IssueListRequest) string {
+	return stableFingerprint(struct {
+		Severity       string `json:"severity"`
+		Category       string `json:"category"`
+		Harness        string `json:"harness"`
+		Origin         string `json:"origin"`
+		AnalysisStatus string `json:"analysis_status"`
+		ObservedAfter  string `json:"observed_after"`
+		Recurrence     string `json:"recurrence"`
+		SessionID      string `json:"session_id"`
+		FingerprintID  string `json:"fingerprint_id"`
+		AttentionKind  string `json:"attention_kind"`
+		Experimental   string `json:"experimental"`
+	}{
+		Severity:       request.Severity,
+		Category:       request.Category,
+		Harness:        strings.ToLower(request.Harness),
+		Origin:         request.Origin,
+		AnalysisStatus: request.AnalysisStatus,
+		ObservedAfter:  timeString(request.ObservedAfter),
+		Recurrence:     request.Recurrence,
+		SessionID:      request.SessionID,
+		FingerprintID:  request.FingerprintID,
+		AttentionKind:  request.AttentionKind,
+		Experimental:   request.Experimental,
+	})
+}
+
+func issueViewFingerprint() string {
+	return stableFingerprint(struct {
+		Kind string `json:"kind"`
+	}{Kind: "issue_view"})
+}
+
+func occurrenceFingerprint(issueID string) string {
+	return stableFingerprint(struct {
+		IssueID string `json:"issue_id"`
+	}{IssueID: issueID})
+}
+
+func severityRank(severity string) int {
+	switch strings.ToLower(severity) {
+	case "info":
+		return 1
+	case "low":
+		return 2
+	case "medium":
+		return 3
+	case "high":
+		return 4
+	case "critical":
+		return 5
+	default:
+		return 0
+	}
+}
+
+func boundedIssuePage(
+	data []model.IssueSummary,
+	limit int,
+	repositoryHasMore bool,
+) ([]model.IssueSummary, bool) {
+	if len(data) > limit {
+		return data[:limit], true
+	}
+	return data, repositoryHasMore
+}
+
+func boundedOccurrencePage(
+	data []model.IssueOccurrence,
+	limit int,
+	repositoryHasMore bool,
+) ([]model.IssueOccurrence, bool) {
+	if len(data) > limit {
+		return data[:limit], true
+	}
+	return data, repositoryHasMore
+}
+
+func normalizeIssueSummaries(data []model.IssueSummary) {
+	for index := range data {
+		normalizeIssueSummary(&data[index])
+	}
+}
+
+func normalizeIssueSummary(summary *model.IssueSummary) {
+	summary.Harnesses = nonNil(summary.Harnesses)
+}
+
+func normalizeIssueOccurrences(data []model.IssueOccurrence) {
+	for index := range data {
+		data[index].Evidence.CitedEventIDs = nonNil(data[index].Evidence.CitedEventIDs)
+		data[index].Evidence.Dimensions = nonNil(data[index].Evidence.Dimensions)
+	}
 }
 
 func validateSessionRequest(request SessionListRequest) error {
@@ -600,6 +1223,109 @@ func encodeCursor(cursor cursorEnvelope) (string, error) {
 }
 
 func decodeCursor(value, kind, fingerprint string) (cursorEnvelope, error) {
+	cursor, err := decodeCursorEnvelope(value)
+	if err != nil {
+		return cursorEnvelope{}, err
+	}
+	if cursor.IssuedAt != "" ||
+		cursor.SeverityRank != 0 ||
+		cursor.Repeated {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if cursor.Version != cursorVersion ||
+		cursor.Kind != kind ||
+		cursor.Snapshot <= 0 ||
+		cursor.Fingerprint != fingerprint ||
+		cursor.ID == "" ||
+		len(cursor.ID) > 256 {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if _, err := parseUTCTime(cursor.Time); err != nil {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	return cursor, nil
+}
+
+func decodeIssueCursor(
+	value string,
+	fingerprint string,
+	now time.Time,
+) (cursorEnvelope, error) {
+	cursor, err := decodeCursorEnvelope(value)
+	if err != nil {
+		return cursorEnvelope{}, err
+	}
+	if cursor.Version != cursorVersion ||
+		cursor.Kind != "issues" ||
+		cursor.Snapshot <= 0 ||
+		cursor.Fingerprint != fingerprint ||
+		!issueIDPattern.MatchString(cursor.ID) ||
+		cursor.Sequence != 0 ||
+		cursor.SeverityRank < 1 ||
+		cursor.SeverityRank > 5 {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if _, err := parseUTCTime(cursor.Time); err != nil {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
+		return cursorEnvelope{}, err
+	}
+	return cursor, nil
+}
+
+func decodeViewCursor(value string, now time.Time) (cursorEnvelope, error) {
+	cursor, err := decodeCursorEnvelope(value)
+	if err != nil {
+		return cursorEnvelope{}, err
+	}
+	if cursor.Version != cursorVersion ||
+		cursor.Kind != "issue_view" ||
+		cursor.Snapshot < 0 ||
+		cursor.Fingerprint != issueViewFingerprint() ||
+		cursor.Time != "" ||
+		cursor.Sequence != 0 ||
+		cursor.ID != "" ||
+		cursor.SeverityRank != 0 ||
+		cursor.Repeated {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
+		return cursorEnvelope{}, err
+	}
+	return cursor, nil
+}
+
+func decodeOccurrenceCursor(
+	value string,
+	issueID string,
+	now time.Time,
+) (cursorEnvelope, error) {
+	cursor, err := decodeCursorEnvelope(value)
+	if err != nil {
+		return cursorEnvelope{}, err
+	}
+	if cursor.Version != cursorVersion ||
+		cursor.Kind != "issue_occurrences" ||
+		cursor.Snapshot <= 0 ||
+		cursor.Fingerprint != occurrenceFingerprint(issueID) ||
+		cursor.ID == "" ||
+		len(cursor.ID) > 256 ||
+		cursor.Sequence != 0 ||
+		cursor.SeverityRank != 0 ||
+		cursor.Repeated {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if _, err := parseUTCTime(cursor.Time); err != nil {
+		return cursorEnvelope{}, invalidCursor()
+	}
+	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
+		return cursorEnvelope{}, err
+	}
+	return cursor, nil
+}
+
+func decodeCursorEnvelope(value string) (cursorEnvelope, error) {
 	if value == "" || len(value) > maxCursorBytes {
 		return cursorEnvelope{}, invalidCursor()
 	}
@@ -616,19 +1342,30 @@ func decodeCursor(value, kind, fingerprint string) (cursorEnvelope, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return cursorEnvelope{}, invalidCursor()
 	}
-	if cursor.Version != cursorVersion ||
-		cursor.Kind != kind ||
-		cursor.Snapshot <= 0 ||
-		cursor.Fingerprint != fingerprint ||
-		cursor.ID == "" ||
-		len(cursor.ID) > 256 {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, cursor.Time)
-	if err != nil || parsed.Location() != time.UTC {
-		return cursorEnvelope{}, invalidCursor()
-	}
 	return cursor, nil
+}
+
+func parseUTCTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil || parsed.Location() != time.UTC {
+		return time.Time{}, invalidCursor()
+	}
+	return parsed, nil
+}
+
+func validateCursorIssuedAt(value string, now time.Time) error {
+	issuedAt, err := parseUTCTime(value)
+	if err != nil {
+		return invalidCursor()
+	}
+	now = now.UTC()
+	if issuedAt.After(now) {
+		return invalidCursor()
+	}
+	if now.Sub(issuedAt) > issueCursorLifetime {
+		return cursorExpired()
+	}
+	return nil
 }
 
 func invalidCursor() error {
@@ -637,6 +1374,25 @@ func invalidCursor() error {
 
 func invalidRequest(message string) error {
 	return fmt.Errorf("%w: %s", ErrInvalidRequest, message)
+}
+
+func cursorExpired() error {
+	return fmt.Errorf("%w: opaque cursor lifetime elapsed", ErrCursorExpired)
+}
+
+func notFound() error {
+	return fmt.Errorf("%w: requested issue is absent", ErrNotFound)
+}
+
+func mapIssueRepositoryError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrIssueSnapshotExpired):
+		return cursorExpired()
+	case errors.Is(err, model.ErrIssueSnapshotInvalid):
+		return invalidCursor()
+	default:
+		return err
+	}
 }
 
 func boundedLimit(value, fallback, maximum int) int {
@@ -676,4 +1432,11 @@ func timeString(value *time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func (s *Service) nowUTC() time.Time {
+	if s.now == nil {
+		return time.Now().UTC()
+	}
+	return s.now().UTC()
 }

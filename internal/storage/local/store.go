@@ -31,11 +31,13 @@ type Store struct {
 	db      *sql.DB
 	cipher  *payloadCipher
 	storeID string
+	clock   func() time.Time
 }
 
 type OpenOptions struct {
 	KeyProvider KeyProvider
 	Random      io.Reader
+	Clock       func() time.Time
 }
 
 type Finding struct {
@@ -101,6 +103,9 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if options.Random == nil {
 		options.Random = rand.Reader
 	}
+	if options.Clock == nil {
+		options.Clock = time.Now
+	}
 	dsn, err := sqliteDSN(path)
 	if err != nil {
 		return nil, err
@@ -118,7 +123,7 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, errors.New("enable secure local deletion")
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, clock: options.Clock}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -139,6 +144,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) nowUTC() time.Time {
+	return s.clock().UTC()
 }
 
 func sqliteDSN(path string) (string, error) {
@@ -1622,7 +1631,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
+		apply := func() error {
+			_, err := tx.ExecContext(ctx, string(body))
+			return err
+		}
+		if version == 9 {
+			err = withMutationTx(ctx, tx, mutationProjectionRebuild, apply)
+		} else {
+			err = apply()
+		}
+		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}

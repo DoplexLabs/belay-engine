@@ -1,7 +1,7 @@
 # Read-Only MCP V1 Contract
 
-- **Status:** Six implemented Local Alpha tools plus two approved,
-  unimplemented P0 issue tools
+- **Status:** Exactly six implemented Local Alpha tools; issue tools remain
+  planned for Feature 5
 - **Local:** V1
 - **Hosted:** V1.1
 
@@ -11,9 +11,10 @@ MCP is a read adapter over the Belay read contract. It performs no model
 inference, remediation, file write, command execution, fix recording, or
 recurrence registration.
 
-The internal P0 issue repository does not automatically expose MCP
-capabilities. `list_issues` and `get_issue` are frozen contracts for the next
-presentation feature and are not available in the current Local Alpha.
+The implemented Attention Inbox, issue HTTP routes, and internal issue
+repository do not automatically expose MCP capabilities. `list_issues` and
+`get_issue` remain unavailable until Feature 5. The current Local Alpha MCP
+server exposes exactly the six tools below.
 
 ## Implemented Local Alpha tools
 
@@ -97,7 +98,7 @@ Inputs:
 Local V1 does not advertise time or workflow filters for `get_stats`. Those
 inputs may be added only when the corresponding projections are implemented.
 
-## Approved next-feature tools — not implemented
+## Planned Feature 5 tools — not implemented
 
 ### `list_issues`
 
@@ -118,12 +119,18 @@ Inputs:
 - `recurrence` (optional `single` or `repeated`)
 - `session_id` (optional exact Belay session identifier)
 - `fingerprint_id` (optional exact opaque fingerprint identifier)
+- `attention_kind` (optional `issue`, `evidence_gap`, or `all`; default
+  `issue`)
+- `experimental` (optional `stable`, `include`, or `only`; default `stable`)
 
-Ordering and filter aggregation are identical to future
+Ordering and filter aggregation are identical to implemented
 `GET /v1/issues`: severity descending from `critical` through `info`, repeated
 before single, `last_observed_at DESC`, then `issue_id ASC`. Filters select
 groups while summary counts describe the complete visible group at the
 snapshot.
+
+Experimental signals are hidden by default. Verification evidence gaps are a
+separate attention kind and do not inflate the default issue count.
 
 Output:
 
@@ -187,9 +194,9 @@ returned only as untrusted observations.
 
 ### Issue MCP cursor and error contract
 
-Issue MCP cursors use the same 15-minute immutable projection snapshot,
-filter-binding, issue-binding, ordering, and expiration semantics as the future
-issue HTTP routes.
+Issue MCP cursors will use the same 15-minute immutable projection snapshot,
+filter-binding, issue-binding, ordering, and expiration semantics as the
+implemented issue HTTP routes.
 
 - malformed, cross-tool, issue-mismatched, or filter-mismatched cursors return a
   fixed `invalid_cursor` input error;
@@ -215,8 +222,9 @@ Every tool response:
 
 List tools return `next_cursor` exactly when `has_more=true`. Cursors are opaque
 and filter-bound; malformed or mismatched cursors fail with a payload-free
-input error. Implemented tools use ingestion snapshots. The two future issue
-tools use the separately revisioned issue-projection snapshot described above.
+input error. Implemented tools use ingestion snapshots. The two planned Feature
+5 issue tools will use the separately revisioned issue-projection snapshot
+described above.
 
 ## Explicitly absent
 
@@ -224,6 +232,9 @@ tools use the separately revisioned issue-projection snapshot described above.
 - `recurrence_since`
 - Any `write_*`, `execute_*`, `apply_*`, or `remediate_*` tool
 - Arbitrary filesystem or shell access
+
+Fix recording and recurrence measurement remain future features and are not
+implied by the implemented browser Attention workflow.
 
 ## Prompt-injection fixtures
 

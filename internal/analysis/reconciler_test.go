@@ -72,6 +72,7 @@ func TestDetectorIdentityDoesNotRepeatScopeDimension(t *testing.T) {
 			TitleCode:          "issue.test",
 			Severity:           "low",
 			Confidence:         "high",
+			Experimental:       true,
 			FirstObservedAt:    time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC),
 			LastObservedAt:     time.Date(2026, 9, 8, 18, 0, 1, 0, time.UTC),
 			EvidenceComplete:   true,
@@ -104,6 +105,9 @@ func TestDetectorIdentityDoesNotRepeatScopeDimension(t *testing.T) {
 			occurrences[0].FingerprintID,
 			wantFingerprint,
 		)
+	}
+	if !occurrences[0].Experimental {
+		t.Fatal("experimental detector metadata was not propagated")
 	}
 }
 

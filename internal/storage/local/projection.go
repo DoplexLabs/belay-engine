@@ -763,12 +763,12 @@ func (s *Store) insertIssueOccurrenceTx(
 					harness, detector_id, detector_version, projection_version,
 					category, title_code, severity, confidence, scope_quality,
 					first_observed_at, last_observed_at, evidence_complete,
-					retained_history_only, analysis_status, analysis_generation,
-					evidence_payload, evidence_encoding, visible_from_generation,
-					created_at, updated_at
+					retained_history_only, experimental, analysis_status,
+					analysis_generation, evidence_payload, evidence_encoding,
+					visible_from_generation, created_at, updated_at
 				) VALUES (
 					?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-					?, ?, ?, ?, ?, ?, ?, ?
+					?, ?, ?, ?, ?, ?, ?, ?, ?
 				)`,
 		revisionID,
 		occurrence.OccurrenceID,
@@ -791,6 +791,7 @@ func (s *Store) insertIssueOccurrenceTx(
 		formatProjectionTime(occurrence.LastObservedAt),
 		boolInt(occurrence.EvidenceComplete),
 		boolInt(occurrence.RetainedHistoryOnly),
+		boolInt(occurrence.Experimental),
 		occurrence.AnalysisStatus,
 		generation,
 		evidence,

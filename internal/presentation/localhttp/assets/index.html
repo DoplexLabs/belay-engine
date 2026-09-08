@@ -28,6 +28,25 @@
           </span>
         </div>
 
+        <nav class="primary-nav" aria-label="Belay Local views">
+          <button
+            class="primary-nav-button"
+            id="nav-attention"
+            type="button"
+            aria-current="page"
+          >
+            Attention
+            <span class="nav-count" id="attention-nav-count" hidden></span>
+          </button>
+          <button
+            class="primary-nav-button"
+            id="nav-sessions"
+            type="button"
+          >
+            Sessions
+          </button>
+        </nav>
+
         <div class="privacy-note" title="Belay Local keeps this view on your machine">
           <span class="privacy-dot" aria-hidden="true"></span>
           On-device
@@ -39,7 +58,322 @@
         </button>
       </header>
 
-      <main class="workspace">
+      <main class="view-stack">
+        <section class="workspace attention-workspace" id="attention-view">
+          <aside
+            class="attention-panel"
+            id="attention-list-pane"
+            aria-label="Attention inbox"
+          >
+            <div class="panel-heading attention-heading">
+              <div>
+                <p class="eyebrow">Deterministic signals</p>
+                <h1>Attention</h1>
+              </div>
+              <span class="count-pill" id="attention-count">—</span>
+            </div>
+
+            <section class="coverage-panel" aria-labelledby="coverage-heading">
+              <div class="coverage-heading-row">
+                <div>
+                  <p class="eyebrow">Analysis coverage</p>
+                  <h2 id="coverage-heading">Retained sessions</h2>
+                </div>
+                <p id="coverage-completeness">Loading…</p>
+              </div>
+              <dl class="coverage-grid">
+                <div>
+                  <dt>Current</dt>
+                  <dd id="coverage-current">—</dd>
+                </div>
+                <div>
+                  <dt>Pending</dt>
+                  <dd id="coverage-pending">—</dd>
+                </div>
+                <div>
+                  <dt>Failed</dt>
+                  <dd id="coverage-failed">—</dd>
+                </div>
+                <div>
+                  <dt>Partial</dt>
+                  <dd id="coverage-truncated">—</dd>
+                </div>
+              </dl>
+              <p id="coverage-unscoped"></p>
+              <p id="coverage-through">Latest completed analysis unavailable</p>
+            </section>
+
+            <form class="attention-filters" id="attention-filters">
+              <div class="attention-filter-row">
+                <label>
+                  <span>Severity</span>
+                  <select id="issue-filter-severity">
+                    <option value="">All severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                    <option value="info">Info</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Recurrence</span>
+                  <select id="issue-filter-recurrence">
+                    <option value="">Single + repeated</option>
+                    <option value="repeated">Exact matches</option>
+                    <option value="single">One session</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Harness</span>
+                  <input
+                    id="issue-filter-harness"
+                    type="text"
+                    maxlength="128"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Exact harness"
+                  >
+                </label>
+              </div>
+
+              <details class="advanced-filters">
+                <summary>Advanced filters</summary>
+                <div class="advanced-filter-grid">
+                  <label>
+                    <span>Category</span>
+                    <input
+                      id="issue-filter-category"
+                      type="text"
+                      maxlength="64"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Exact category code"
+                    >
+                  </label>
+                  <label>
+                    <span>Origin</span>
+                    <select id="issue-filter-origin">
+                      <option value="">Belay + Numbat</option>
+                      <option value="belay">Belay</option>
+                      <option value="numbat">Numbat</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Analysis state</span>
+                    <select id="issue-filter-status">
+                      <option value="">Any state</option>
+                      <option value="current">Current</option>
+                      <option value="pending">Pending</option>
+                      <option value="failed">Failed</option>
+                      <option value="truncated">Partial</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="experimental-filter">
+                  <input id="issue-filter-experimental" type="checkbox">
+                  <span>
+                    <strong>Include experimental signals</strong>
+                    Precision is still being validated.
+                  </span>
+                </label>
+              </details>
+
+              <div class="filter-footer attention-filter-footer">
+                <p id="attention-filter-note">Showing stable signals.</p>
+                <button id="clear-attention-filters" type="button">Clear</button>
+              </div>
+            </form>
+
+            <div
+              class="refresh-notice"
+              id="attention-refresh-notice"
+              role="status"
+              aria-live="polite"
+              hidden
+            >
+              Attention status
+            </div>
+
+            <div class="attention-scroll">
+              <section
+                class="attention-section"
+                aria-labelledby="stable-issues-heading"
+              >
+                <div class="attention-section-heading">
+                  <div>
+                    <p class="eyebrow">Stable signals</p>
+                    <h2 id="stable-issues-heading">Issues</h2>
+                  </div>
+                  <span class="count-pill" id="issue-count">—</span>
+                </div>
+                <p class="section-disclosure" id="issue-filter-disclosure"></p>
+                <div class="issue-list" id="issue-list" aria-live="polite"></div>
+                <div class="panel-state compact-state" id="issues-loading">
+                  <span class="spinner" aria-hidden="true"></span>
+                  <p>Loading stable issues…</p>
+                </div>
+                <div class="panel-state compact-state" id="issues-empty" hidden>
+                  <span class="empty-glyph" aria-hidden="true">◇</span>
+                  <p id="issues-empty-title">No issues available</p>
+                  <small id="issues-empty-detail"></small>
+                </div>
+                <div class="pagination-bar" id="issues-pagination" hidden>
+                  <p id="issues-page-status"></p>
+                  <button id="issues-load-more" type="button">Load more issues</button>
+                </div>
+              </section>
+
+              <section
+                class="attention-section evidence-gap-section"
+                aria-labelledby="evidence-gaps-heading"
+              >
+                <div class="attention-section-heading">
+                  <div>
+                    <p class="eyebrow">Verification coverage</p>
+                    <h2 id="evidence-gaps-heading">Evidence gaps</h2>
+                  </div>
+                  <span class="count-pill" id="evidence-gap-count">—</span>
+                </div>
+                <p class="section-disclosure">
+                  Missing verification evidence is shown separately from issue
+                  claims.
+                </p>
+                <div
+                  class="issue-list"
+                  id="evidence-gap-list"
+                  aria-live="polite"
+                ></div>
+                <div
+                  class="panel-state compact-state"
+                  id="evidence-gaps-loading"
+                >
+                  <span class="spinner" aria-hidden="true"></span>
+                  <p>Loading evidence gaps…</p>
+                </div>
+                <div
+                  class="panel-state compact-state"
+                  id="evidence-gaps-empty"
+                  hidden
+                >
+                  <span class="empty-glyph" aria-hidden="true">◇</span>
+                  <p id="evidence-gaps-empty-title">No evidence gaps available</p>
+                  <small id="evidence-gaps-empty-detail"></small>
+                </div>
+                <div
+                  class="pagination-bar"
+                  id="evidence-gaps-pagination"
+                  hidden
+                >
+                  <p id="evidence-gaps-page-status"></p>
+                  <button id="evidence-gaps-load-more" type="button">
+                    Load more evidence gaps
+                  </button>
+                </div>
+              </section>
+            </div>
+          </aside>
+
+          <section
+            class="attention-detail-panel"
+            id="attention-detail-pane"
+            aria-label="Issue detail"
+          >
+            <div class="attention-welcome" id="attention-welcome">
+              <div class="welcome-mark" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <p class="eyebrow">Evidence first</p>
+              <h2>Select a signal to inspect exact matching sessions</h2>
+              <p>
+                Belay groups deterministic fingerprints from retained Local
+                evidence. A match does not establish shared root cause, intent,
+                correctness, or whether a fix worked.
+              </p>
+            </div>
+
+            <div class="issue-detail" id="issue-detail" hidden>
+              <header class="issue-detail-header">
+                <button
+                  class="back-button issue-back-button"
+                  id="issue-back-button"
+                  type="button"
+                  aria-label="Back to Attention list"
+                >
+                  ←
+                </button>
+                <div>
+                  <p class="eyebrow" id="issue-detail-kind">Issue</p>
+                  <h2 id="issue-detail-heading" tabindex="-1">Detected issue</h2>
+                  <div class="issue-detail-badges" id="issue-detail-badges"></div>
+                </div>
+              </header>
+
+              <div class="issue-detail-scroll">
+                <section class="issue-explanation" aria-labelledby="why-heading">
+                  <p class="analysis-qualifier" id="issue-analysis-qualifier"></p>
+                  <h3 id="why-heading">Why this needs attention</h3>
+                  <p id="issue-explanation"></p>
+                  <p class="section-disclosure" id="issue-scope-disclosure"></p>
+                </section>
+
+                <dl class="issue-metadata" id="issue-metadata"></dl>
+
+                <section class="fingerprint-panel" aria-labelledby="fingerprint-heading">
+                  <div>
+                    <h3 id="fingerprint-heading">Opaque exact-match identifier</h3>
+                    <code id="issue-fingerprint"></code>
+                  </div>
+                  <button id="copy-issue-fingerprint" type="button">Copy</button>
+                </section>
+
+                <section
+                  class="matching-section"
+                  aria-labelledby="matching-sessions-heading"
+                >
+                  <div class="matching-heading">
+                    <div>
+                      <p class="eyebrow">Deterministic matches</p>
+                      <h3 id="matching-sessions-heading">Matching sessions</h3>
+                    </div>
+                    <span class="count-pill" id="occurrence-count">—</span>
+                  </div>
+                  <p class="section-disclosure">
+                    These sessions share the exact opaque fingerprint within a
+                    compatible private scope. They are not semantic matches.
+                  </p>
+                  <div
+                    class="occurrence-list"
+                    id="occurrence-list"
+                    aria-live="polite"
+                  ></div>
+                  <div
+                    class="panel-state compact-state"
+                    id="occurrences-loading"
+                    hidden
+                  >
+                    <span class="spinner" aria-hidden="true"></span>
+                    <p>Loading matching sessions…</p>
+                  </div>
+                  <div
+                    class="pagination-bar"
+                    id="occurrences-pagination"
+                    hidden
+                  >
+                    <p id="occurrences-page-status"></p>
+                    <button id="occurrences-load-more" type="button">
+                      Load more matches
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="workspace sessions-workspace" id="sessions-view" hidden>
         <aside class="session-panel" aria-label="Agent sessions">
           <div class="panel-heading">
             <div>
@@ -171,7 +505,7 @@
                 <span class="harness-avatar" id="selected-avatar" aria-hidden="true"></span>
                 <div>
                   <div class="title-line">
-                    <h2 id="selected-harness">Session</h2>
+                    <h2 id="selected-harness" tabindex="-1">Session</h2>
                     <span class="status-badge" id="selected-outcome"></span>
                     <span class="meta-badge" id="selected-historical" hidden>
                       Reconstructed
@@ -227,6 +561,16 @@
                   <section aria-labelledby="findings-heading">
                     <h4 id="findings-heading">Findings</h4>
                     <div class="finding-list" id="finding-list"></div>
+                    <div
+                      class="finding-pagination"
+                      id="findings-pagination"
+                      hidden
+                    >
+                      <p id="findings-page-status"></p>
+                      <button id="findings-load-more" type="button">
+                        Load more findings
+                      </button>
+                    </div>
                   </section>
                 </div>
               </div>
@@ -271,14 +615,16 @@
             </div>
           </div>
 
-          <div class="error-banner" id="error-banner" role="alert" hidden>
-            <div>
-              <strong id="error-title">Unable to load Belay Local</strong>
-              <p id="error-detail"></p>
-            </div>
-            <button id="error-retry" type="button">Try again</button>
-          </div>
         </section>
+        </section>
+
+        <div class="error-banner" id="error-banner" role="alert" hidden>
+          <div>
+            <strong id="error-title">Unable to load Belay Local</strong>
+            <p id="error-detail"></p>
+          </div>
+          <button id="error-retry" type="button">Try again</button>
+        </div>
       </main>
     </div>
   </body>

@@ -70,8 +70,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/sessions", s.authorize(http.HandlerFunc(s.listSessions)))
 	mux.Handle("GET /v1/sessions/{id}", s.authorize(http.HandlerFunc(s.getSession)))
 	mux.Handle("GET /v1/sessions/{id}/events", s.authorize(http.HandlerFunc(s.getTimeline)))
+	mux.Handle("GET /v1/sessions/{id}/events/lookup", s.authorize(http.HandlerFunc(s.lookupEvents)))
 	mux.Handle("GET /v1/activity", s.authorize(http.HandlerFunc(s.queryActivity)))
 	mux.Handle("GET /v1/findings", s.authorize(http.HandlerFunc(s.listFindings)))
+	mux.Handle("GET /v1/issues", s.authorize(http.HandlerFunc(s.listIssues)))
+	mux.Handle("GET /v1/issues/{id}/occurrences", s.authorize(http.HandlerFunc(s.getIssue)))
 	mux.Handle("GET /v1/stats", s.authorize(http.HandlerFunc(s.getStats)))
 
 	assets, err := fs.Sub(assetFiles, "assets")
@@ -192,6 +195,28 @@ func (s *Server) getTimeline(w http.ResponseWriter, r *http.Request) {
 	writeReadResult(w, r, response, err)
 }
 
+func (s *Server) lookupEvents(w http.ResponseWriter, r *http.Request) {
+	parameters, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+		return
+	}
+	for name := range parameters {
+		if name != "event_id" {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+			return
+		}
+	}
+	response, err := s.read.LookupSessionEvents(
+		r.Context(),
+		readmodel.EventLookupRequest{
+			SessionID: r.PathValue("id"),
+			EventIDs:  parameters["event_id"],
+		},
+	)
+	writeReadResult(w, r, response, err)
+}
+
 func (s *Server) queryActivity(w http.ResponseWriter, r *http.Request) {
 	filter := model.ActivityFilter{
 		Harness:      queryValue(r, "harness"),
@@ -233,6 +258,40 @@ func (s *Server) listFindings(w http.ResponseWriter, r *http.Request) {
 	writeReadResult(w, r, response, err)
 }
 
+func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
+	observedAfter, err := optionalTime(r, "observed_after")
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+		return
+	}
+	response, err := s.read.ListIssues(r.Context(), readmodel.IssueListRequest{
+		Limit:          boundedInt(r, "limit", 20, 100),
+		Cursor:         queryValue(r, "cursor"),
+		Severity:       queryValue(r, "severity"),
+		Category:       queryValue(r, "category"),
+		Harness:        queryValue(r, "harness"),
+		Origin:         queryValue(r, "origin"),
+		AnalysisStatus: queryValue(r, "analysis_status"),
+		ObservedAfter:  observedAfter,
+		Recurrence:     queryValue(r, "recurrence"),
+		SessionID:      queryValue(r, "session_id"),
+		FingerprintID:  queryValue(r, "fingerprint_id"),
+		AttentionKind:  queryValue(r, "attention_kind"),
+		Experimental:   queryValue(r, "experimental"),
+	})
+	writeReadResult(w, r, response, err)
+}
+
+func (s *Server) getIssue(w http.ResponseWriter, r *http.Request) {
+	response, err := s.read.GetIssue(r.Context(), readmodel.IssueDetailRequest{
+		IssueID:    r.PathValue("id"),
+		Limit:      boundedInt(r, "limit", 20, 100),
+		Cursor:     queryValue(r, "cursor"),
+		ViewCursor: queryValue(r, "view_cursor"),
+	})
+	writeReadResult(w, r, response, err)
+}
+
 func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 	response, err := s.read.GetStats(r.Context())
 	writeReadResult(w, r, response, err)
@@ -242,6 +301,21 @@ func writeReadResult(w http.ResponseWriter, r *http.Request, response any, err e
 	if errors.Is(err, readmodel.ErrInvalidCursor) ||
 		errors.Is(err, readmodel.ErrInvalidRequest) {
 		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+		return
+	}
+	if errors.Is(err, readmodel.ErrCursorExpired) {
+		writeProblemType(
+			w,
+			r,
+			http.StatusGone,
+			"belay.local/cursor-expired",
+			"Cursor expired",
+			"The issue view changed. Restart pagination without a cursor.",
+		)
+		return
+	}
+	if errors.Is(err, readmodel.ErrNotFound) {
+		writeProblem(w, r, http.StatusNotFound, "Not found", "The requested issue is not available in this view.")
 		return
 	}
 	if err != nil {
@@ -306,10 +380,21 @@ func optionalTime(r *http.Request, name string) (*time.Time, error) {
 }
 
 func writeProblem(w http.ResponseWriter, r *http.Request, status int, title, detail string) {
+	writeProblemType(w, r, status, "about:blank", title, detail)
+}
+
+func writeProblemType(
+	w http.ResponseWriter,
+	r *http.Request,
+	status int,
+	problemType string,
+	title string,
+	detail string,
+) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problem{
-		Type:      "about:blank",
+		Type:      problemType,
 		Title:     title,
 		Status:    status,
 		Detail:    detail,

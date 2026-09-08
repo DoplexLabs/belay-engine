@@ -1,7 +1,7 @@
 # Belay Read API V1 Contract
 
-- **Status:** Implemented Local Alpha surface plus approved, unimplemented P0
-  issue presentation contract
+- **Status:** Implemented Local Alpha surface, including Feature 2 Attention
+  and issue reads
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -11,11 +11,9 @@ Belay has one intended read contract with Local and future Teams adapters. The
 Local Alpha implements only the routes explicitly listed below. Other resources
 must not be represented as available Local Alpha or Teams functionality.
 
-The P0 issue-fingerprint feature adds an internal, snapshot-queryable issue
-repository over retained Local evidence. That foundation does not itself add an
-HTTP route, browser inbox, or MCP tool. The issue routes in this document are
-the approved contract for the next presentation feature and are not implemented
-yet.
+Feature 2 exposes the internal snapshot-queryable issue repository through the
+loopback HTTP API and browser Attention Inbox. This does not add MCP issue
+tools: MCP remains exactly six tools until Feature 5.
 
 ## Implemented Local Alpha routes
 
@@ -25,21 +23,12 @@ yet.
 | `GET /v1/sessions` | filtered, cursor-paginated local sessions |
 | `GET /v1/sessions/{id}` | one local session and metadata-only overview |
 | `GET /v1/sessions/{id}/events` | cursor-paginated local timeline |
+| `GET /v1/sessions/{id}/events/lookup` | bounded exact cited-event lookup within one session |
 | `GET /v1/activity` | filtered, cursor-paginated canonical activity |
 | `GET /v1/findings` | filtered, cursor-paginated local findings |
+| `GET /v1/issues` | filtered, cursor-paginated deterministic issue summaries |
+| `GET /v1/issues/{id}/occurrences` | issue detail and cursor-paginated exact matching sessions |
 | `GET /v1/stats` | global Local summary only |
-
-## Approved next-feature issue routes
-
-The following contracts are approved but are **not implemented** by the current
-Local Alpha:
-
-- `GET /v1/issues`
-- `GET /v1/issues/{id}/occurrences`
-
-Their repository data may exist before these routes do. Clients must feature
-detect route availability and must not infer public availability from a
-database migration or repository implementation.
 
 ## Other future candidate routes
 
@@ -57,8 +46,7 @@ The following are not implemented by the Local Alpha:
 - JSON only in V1.
 - Implemented Local Alpha list routes use opaque cursor pagination with
   deterministic ordering and immutable ingestion snapshots.
-- Future issue routes use a separate immutable issue-projection generation
-  snapshot.
+- Issue routes use a separate immutable issue-projection generation snapshot.
 - Bounded default and maximum page sizes.
 - Explicit `schema_version`, projection/metric versions, and
   coverage/confidence where values are derived.
@@ -226,14 +214,14 @@ Both endpoints return the truthful list metadata defined above.
 filters. Filtered or workflow statistics must not be advertised until the
 underlying projection is implemented.
 
-## P0 issue repository foundation
+## P0 issue and Attention foundation
 
 The internal issue repository groups retained detector occurrences only when
 they have the same opaque, versioned fingerprint. A fingerprint represents an
 exact deterministic detector signature within a compatible project scope. It
 does not establish semantic similarity, shared intent, or a common root cause.
 
-The implemented repository foundation provides:
+The implemented repository and HTTP presentation provide:
 
 - stable public `issue_id` and exact `fingerprint_id` values;
 - issue summaries aggregated from occurrence revisions visible at one
@@ -242,7 +230,10 @@ The implemented repository foundation provides:
 - origin separation between Belay detectors and immutable Numbat findings;
 - per-session analysis state and list-level completeness;
 - revisioned projection snapshots that remain stable while reconciliation
-  processes new or late evidence.
+  processes new or late evidence;
+- default separation of stable issues, experimental signals, and verification
+  evidence gaps;
+- bounded exact cited-event lookup within one selected session.
 
 This is derived, rebuildable state. Canonical events and upstream Numbat
 findings remain the evidence source. Unknown outcomes remain unknown, event
@@ -251,7 +242,8 @@ cause, correctness, safety, intent, or successful remediation.
 
 ### Issue summary shape
 
-The future issue routes and MCP tools use this logical summary:
+The implemented issue HTTP routes use this logical summary. Planned Feature 5
+MCP issue tools may reuse it without changing the current six-tool MCP surface:
 
 ```json
 {
@@ -273,7 +265,8 @@ The future issue routes and MCP tools use this logical summary:
   "harnesses": ["claude", "codex"],
   "analysis_status": "current",
   "evidence_complete": true,
-  "retained_history_only": false
+  "retained_history_only": false,
+  "experimental": false
 }
 ```
 
@@ -306,12 +299,13 @@ An issue occurrence represents one exact fingerprint in one session:
 
 ```json
 {
-  "occurrence_id": "ioc_...",
+  "occurrence_id": "occ_...",
   "issue_id": "iss_...",
+  "fingerprint_id": "ifp_...",
+  "fingerprint_version": "1",
   "session_id": "ses_...",
   "harness": "codex",
   "origin": "belay",
-  "origin_record_id": null,
   "provenance": {
     "detector_id": "explicit_command_failure",
     "detector_version": "1",
@@ -329,22 +323,21 @@ An issue occurrence represents one exact fingerprint in one session:
   "analysis_generation": 42,
   "evidence_complete": true,
   "retained_history_only": false,
+  "experimental": false,
   "evidence": {
-    "cited_event_ids": ["evt_..."],
+    "cited_event_ids": ["01890f2e-6d4b-7c8a-9b0c-123456789abc"],
     "dimensions": ["cmd_..."]
   }
 }
 ```
 
 For `origin=numbat`, `origin_record_id` references the immutable source finding.
-`evidence.cited_event_ids` refer to canonical events retrievable through the
-existing session timeline contract. Evidence values and opaque dimensions
-returned with an occurrence are untrusted observations.
+It is omitted for Belay-origin occurrences. `evidence.cited_event_ids` refer to
+canonical events retrievable through the exact session event lookup route.
+Evidence values and opaque dimensions returned with an occurrence are
+untrusted observations.
 
-## Future issue HTTP contract
-
-This section freezes the next-feature interface. It does not claim that either
-route is currently served.
+## Implemented issue HTTP contract
 
 ### `GET /v1/issues`
 
@@ -361,11 +354,16 @@ Accepted query parameters:
   occurrence at or after the bound;
 - `recurrence`: `single` or `repeated`;
 - `session_id`: exact Belay session identifier;
-- `fingerprint_id`: exact opaque fingerprint identifier.
+- `fingerprint_id`: exact opaque fingerprint identifier;
+- `attention_kind`: `issue`, `evidence_gap`, or `all`; default `issue`;
+- `experimental`: `stable`, `include`, or `only`; default `stable`.
 
 Ordering is severity descending (`critical`, `high`, `medium`, `low`, `info`),
 repeated before single within a severity, `last_observed_at DESC`, then
 `issue_id ASC`. All normalized filters are bound into the cursor.
+The default response excludes experimental signals and evidence gaps.
+Verification evidence gaps are requested separately with
+`attention_kind=evidence_gap`; they do not inflate the default issue count.
 
 Response:
 
@@ -383,6 +381,7 @@ Response:
     "analysis_through": "2026-09-08T18:05:01Z",
     "complete": false
   },
+  "view_cursor": "opaque-rowless-view-cursor",
   "next_cursor": null,
   "has_more": false,
   "returned_count": 0,
@@ -396,12 +395,22 @@ cannot support cross-session recurrence. When `complete=false`, an empty result
 means only that no issue is available from the completed portion. Consumers
 must identify incomplete coverage and must not say that no issues exist.
 
+`view_cursor` carries the list's immutable issue-projection snapshot without a
+row position. A client passes it to the initial detail request so list and
+detail remain on the same logical view.
+
 ### `GET /v1/issues/{id}/occurrences`
 
 Accepted query parameters:
 
 - `limit`: default 20, maximum 100;
-- `cursor`: opaque occurrence cursor bound to the issue ID.
+- `cursor`: opaque occurrence cursor bound to the issue ID;
+- `view_cursor`: rowless cursor from `GET /v1/issues`, accepted only for the
+  initial detail request.
+
+`cursor` and `view_cursor` are mutually exclusive. Exact issue lookup includes
+experimental and evidence-gap rows because selecting an opaque issue ID is
+explicit intent.
 
 The response contains the issue summary at the cursor snapshot and occurrence
 rows ordered by `last_observed_at DESC, occurrence_id ASC`, followed by the
@@ -442,6 +451,33 @@ honor the shorter cursor lifetime.
   `belay.local/cursor-expired`.
 - Clients restart pagination without a cursor after expiration.
 
+### `GET /v1/sessions/{id}/events/lookup`
+
+This route performs one bounded exact lookup of cited canonical events within
+the selected session. It accepts only repeated `event_id` query parameters:
+
+- one to 50 values;
+- lowercase canonical UUIDv7 values;
+- duplicates removed while preserving first-request order for missing-ID
+  reporting;
+- no cursor, free-form query, or other query parameter.
+
+Returned events use canonical timeline ordering. An event belonging to another
+session is reported as missing rather than returned. Missing IDs are ordinary
+data, not `404`.
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "data": [],
+  "requested_count": 2,
+  "found_count": 1,
+  "missing_count": 1,
+  "missing_event_ids": ["01890f2e-6d4b-7c8a-9b0c-123456789abc"],
+  "data_through": "2026-09-08T18:05:01Z"
+}
+```
+
 ## Authentication
 
 - Local browser requests use a random per-launch token.
@@ -463,9 +499,8 @@ Implemented Local filters, where applicable:
 - `resource_kind`
 - `severity`
 - `session_id` for findings
-
-Approved future issue filters are defined separately above and must not be
-advertised as implemented Local filters until the issue routes ship.
+- issue filters documented under `GET /v1/issues`, including
+  `attention_kind` and `experimental`
 
 ## Errors
 
@@ -485,11 +520,15 @@ Errors use `application/problem+json` with:
 4. Pagination remains stable with late and out-of-order events.
 5. Malformed, cross-endpoint, and filter-mismatched cursors fail closed.
 6. Resource-kind activity filtering is exhaustive within its cursor snapshot.
-
-Future issue-route acceptance additionally requires stable projection
-pagination during reconciliation, truthful mixed analysis coverage, exact
-matching-session evidence, cursor expiration behavior, and no semantic
-root-cause language.
+7. Issue pagination remains stable while reconciliation advances.
+8. Attention defaults exclude experimental signals and keep Evidence gaps
+   separate.
+9. Incomplete analysis is reported truthfully and never converted into a
+   complete empty-state claim.
+10. Matching sessions use exact fingerprint equality, never semantic or
+    shared-root-cause language.
+11. Exact event lookup remains bounded, session-constrained, and rejects
+    unrelated query parameters.
 
 Teams shape compatibility and cross-workspace authorization remain future
 acceptance requirements, not Local Alpha claims.

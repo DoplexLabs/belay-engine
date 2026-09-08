@@ -13,11 +13,12 @@ and exposes the same read-only evidence through a local browser and MCP.
 Belay Local has no account, hosted dependency, product telemetry, model
 inference, write-capable MCP tool, or Teams requirement.
 
-The approved P0 scope now includes an internal deterministic issue repository:
-exact, opaque fingerprints group retained occurrences across matching sessions,
-with analysis completeness and snapshot-stable reads. This foundation does not
-make an attention inbox, issue HTTP route, or issue MCP tool available by
-itself. Those presentation adapters are the next feature.
+The implemented P0 scope includes a browser Attention Inbox over the internal
+deterministic issue repository. Exact, opaque fingerprints group retained
+occurrences across matching sessions, with analysis completeness,
+snapshot-stable reads, and bounded cited-event lookup. Matching is exact, not
+semantic. Experimental signals are hidden by default, and verification
+evidence gaps remain separate from the default issue count.
 
 ## Launch scope
 
@@ -35,6 +36,8 @@ itself. Those presentation adapters are the next feature.
 9. Provide an installable macOS development package and reproducible build
    instructions.
 10. Publish exact coverage and known limitations.
+11. Make Attention the initial browser view, with deterministic issue detail,
+    exact matching sessions, and truthful incomplete-analysis states.
 
 ### Launch-validated harnesses
 
@@ -141,14 +144,18 @@ Required routes:
 - `GET /v1/sessions`
 - `GET /v1/sessions/{id}`
 - `GET /v1/sessions/{id}/events`
+- `GET /v1/sessions/{id}/events/lookup`
 - `GET /v1/activity`
 - `GET /v1/findings`
+- `GET /v1/issues`
+- `GET /v1/issues/{id}/occurrences`
 - `GET /v1/stats`
 
-The approved next presentation feature adds `GET /v1/issues` and
-`GET /v1/issues/{id}/occurrences`. These routes are not required or implemented
-by the current Local Alpha. The internal issue repository must not be treated
-as evidence that either route exists.
+The issue routes are bounded, snapshot-stable reads over the revisioned issue
+projection. The exact event lookup accepts only one to 50 repeated canonical
+`event_id` parameters, rejects unrelated query modes, constrains results to the
+selected session, and returns found/missing counts without broad timeline
+scanning.
 
 The embedded browser is a client of these routes and never reads SQLite
 directly. Event-derived strings render as text, never HTML.
@@ -185,9 +192,9 @@ Required read-only tools:
 - `list_findings`
 - `get_stats`
 
-The approved next presentation feature adds the read-only `list_issues` and
-`get_issue` contracts. They are not part of the current six-tool Local Alpha
-server.
+Planned read-only `list_issues` and `get_issue` tools remain deferred until
+Feature 5. They are not part of the current six-tool Local Alpha server, even
+though the browser issue routes are implemented.
 
 Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
@@ -197,9 +204,9 @@ The MCP list tools use the same server-side filters, deterministic order,
 stable-snapshot cursor semantics, limits, and completeness rules as the Local
 read API. They do not fetch broad pages and filter them inside MCP.
 
-## P0 issue intelligence foundation
+## P0 Attention Inbox and issue intelligence
 
-The implemented foundation is an internal, rebuildable projection over retained
+The implemented feature uses an internal, rebuildable projection over retained
 canonical events and immutable Numbat findings. It:
 
 - derives private, store-keyed project scopes and exact command signatures
@@ -211,14 +218,17 @@ canonical events and immutable Numbat findings. It:
 - maintains revisioned issue and session-analysis state for stable read
   snapshots;
 - reports current, pending, failed, truncated, and unscoped analysis coverage.
+- presents stable issues in the browser Attention Inbox;
+- presents verification evidence gaps in a separately paginated section;
+- excludes experimental signals from default issue reads;
+- exposes exact matching sessions and bounded cited-event evidence.
 
 The foundation does not infer root cause, task intent, correctness, safety,
 stalls, or successful completion. Unknown outcomes remain unknown. Unscoped or
 conflicting sessions may support session-local attention but never
 cross-session recurrence.
 
-The future attention inbox, issue HTTP routes, and `list_issues`/`get_issue` MCP
-tools must:
+The implemented Attention Inbox and issue HTTP routes:
 
 - show list-level analysis completeness and avoid a complete "no issues" claim
   while analysis is pending, failed, or truncated;
@@ -228,6 +238,9 @@ tools must:
 - expire issue cursors after 15 minutes and require a fresh read rather than
   silently weakening snapshot stability;
 - remain read-only and provide no remediation or fix-execution action.
+
+MCP issue tools remain future Feature 5 work. Explicit fix recording and
+recurrence measurement also remain future features.
 
 ## Launch acceptance
 
@@ -251,6 +264,9 @@ tools must:
     third-party attribution.
 11. Every distributable archive is built from a clean checkout and records
     `belay_dirty=false`; dirty validation artifacts are never distributed.
+12. Attention defaults to stable issues, keeps Evidence gaps separate, exposes
+    exact matching sessions, and qualifies empty states when analysis coverage
+    is incomplete.
 
 ## Alpha and production gates
 
