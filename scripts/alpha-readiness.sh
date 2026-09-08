@@ -74,10 +74,8 @@ done
 printf '==> verifying source and release surface\n'
 make -C "${repository_root}" verify
 
-build_environment=()
 validation_only="false"
 if [[ "${BELAY_ALPHA_ALLOW_DIRTY:-0}" == "1" ]]; then
-  build_environment=("BELAY_ALLOW_DIRTY=1")
   validation_only="true"
   printf '%s\n' \
     "alpha-readiness: warning: building a dirty validation artifact; do not distribute it" \
@@ -85,11 +83,18 @@ if [[ "${BELAY_ALPHA_ALLOW_DIRTY:-0}" == "1" ]]; then
 fi
 
 printf '==> building unsigned darwin/arm64 alpha archive\n'
-env "${build_environment[@]}" \
+if [[ "${validation_only}" == "true" ]]; then
+  BELAY_ALLOW_DIRTY=1 \
+    "${repository_root}/scripts/build-developer-preview.sh" \
+    --arch arm64 \
+    --version "${alpha_version}" \
+    --output-dir "${output_dir}"
+else
   "${repository_root}/scripts/build-developer-preview.sh" \
-  --arch arm64 \
-  --version "${alpha_version}" \
-  --output-dir "${output_dir}"
+    --arch arm64 \
+    --version "${alpha_version}" \
+    --output-dir "${output_dir}"
+fi
 
 archive_name="belay-local-developer-alpha-v${alpha_version}-darwin-arm64.tar.gz"
 archive="${output_dir}/${archive_name}"
