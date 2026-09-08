@@ -31,11 +31,15 @@ type toolOutput[T any] struct {
 }
 
 type listSessionsInput struct {
-	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of sessions to return; defaults to 20 and must not exceed 100"`
-	Cursor  string `json:"cursor,omitempty" jsonschema:"opaque pagination cursor"`
-	Since   string `json:"since,omitempty" jsonschema:"optional RFC3339 lower bound for session end time"`
-	Harness string `json:"harness,omitempty" jsonschema:"optional exact harness filter"`
-	Outcome string `json:"outcome,omitempty" jsonschema:"optional exact outcome filter"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"maximum number of sessions to return; defaults to 20 and must not exceed 100"`
+	Cursor         string `json:"cursor,omitempty" jsonschema:"opaque pagination cursor from a prior response"`
+	Since          string `json:"since,omitempty" jsonschema:"compatibility alias for occurred_after"`
+	OccurredAfter  string `json:"occurred_after,omitempty" jsonschema:"optional RFC3339 lower bound; sessions overlapping the window are returned"`
+	OccurredBefore string `json:"occurred_before,omitempty" jsonschema:"optional RFC3339 upper bound; sessions overlapping the window are returned"`
+	Harness        string `json:"harness,omitempty" jsonschema:"optional exact harness filter"`
+	Outcome        string `json:"outcome,omitempty" jsonschema:"optional raw projection outcome: incomplete, succeeded, failed, interrupted, or unknown"`
+	History        string `json:"history,omitempty" jsonschema:"optional acquisition mode: historical, live, or mixed"`
+	Query          string `json:"query,omitempty" jsonschema:"bounded case-insensitive query over session ID and harness only"`
 }
 
 type getSessionInput struct {
@@ -54,20 +58,19 @@ type queryActivityInput struct {
 	Harness        string `json:"harness,omitempty" jsonschema:"optional exact harness filter"`
 	ResourceKind   string `json:"resource_kind,omitempty" jsonschema:"optional exact resource kind filter"`
 	Outcome        string `json:"outcome,omitempty" jsonschema:"optional exact outcome filter"`
+	Cursor         string `json:"cursor,omitempty" jsonschema:"opaque pagination cursor from a prior response"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"maximum number of events to return; defaults to 50 and must not exceed 200"`
 }
 
 type listFindingsInput struct {
-	Since    string `json:"since,omitempty" jsonschema:"optional RFC3339 lower bound"`
-	Severity string `json:"severity,omitempty" jsonschema:"optional exact severity filter"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"maximum number of findings to return; defaults to 20 and must not exceed 100"`
+	Since     string `json:"since,omitempty" jsonschema:"optional RFC3339 lower bound"`
+	Severity  string `json:"severity,omitempty" jsonschema:"optional exact severity filter"`
+	SessionID string `json:"session_id,omitempty" jsonschema:"optional exact Belay session identifier"`
+	Cursor    string `json:"cursor,omitempty" jsonschema:"opaque pagination cursor from a prior response"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"maximum number of findings to return; defaults to 20 and must not exceed 100"`
 }
 
-type getStatsInput struct {
-	OccurredAfter  string `json:"occurred_after,omitempty" jsonschema:"optional RFC3339 lower bound"`
-	OccurredBefore string `json:"occurred_before,omitempty" jsonschema:"optional RFC3339 upper bound"`
-	WorkflowID     string `json:"workflow_id,omitempty" jsonschema:"optional workflow identifier"`
-}
+type getStatsInput struct{}
 
 func New(read *readmodel.Service) (*Server, error) {
 	if read == nil {
@@ -130,10 +133,14 @@ func (s *Server) listSessions(
 	if err != nil {
 		return nil, zero, fmt.Errorf("invalid limit: %w", err)
 	}
-	if err := validateCursor(input.Cursor); err != nil {
-		return nil, zero, err
+	if input.Since != "" && input.OccurredAfter != "" {
+		return nil, zero, errors.New("use only one of since or occurred_after")
 	}
-	since, err := optionalRFC3339("since", input.Since)
+	afterValue := input.OccurredAfter
+	if afterValue == "" {
+		afterValue = input.Since
+	}
+	after, before, err := parseWindow(afterValue, input.OccurredBefore)
 	if err != nil {
 		return nil, zero, err
 	}
@@ -143,34 +150,25 @@ func (s *Server) listSessions(
 	if err := boundedString("outcome", input.Outcome, 32); err != nil {
 		return nil, zero, err
 	}
-
-	response, err := s.read.ListSessions(ctx, 100)
+	if err := boundedString("history", input.History, 16); err != nil {
+		return nil, zero, err
+	}
+	if err := boundedString("query", input.Query, 128); err != nil {
+		return nil, zero, err
+	}
+	response, err := s.read.ListSessionsPage(ctx, readmodel.SessionListRequest{
+		Limit:          limit,
+		Cursor:         input.Cursor,
+		Harness:        input.Harness,
+		Outcome:        input.Outcome,
+		History:        input.History,
+		OccurredAfter:  after,
+		OccurredBefore: before,
+		Query:          input.Query,
+	})
 	if err != nil {
 		return nil, zero, safeReadError(err)
 	}
-	filtered := make([]model.SessionSummary, 0, min(limit, len(response.Data)))
-	hasAdditionalMatch := false
-	for _, session := range response.Data {
-		if since != nil && session.EndedAt.Before(*since) {
-			continue
-		}
-		if input.Harness != "" && !strings.EqualFold(session.Harness, input.Harness) {
-			continue
-		}
-		if input.Outcome != "" && !strings.EqualFold(session.Outcome, input.Outcome) {
-			continue
-		}
-		if len(filtered) == limit {
-			hasAdditionalMatch = true
-			break
-		}
-		filtered = append(filtered, session)
-	}
-	response.Data = filtered
-	response.ReturnedCount = len(filtered)
-	response.Limit = limit
-	response.HasMore = response.HasMore || hasAdditionalMatch
-	response.NextCursor = nil
 	return structuredResult(), wrap(response), nil
 }
 
@@ -201,14 +199,15 @@ func (s *Server) getSessionTimeline(
 	if err != nil {
 		return nil, zero, err
 	}
-	if err := validateCursor(input.Cursor); err != nil {
-		return nil, zero, err
-	}
 	limit, err := boundedLimit(input.Limit, 100, 500)
 	if err != nil {
 		return nil, zero, fmt.Errorf("invalid limit: %w", err)
 	}
-	response, err := s.read.GetSessionTimeline(ctx, sessionID, limit)
+	response, err := s.read.GetSessionTimelinePage(ctx, readmodel.TimelineRequest{
+		SessionID: sessionID,
+		Limit:     limit,
+		Cursor:    input.Cursor,
+	})
 	if err != nil {
 		return nil, zero, safeReadError(err)
 	}
@@ -238,13 +237,16 @@ func (s *Server) queryActivity(
 	if err := boundedString("outcome", input.Outcome, 32); err != nil {
 		return nil, zero, err
 	}
-	response, err := s.read.QueryActivity(ctx, model.ActivityFilter{
-		OccurredAfter:  after,
-		OccurredBefore: before,
-		Harness:        input.Harness,
-		ResourceKind:   input.ResourceKind,
-		Outcome:        input.Outcome,
-		Limit:          limit,
+	response, err := s.read.QueryActivityPage(ctx, readmodel.ActivityRequest{
+		Filter: model.ActivityFilter{
+			OccurredAfter:  after,
+			OccurredBefore: before,
+			Harness:        input.Harness,
+			ResourceKind:   input.ResourceKind,
+			Outcome:        input.Outcome,
+			Limit:          limit,
+		},
+		Cursor: input.Cursor,
 	})
 	if err != nil {
 		return nil, zero, safeReadError(err)
@@ -269,24 +271,19 @@ func (s *Server) listFindings(
 	if err := boundedString("severity", input.Severity, 32); err != nil {
 		return nil, zero, err
 	}
-	response, err := s.read.ListFindings(ctx, 100)
+	if err := boundedString("session_id", input.SessionID, 256); err != nil {
+		return nil, zero, err
+	}
+	response, err := s.read.ListFindingsPage(ctx, readmodel.FindingListRequest{
+		Limit:     limit,
+		Cursor:    input.Cursor,
+		Since:     since,
+		Severity:  input.Severity,
+		SessionID: input.SessionID,
+	})
 	if err != nil {
 		return nil, zero, safeReadError(err)
 	}
-	filtered := make([]model.FindingSummary, 0, len(response.Data))
-	for _, finding := range response.Data {
-		if since != nil && finding.DetectedAt.Before(*since) {
-			continue
-		}
-		if input.Severity != "" && !strings.EqualFold(finding.Severity, input.Severity) {
-			continue
-		}
-		filtered = append(filtered, finding)
-		if len(filtered) == limit {
-			break
-		}
-	}
-	response.Data = filtered
 	return structuredResult(), wrap(response), nil
 }
 
@@ -296,15 +293,6 @@ func (s *Server) getStats(
 	input getStatsInput,
 ) (*mcp.CallToolResult, toolOutput[readmodel.StatsResponse], error) {
 	var zero toolOutput[readmodel.StatsResponse]
-	if _, _, err := parseWindow(input.OccurredAfter, input.OccurredBefore); err != nil {
-		return nil, zero, err
-	}
-	if err := boundedString("workflow_id", input.WorkflowID, 256); err != nil {
-		return nil, zero, err
-	}
-	if input.OccurredAfter != "" || input.OccurredBefore != "" || input.WorkflowID != "" {
-		return nil, zero, errors.New("filtered statistics are not available in the current Local read model")
-	}
 	response, err := s.read.GetStats(ctx)
 	if err != nil {
 		return nil, zero, safeReadError(err)
@@ -370,16 +358,6 @@ func boundedString(name, value string, maximum int) error {
 	return nil
 }
 
-func validateCursor(cursor string) error {
-	if err := boundedString("cursor", cursor, 1024); err != nil {
-		return err
-	}
-	if cursor != "" {
-		return errors.New("cursor pagination is not available in the current Local read model")
-	}
-	return nil
-}
-
 func optionalRFC3339(name, value string) (*time.Time, error) {
 	if value == "" {
 		return nil, nil
@@ -409,6 +387,12 @@ func parseWindow(afterValue, beforeValue string) (*time.Time, *time.Time, error)
 	return after, before, nil
 }
 
-func safeReadError(_ error) error {
+func safeReadError(err error) error {
+	if errors.Is(err, readmodel.ErrInvalidCursor) {
+		return errors.New("the supplied pagination cursor is invalid")
+	}
+	if errors.Is(err, readmodel.ErrInvalidRequest) {
+		return errors.New("the supplied read filters are invalid")
+	}
 	return errors.New("Belay Local could not complete the read")
 }

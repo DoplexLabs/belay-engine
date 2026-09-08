@@ -91,13 +91,53 @@ type Historical struct {
 }
 
 type SessionSummary struct {
-	SessionID  string    `json:"session_id"`
-	Harness    string    `json:"harness"`
-	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at"`
-	EventCount int       `json:"event_count"`
-	Outcome    string    `json:"outcome"`
-	Historical bool      `json:"historical"`
+	SessionID  string           `json:"session_id"`
+	Harness    string           `json:"harness"`
+	StartedAt  time.Time        `json:"started_at"`
+	EndedAt    time.Time        `json:"ended_at"`
+	EventCount int              `json:"event_count"`
+	Outcome    string           `json:"outcome"`
+	Historical bool             `json:"historical"`
+	History    string           `json:"history"`
+	Overview   *SessionOverview `json:"overview,omitempty"`
+}
+
+type SessionOverview struct {
+	Counts                    SessionInsightCounts `json:"counts"`
+	SalientResources          []SalientResource    `json:"salient_resources"`
+	SalientResourcesTruncated bool                 `json:"salient_resources_truncated"`
+	ObservedCoverage          ObservedCoverage     `json:"observed_coverage"`
+	Outcome                   OutcomeExplanation   `json:"outcome"`
+}
+
+type SessionInsightCounts struct {
+	Commands                 int `json:"commands"`
+	ToolCalls                int `json:"tool_calls"`
+	FileReads                int `json:"file_reads"`
+	FileWrites               int `json:"file_writes"`
+	FileDeletes              int `json:"file_deletes"`
+	NetworkIndicators        int `json:"network_indicators"`
+	PermissionEvents         int `json:"permission_events"`
+	ExplicitFailedEvents     int `json:"explicit_failed_events"`
+	SourceUnreportedOutcomes int `json:"source_unreported_outcomes"`
+	Findings                 int `json:"findings"`
+}
+
+type SalientResource struct {
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	EventCount int    `json:"event_count"`
+}
+
+type ObservedCoverage struct {
+	Depths      []string `json:"depths"`
+	Confidences []string `json:"confidences"`
+}
+
+type OutcomeExplanation struct {
+	Value       string `json:"value"`
+	Source      string `json:"source"`
+	Explanation string `json:"explanation"`
 }
 
 type FindingSummary struct {
@@ -119,6 +159,74 @@ type ActivityFilter struct {
 	ResourceKind   string
 	Outcome        string
 	Limit          int
+}
+
+type SessionQuery struct {
+	Limit           int
+	Snapshot        int64
+	CursorEndedAt   *time.Time
+	CursorSessionID string
+	Harness         string
+	Outcome         string
+	History         string
+	OccurredAfter   *time.Time
+	OccurredBefore  *time.Time
+	Search          string
+}
+
+type SessionPage struct {
+	Data        []SessionSummary
+	Snapshot    int64
+	DataThrough time.Time
+}
+
+type EventPosition struct {
+	OccurredAt     time.Time
+	SourceSequence int64
+	EventID        string
+}
+
+type TimelineQuery struct {
+	SessionID string
+	Limit     int
+	Snapshot  int64
+	Cursor    *EventPosition
+}
+
+type EventPage struct {
+	Data        []Event
+	Snapshot    int64
+	DataThrough time.Time
+}
+
+type ActivityQuery struct {
+	Filter   ActivityFilter
+	Snapshot int64
+	Cursor   *EventPosition
+}
+
+type FindingFilter struct {
+	DetectedAfter *time.Time
+	Severity      string
+	SessionID     string
+	Limit         int
+}
+
+type FindingPosition struct {
+	DetectedAt time.Time
+	FindingID  string
+}
+
+type FindingQuery struct {
+	Filter   FindingFilter
+	Snapshot int64
+	Cursor   *FindingPosition
+}
+
+type FindingPage struct {
+	Data        []FindingSummary
+	Snapshot    int64
+	DataThrough time.Time
 }
 
 type LocalStats struct {

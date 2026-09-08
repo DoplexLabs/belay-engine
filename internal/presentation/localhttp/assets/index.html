@@ -49,28 +49,78 @@
             <span class="count-pill" id="session-count">—</span>
           </div>
 
+          <section class="local-overview" aria-label="Local activity overview">
+            <dl class="overview-metrics">
+              <div>
+                <dt>Sessions</dt>
+                <dd id="overview-session-count">—</dd>
+              </div>
+              <div>
+                <dt>Events</dt>
+                <dd id="overview-event-count">—</dd>
+              </div>
+              <div>
+                <dt>Findings</dt>
+                <dd id="overview-finding-count">—</dd>
+              </div>
+            </dl>
+            <p id="overview-harnesses">Harness coverage unavailable</p>
+            <p id="overview-freshness">Data freshness unavailable</p>
+            <p class="overview-explanation">
+              <strong>Reconstructed</strong> sessions come from imported local
+              history. <strong>Live</strong> sessions arrive through enabled hooks.
+            </p>
+          </section>
+
           <label class="search-field">
             <span class="search-icon" aria-hidden="true">⌕</span>
-            <span class="sr-only">Search sessions</span>
+            <span class="sr-only">Search by session ID or harness</span>
             <input
               id="session-search"
               type="search"
-              placeholder="Search harness or outcome"
+              placeholder="Search session ID or harness"
+              maxlength="128"
               autocomplete="off"
               spellcheck="false"
             >
           </label>
 
-          <div class="filter-row" aria-label="Filter sessions">
-            <button class="filter-chip is-active" type="button" data-filter="all">
-              All
-            </button>
-            <button class="filter-chip" type="button" data-filter="failed">
-              Failed
-            </button>
-            <button class="filter-chip" type="button" data-filter="historical">
-              Historical
-            </button>
+          <div class="filter-grid" aria-label="Filter sessions">
+            <label>
+              <span>Harness</span>
+              <select id="filter-harness">
+                <option value="">All harnesses</option>
+              </select>
+            </label>
+            <label>
+              <span>Capture</span>
+              <select id="filter-capture">
+                <option value="">Live + reconstructed</option>
+                <option value="live">Live</option>
+                <option value="historical">Reconstructed</option>
+              </select>
+            </label>
+            <label>
+              <span>Outcome</span>
+              <select id="filter-outcome">
+                <option value="">Any availability</option>
+                <option value="reported">Explicitly reported</option>
+                <option value="unavailable">Unavailable</option>
+              </select>
+            </label>
+            <label>
+              <span>Date</span>
+              <select id="filter-date">
+                <option value="">Any time</option>
+                <option value="1">Last 24 hours</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+              </select>
+            </label>
+          </div>
+          <div class="filter-footer">
+            <p id="session-scope-note">Showing loaded sessions.</p>
+            <button id="clear-filters" type="button">Clear</button>
           </div>
 
           <div class="session-list" id="session-list" aria-live="polite"></div>
@@ -124,10 +174,13 @@
                     <h2 id="selected-harness">Session</h2>
                     <span class="status-badge" id="selected-outcome"></span>
                     <span class="meta-badge" id="selected-historical" hidden>
-                      Historical
+                      Reconstructed
                     </span>
                   </div>
-                  <p id="selected-session-id"></p>
+                  <div class="selected-id-line">
+                    <p id="selected-session-id"></p>
+                    <button id="copy-selected-session" type="button">Copy ID</button>
+                  </div>
                 </div>
               </div>
 
@@ -147,29 +200,74 @@
               </dl>
             </header>
 
+            <details
+              class="session-overview"
+              id="session-overview"
+              aria-labelledby="session-overview-title"
+              open
+            >
+              <summary class="section-heading">
+                <span>
+                  <span class="eyebrow overview-eyebrow">Deterministic overview</span>
+                  <strong id="session-overview-title">What Belay observed</strong>
+                </span>
+                <span class="overview-state" id="overview-state">
+                  Loading full-session overview…
+                </span>
+              </summary>
+              <div class="overview-body">
+                <p id="overview-quality"></p>
+                <dl class="activity-grid" id="activity-grid"></dl>
+                <div class="overview-detail-grid">
+                  <section aria-labelledby="resources-heading">
+                    <h4 id="resources-heading">Resources touched</h4>
+                    <div class="resource-list" id="resource-list"></div>
+                    <p class="overview-caveat" id="resource-disclosure"></p>
+                  </section>
+                  <section aria-labelledby="findings-heading">
+                    <h4 id="findings-heading">Findings</h4>
+                    <div class="finding-list" id="finding-list"></div>
+                  </section>
+                </div>
+              </div>
+            </details>
+
             <div class="timeline-meta">
               <div>
                 <p class="eyebrow">Event timeline</p>
                 <p id="timeline-freshness"></p>
               </div>
-              <span class="privacy-label">Minimized metadata</span>
+              <div class="timeline-actions">
+                <button
+                  class="event-toggle"
+                  id="all-events-toggle"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  All events
+                </button>
+                <span class="privacy-label">Minimized metadata</span>
+              </div>
             </div>
+            <p class="timeline-scope" id="timeline-scope"></p>
 
-            <div class="event-list" id="event-list" aria-live="polite"></div>
+            <div class="event-scroll">
+              <div class="event-list" id="event-list" aria-live="polite"></div>
+
+              <div class="panel-state timeline-loading" id="timeline-loading" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <p>Loading first timeline page…</p>
+              </div>
+
+              <div class="panel-state" id="events-empty" hidden>
+                <span class="empty-glyph" aria-hidden="true">◇</span>
+                <p>No events in this session</p>
+              </div>
+            </div>
 
             <div class="pagination-bar timeline-pagination" id="events-pagination" hidden>
               <p id="events-page-status"></p>
               <button id="events-load-more" type="button">Load more events</button>
-            </div>
-
-            <div class="panel-state timeline-loading" id="timeline-loading" hidden>
-              <span class="spinner" aria-hidden="true"></span>
-              <p>Reconstructing timeline…</p>
-            </div>
-
-            <div class="panel-state" id="events-empty" hidden>
-              <span class="empty-glyph" aria-hidden="true">◇</span>
-              <p>No events in this session</p>
             </div>
           </div>
 

@@ -33,6 +33,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return errors.New("missing command")
 	}
 	switch args[0] {
+	case "quickstart":
+		return runQuickstart(ctx, args[1:], stdout, stderr)
 	case "local":
 		return runLocal(ctx, args[1:], stdout, stderr)
 	case "scan":
@@ -220,6 +222,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `usage: belay COMMAND
 
 Commands:
+  quickstart      consent to private setup, monitor-only hooks, scan, and browser
   local           scan agents and run the offline Local browser
   scan            discover and backfill supported local agent history
   agents          show Numbat's local agent inventory
@@ -230,5 +233,11 @@ Commands:
   sessions        list Local session summaries
   timeline        get one Local session timeline
   prune           inspect retention bounds; deletion requires --apply
-  verify-numbat   verify a pinned Numbat binary checksum and version marker`)
+  verify-numbat   verify a pinned Numbat binary checksum and version marker
+
+belay quickstart changes only local Belay state and detected Codex/Claude hook
+configuration. Hooks are monitor-only and never block agent actions. Belay Local
+keeps minimized evidence on-device and does not send prompts, completions, file
+contents, or product telemetry. Use belay quickstart --no-open to print the
+loopback URL without opening a browser.`)
 }

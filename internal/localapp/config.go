@@ -107,14 +107,24 @@ func SaveConfig(path string, config Config) error {
 }
 
 func ResolveNumbatBinary(paths Paths, config Config, explicit string) (string, error) {
+	executable, _ := os.Executable()
+	return ResolveNumbatBinaryForExecutable(paths, config, explicit, executable)
+}
+
+func ResolveNumbatBinaryForExecutable(
+	paths Paths,
+	config Config,
+	explicit string,
+	belayExecutable string,
+) (string, error) {
 	candidates := []string{
 		strings.TrimSpace(explicit),
 		strings.TrimSpace(os.Getenv("BELAY_NUMBAT_BIN")),
 		strings.TrimSpace(config.NumbatBinary),
 		paths.BundledBin,
 	}
-	if executable, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "numbat"))
+	if strings.TrimSpace(belayExecutable) != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(belayExecutable), "numbat"))
 	}
 	for _, candidate := range candidates {
 		if candidate == "" {

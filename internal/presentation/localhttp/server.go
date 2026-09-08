@@ -152,7 +152,26 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	response, err := s.read.ListSessions(r.Context(), boundedInt(r, "limit", 20, 100))
+	after, err := optionalTime(r, "occurred_after")
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "occurred_after must be an RFC3339 timestamp.")
+		return
+	}
+	before, err := optionalTime(r, "occurred_before")
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "occurred_before must be an RFC3339 timestamp.")
+		return
+	}
+	response, err := s.read.ListSessionsPage(r.Context(), readmodel.SessionListRequest{
+		Limit:          boundedInt(r, "limit", 20, 100),
+		Cursor:         queryValue(r, "cursor"),
+		Harness:        queryValue(r, "harness"),
+		Outcome:        queryValue(r, "outcome"),
+		History:        queryValue(r, "history"),
+		OccurredAfter:  after,
+		OccurredBefore: before,
+		Query:          queryValue(r, "query"),
+	})
 	writeReadResult(w, r, response, err)
 }
 
@@ -162,19 +181,22 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getTimeline(w http.ResponseWriter, r *http.Request) {
-	response, err := s.read.GetSessionTimeline(
+	response, err := s.read.GetSessionTimelinePage(
 		r.Context(),
-		r.PathValue("id"),
-		boundedInt(r, "limit", 100, 500),
+		readmodel.TimelineRequest{
+			SessionID: r.PathValue("id"),
+			Limit:     boundedInt(r, "limit", 100, 500),
+			Cursor:    queryValue(r, "cursor"),
+		},
 	)
 	writeReadResult(w, r, response, err)
 }
 
 func (s *Server) queryActivity(w http.ResponseWriter, r *http.Request) {
 	filter := model.ActivityFilter{
-		Harness:      boundedQuery(r, "harness", 128),
-		ResourceKind: boundedQuery(r, "resource_kind", 64),
-		Outcome:      boundedQuery(r, "outcome", 32),
+		Harness:      queryValue(r, "harness"),
+		ResourceKind: queryValue(r, "resource_kind"),
+		Outcome:      queryValue(r, "outcome"),
 		Limit:        boundedInt(r, "limit", 50, 200),
 	}
 	var err error
@@ -188,12 +210,26 @@ func (s *Server) queryActivity(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "occurred_before must be an RFC3339 timestamp.")
 		return
 	}
-	response, err := s.read.QueryActivity(r.Context(), filter)
+	response, err := s.read.QueryActivityPage(r.Context(), readmodel.ActivityRequest{
+		Filter: filter,
+		Cursor: queryValue(r, "cursor"),
+	})
 	writeReadResult(w, r, response, err)
 }
 
 func (s *Server) listFindings(w http.ResponseWriter, r *http.Request) {
-	response, err := s.read.ListFindings(r.Context(), boundedInt(r, "limit", 20, 100))
+	since, err := optionalTime(r, "since")
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "since must be an RFC3339 timestamp.")
+		return
+	}
+	response, err := s.read.ListFindingsPage(r.Context(), readmodel.FindingListRequest{
+		Limit:     boundedInt(r, "limit", 20, 100),
+		Cursor:    queryValue(r, "cursor"),
+		Since:     since,
+		Severity:  queryValue(r, "severity"),
+		SessionID: queryValue(r, "session_id"),
+	})
 	writeReadResult(w, r, response, err)
 }
 
@@ -203,11 +239,20 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeReadResult(w http.ResponseWriter, r *http.Request, response any, err error) {
+	if errors.Is(err, readmodel.ErrInvalidCursor) ||
+		errors.Is(err, readmodel.ErrInvalidRequest) {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+		return
+	}
 	if err != nil {
 		writeProblem(w, r, http.StatusInternalServerError, "Local read failed", "Belay could not complete the local read.")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func queryValue(r *http.Request, name string) string {
+	return strings.TrimSpace(r.URL.Query().Get(name))
 }
 
 func loopbackOnly(next http.Handler) http.Handler {
@@ -243,14 +288,6 @@ func boundedInt(r *http.Request, name string, fallback, maximum int) int {
 	}
 	if value > maximum {
 		return maximum
-	}
-	return value
-}
-
-func boundedQuery(r *http.Request, name string, maximum int) string {
-	value := strings.TrimSpace(r.URL.Query().Get(name))
-	if len(value) > maximum {
-		value = value[:maximum]
 	}
 	return value
 }
