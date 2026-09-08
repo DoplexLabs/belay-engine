@@ -201,13 +201,18 @@ func TestExistingPlaintextPayloadsAreAtomicallyBackfilledAndScrubbed(t *testing.
 	).Scan(&cleanupRequired); err != nil {
 		t.Fatalf("query cleanup state: %v", err)
 	}
-	if plaintextRows != 0 || cleanupRequired != 0 ||
-		store.mutations.mode.Load() != mutationNone {
+	var activeAuthorization int
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM temp.belay_mutation_authorization",
+	).Scan(&activeAuthorization); err != nil {
+		t.Fatalf("query mutation authorization: %v", err)
+	}
+	if plaintextRows != 0 || cleanupRequired != 0 || activeAuthorization != 0 {
 		t.Fatalf(
-			"upgrade state plaintext=%d cleanup=%d mutation_mode=%d",
+			"upgrade state plaintext=%d cleanup=%d active_authorization=%d",
 			plaintextRows,
 			cleanupRequired,
-			store.mutations.mode.Load(),
+			activeAuthorization,
 		)
 	}
 	if citations, err := store.Count(ctx, "finding_event_citations"); err != nil {

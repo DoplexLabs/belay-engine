@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/pipeline"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
@@ -98,6 +99,9 @@ func runImport(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	report, err := pipeline.New(store, *installationID, *engineVersion).Import(ctx, input)
 	if err != nil {
 		return err
+	}
+	if _, reconcileErr := analysis.NewReconciler(store).Drain(ctx); reconcileErr != nil {
+		fmt.Fprintln(stderr, "belay import: issue analysis pending")
 	}
 	return writeJSON(stdout, report)
 }

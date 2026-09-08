@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
@@ -98,6 +99,16 @@ esac
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %d, want 2", len(sessions))
+	}
+	issues, err := store.QueryIssues(
+		context.Background(),
+		model.IssueQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issues.Analysis.Complete || issues.Analysis.CurrentSessions != 2 {
+		t.Fatalf("historical analysis coverage = %+v", issues.Analysis)
 	}
 }
 

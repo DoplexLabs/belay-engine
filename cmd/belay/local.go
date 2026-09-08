@@ -13,6 +13,9 @@ import (
 	"unicode"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/detection"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localmcp"
@@ -255,9 +258,6 @@ func runLocalLaunch(
 	}
 	defer store.Close()
 
-	if _, err := localapp.ImportLive(ctx, runtime.paths, store, runtime.config); err != nil {
-		fmt.Fprintf(stderr, "belay %s: live records will be retried\n", options.commandName)
-	}
 	if options.installHooks {
 		onboardHooks(ctx, runtime.client, runtime.paths, options.commandName, stderr)
 	}
@@ -272,6 +272,16 @@ func runLocalLaunch(
 	running, err := localServer.Start(ctx, options.listen)
 	if err != nil {
 		return err
+	}
+	startAnalysisRecovery(ctx, store, func() {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: issue analysis recovery pending; Local remains available\n",
+			options.commandName,
+		)
+	})
+	if _, err := localapp.ImportLive(ctx, runtime.paths, store, runtime.config); err != nil {
+		fmt.Fprintf(stderr, "belay %s: live records will be retried\n", options.commandName)
 	}
 	go localapp.PollLive(ctx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
 		fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
@@ -425,7 +435,30 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return server.RunStdio(ctx)
+	serverDone := make(chan error, 1)
+	serverStarted := make(chan struct{})
+	go func() {
+		close(serverStarted)
+		serverDone <- server.RunStdio(ctx)
+	}()
+	<-serverStarted
+	startAnalysisRecovery(ctx, store, func() {
+		fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
+	})
+	return <-serverDone
+}
+
+func startAnalysisRecovery(
+	ctx context.Context,
+	store *local.Store,
+	onError func(),
+) {
+	go func() {
+		if _, err := analysis.NewReconciler(store).Startup(ctx); err != nil &&
+			onError != nil {
+			onError()
+		}
+	}()
 }
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -447,11 +480,18 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	inventory, command, discoverErr := runtime.client.Discover(discoveryCtx)
+	analysisStatus, analysisErr := loadDoctorAnalysis(ctx, store)
 	status := map[string]any{
 		"config":            "ok",
 		"encrypted_storage": "ok",
 		"numbat_pin":        "ok",
 		"inventory":         inventory,
+		"detector_catalog":  detection.CatalogVersion,
+	}
+	if analysisErr != nil {
+		status["analysis"] = "failed"
+	} else {
+		status["analysis"] = analysisStatus
 	}
 	if discoverErr != nil {
 		status["discovery"] = "failed"
@@ -462,5 +502,24 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := writeJSON(stdout, status); err != nil {
 		return err
 	}
-	return discoverErr
+	return errors.Join(discoverErr, analysisErr)
+}
+
+type doctorAnalysisStatus struct {
+	CatalogVersion string                      `json:"catalog_version"`
+	Coverage       model.IssueAnalysisCoverage `json:"coverage"`
+}
+
+func loadDoctorAnalysis(
+	ctx context.Context,
+	store *local.Store,
+) (doctorAnalysisStatus, error) {
+	page, err := store.QueryIssues(ctx, model.IssueQuery{Limit: 1})
+	if err != nil {
+		return doctorAnalysisStatus{}, err
+	}
+	return doctorAnalysisStatus{
+		CatalogVersion: detection.CatalogVersion,
+		Coverage:       page.Analysis,
+	}, nil
 }

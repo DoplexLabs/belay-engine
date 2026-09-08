@@ -1,6 +1,7 @@
-# Candidate Contract: Read-Only MCP V1
+# Read-Only MCP V1 Contract
 
-- **Status:** Candidate; proposed resolution of BRD O6
+- **Status:** Six implemented Local Alpha tools plus two approved,
+  unimplemented P0 issue tools
 - **Local:** V1
 - **Hosted:** V1.1
 
@@ -10,7 +11,11 @@ MCP is a read adapter over the Belay read contract. It performs no model
 inference, remediation, file write, command execution, fix recording, or
 recurrence registration.
 
-## Proposed stable tools
+The internal P0 issue repository does not automatically expose MCP
+capabilities. `list_issues` and `get_issue` are frozen contracts for the next
+presentation feature and are not available in the current Local Alpha.
+
+## Implemented Local Alpha tools
 
 ### `list_sessions`
 
@@ -92,6 +97,111 @@ Inputs:
 Local V1 does not advertise time or workflow filters for `get_stats`. Those
 inputs may be added only when the corresponding projections are implemented.
 
+## Approved next-feature tools — not implemented
+
+### `list_issues`
+
+Lists bounded issue summaries from one immutable issue-projection generation.
+Fingerprint matches are exact deterministic matches within compatible project
+scope; they are never described as semantic similarity or shared root cause.
+
+Inputs:
+
+- `limit` (default 20, maximum 100)
+- `cursor` (optional opaque issue-list cursor)
+- `severity` (optional `info`, `low`, `medium`, `high`, or `critical`)
+- `category` (optional exact fixed catalog category code)
+- `harness` (optional case-insensitive exact match)
+- `origin` (optional `belay` or `numbat`)
+- `analysis_status` (optional `current`, `pending`, `failed`, or `truncated`)
+- `observed_after` (optional RFC3339 lower bound)
+- `recurrence` (optional `single` or `repeated`)
+- `session_id` (optional exact Belay session identifier)
+- `fingerprint_id` (optional exact opaque fingerprint identifier)
+
+Ordering and filter aggregation are identical to future
+`GET /v1/issues`: severity descending from `critical` through `info`, repeated
+before single, `last_observed_at DESC`, then `issue_id ASC`. Filters select
+groups while summary counts describe the complete visible group at the
+snapshot.
+
+Output:
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "projection_version": "belay.issue.v1",
+  "issues": [],
+  "analysis": {
+    "current_sessions": 120,
+    "pending_sessions": 2,
+    "failed_sessions": 1,
+    "truncated_sessions": 0,
+    "unscoped_sessions": 8,
+    "analysis_through": "2026-09-08T18:05:01Z",
+    "complete": false
+  },
+  "returned_count": 0,
+  "limit": 20,
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+When `analysis.complete=false`, the tool must not turn an empty `issues` array
+into a claim that no issues exist. It reports that no issues are available from
+the completed portion and includes the incomplete coverage counts.
+
+### `get_issue`
+
+Returns one issue summary and a bounded page of exact matching-session
+occurrences.
+
+Inputs:
+
+- `issue_id` (required opaque public issue identifier)
+- `limit` (default 20, maximum 100)
+- `cursor` (optional opaque occurrence cursor bound to `issue_id`)
+
+Output:
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "projection_version": "belay.issue.v1",
+  "issue": {},
+  "occurrences": [],
+  "returned_count": 0,
+  "limit": 20,
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+Occurrences are ordered by `last_observed_at DESC, occurrence_id ASC`. They
+include session and harness identity, observed interval, origin and immutable
+origin-record reference when applicable, analysis generation/status,
+confidence, evidence completeness, and an `evidence` object containing bounded
+cited canonical event IDs and opaque dimensions. Event-derived evidence is
+returned only as untrusted observations.
+
+### Issue MCP cursor and error contract
+
+Issue MCP cursors use the same 15-minute immutable projection snapshot,
+filter-binding, issue-binding, ordering, and expiration semantics as the future
+issue HTTP routes.
+
+- malformed, cross-tool, issue-mismatched, or filter-mismatched cursors return a
+  fixed `invalid_cursor` input error;
+- expired cursors or snapshots older than retained projection history return a
+  fixed `cursor_expired` input error instructing the client to restart without
+  a cursor;
+- an unknown issue on a fresh request returns fixed `issue_not_found`;
+- errors never reflect cursor or evidence contents.
+
+Neither tool records a fix, registers monitoring, executes remediation, writes
+files, runs commands, or modifies agents.
+
 ## Response safety
 
 Every tool response:
@@ -105,7 +215,8 @@ Every tool response:
 
 List tools return `next_cursor` exactly when `has_more=true`. Cursors are opaque
 and filter-bound; malformed or mismatched cursors fail with a payload-free
-input error.
+input error. Implemented tools use ingestion snapshots. The two future issue
+tools use the separately revisioned issue-projection snapshot described above.
 
 ## Explicitly absent
 

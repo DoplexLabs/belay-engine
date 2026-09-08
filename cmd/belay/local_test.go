@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/detection"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
 func TestPrepareRuntimeBootstrapsVerifiedPackagedSiblingPin(t *testing.T) {
@@ -301,6 +303,52 @@ exit 7`)
 	if strings.Contains(output, "private-discovery-error") {
 		t.Fatalf("onboarding output leaked discovery stderr:\n%s", output)
 	}
+}
+
+func TestDoctorAnalysisStatusExposesCatalogAndCoverage(t *testing.T) {
+	store, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "belay.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	status, err := loadDoctorAnalysis(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.CatalogVersion != detection.CatalogVersion ||
+		!status.Coverage.Complete ||
+		status.Coverage.CurrentSessions != 0 {
+		t.Fatalf("doctor analysis status = %+v", status)
+	}
+}
+
+type doctorKeyProvider struct {
+	keys map[string][]byte
+}
+
+func (provider *doctorKeyProvider) Load(
+	_ context.Context,
+	storeID string,
+) ([]byte, error) {
+	key, ok := provider.keys[storeID]
+	if !ok {
+		return nil, local.ErrKeyNotFound
+	}
+	return append([]byte(nil), key...), nil
+}
+
+func (provider *doctorKeyProvider) Create(
+	_ context.Context,
+	storeID string,
+) ([]byte, error) {
+	key := bytes.Repeat([]byte{0x72}, 32)
+	provider.keys[storeID] = key
+	return append([]byte(nil), key...), nil
 }
 
 func testRuntimeFlags(

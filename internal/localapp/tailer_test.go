@@ -93,6 +93,44 @@ func TestImportSpoolOnceDetectsReplacement(t *testing.T) {
 	}
 }
 
+func TestImportSpoolOnceRunsAnalysisOnlyAfterCursorSave(t *testing.T) {
+	root := t.TempDir()
+	spool := filepath.Join(root, "live.ndjson")
+	cursorPath := filepath.Join(root, "live.cursor.json")
+	if err := os.WriteFile(spool, []byte("record\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	importer := &recordingImporter{}
+	callbackCalled := false
+	result, err := ImportSpoolOnceAfterCheckpoint(
+		context.Background(),
+		spool,
+		cursorPath,
+		func(int64) StreamImporter { return importer },
+		func(_ context.Context, imported TailResult) {
+			callbackCalled = true
+			cursor, loadErr := loadTailCursor(cursorPath)
+			if loadErr != nil {
+				t.Errorf("cursor was not readable before analysis: %v", loadErr)
+				return
+			}
+			if cursor.Offset != imported.EndOffset || cursor.Offset == 0 {
+				t.Errorf(
+					"cursor offset during analysis = %d, imported end = %d",
+					cursor.Offset,
+					imported.EndOffset,
+				)
+			}
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !callbackCalled || result.EndOffset == 0 {
+		t.Fatalf("callback/result = %t/%+v", callbackCalled, result)
+	}
+}
+
 func TestPrepareSpoolRejectsSymlink(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

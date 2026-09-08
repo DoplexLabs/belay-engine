@@ -1,0 +1,222 @@
+package local
+
+import (
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/binary"
+	"errors"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+)
+
+const (
+	projectScopeNormalizationVersion = "project-path.v1"
+	numbatProjectScopeHashVersion    = "numbat-project-sha256.v1"
+	commandNormalizationVersion      = "exact-command.v1"
+	projectScopeKeyDomain            = "belay.local.project-scope.v1"
+	numbatProjectScopeHashKeyDomain  = "belay.local.numbat-project-scope-hash.v1"
+	commandSignatureKeyDomain        = "belay.local.command-signature.v1"
+	issueFingerprintKeyDomain        = "belay.local.issue-fingerprint.v1"
+)
+
+var opaqueBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+type ProjectScope struct {
+	ID                   string
+	Quality              model.ScopeQuality
+	NormalizationVersion string
+}
+
+func (s *Store) DeriveProjectScope(rawPath string) (ProjectScope, error) {
+	normalized, quality, err := normalizeProjectPath(rawPath)
+	if err != nil {
+		return ProjectScope{}, err
+	}
+	key, err := s.derivedKey(projectScopeKeyDomain)
+	if err != nil {
+		return ProjectScope{}, err
+	}
+	defer zeroBytes(key)
+	return ProjectScope{
+		ID:                   opaqueID("psc_", key, []byte(normalized)),
+		Quality:              quality,
+		NormalizationVersion: projectScopeNormalizationVersion,
+	}, nil
+}
+
+func (s *Store) DeriveNumbatProjectScopeHash(rawHash string) (ProjectScope, error) {
+	if !validLowerHexSHA256(rawHash) {
+		return ProjectScope{}, errors.New("Numbat project scope hash must be lowercase SHA-256")
+	}
+	key, err := s.derivedKey(numbatProjectScopeHashKeyDomain)
+	if err != nil {
+		return ProjectScope{}, err
+	}
+	defer zeroBytes(key)
+	return ProjectScope{
+		ID:                   opaqueID("psc_", key, []byte(rawHash)),
+		Quality:              model.ScopeLexical,
+		NormalizationVersion: numbatProjectScopeHashVersion,
+	}, nil
+}
+
+func (s *Store) DeriveCommandSignature(rawCommand string) (string, error) {
+	normalized, err := normalizeExactCommand(rawCommand)
+	if err != nil {
+		return "", err
+	}
+	key, err := s.derivedKey(commandSignatureKeyDomain)
+	if err != nil {
+		return "", err
+	}
+	defer zeroBytes(key)
+	return opaqueID("cmd_", key, []byte(normalized)), nil
+}
+
+func (s *Store) DeriveIssueIdentity(
+	fingerprintVersion string,
+	detectorID string,
+	projectScopeOrSession string,
+	dimensions ...string,
+) (fingerprintID string, issueID string, err error) {
+	if fingerprintVersion == "" || detectorID == "" || projectScopeOrSession == "" {
+		return "", "", errors.New("issue identity requires version, detector, and scope")
+	}
+	values := make([]string, 0, 3+len(dimensions))
+	values = append(values, fingerprintVersion, detectorID, projectScopeOrSession)
+	for _, dimension := range dimensions {
+		if dimension == "" {
+			return "", "", errors.New("issue identity dimensions cannot be empty")
+		}
+		values = append(values, dimension)
+	}
+	material := lengthPrefixed(values)
+	key, err := s.derivedKey(issueFingerprintKeyDomain)
+	if err != nil {
+		return "", "", err
+	}
+	defer zeroBytes(key)
+	digest := opaqueDigest(key, material)
+	encoded := strings.ToLower(opaqueBase32.EncodeToString(digest))
+	return "ifp_" + encoded, "iss_" + encoded, nil
+}
+
+func (s *Store) derivedKey(domain string) ([]byte, error) {
+	if s.cipher == nil || len(s.cipher.keyBytes) != 32 {
+		return nil, errors.New("local store key is unavailable")
+	}
+	key, err := hkdf.Key(
+		sha256.New,
+		s.cipher.keyBytes,
+		[]byte(s.storeID),
+		domain,
+		32,
+	)
+	if err != nil {
+		return nil, errors.New("derive local opaque identity key")
+	}
+	return key, nil
+}
+
+func normalizeProjectPath(rawPath string) (string, model.ScopeQuality, error) {
+	if rawPath == "" || strings.IndexByte(rawPath, 0) >= 0 {
+		return "", "", errors.New("project path is empty or invalid")
+	}
+	if !utf8.ValidString(rawPath) {
+		return "", "", errors.New("project path is not valid UTF-8")
+	}
+	if !filepath.IsAbs(rawPath) {
+		return "", "", errors.New("project path must be absolute")
+	}
+	normalized := filepath.Clean(rawPath)
+	quality := model.ScopeLexical
+	if resolved, err := filepath.EvalSymlinks(normalized); err == nil {
+		normalized = filepath.Clean(resolved)
+		quality = model.ScopeResolved
+	}
+	if runtime.GOOS == "darwin" {
+		switch {
+		case normalized == "/private/var":
+			normalized = "/var"
+		case strings.HasPrefix(normalized, "/private/var/"):
+			normalized = "/var/" + strings.TrimPrefix(normalized, "/private/var/")
+		case normalized == "/private/tmp":
+			normalized = "/tmp"
+		case strings.HasPrefix(normalized, "/private/tmp/"):
+			normalized = "/tmp/" + strings.TrimPrefix(normalized, "/private/tmp/")
+		}
+	}
+	normalized = filepath.ToSlash(normalized)
+	if len(normalized) > 1 {
+		normalized = strings.TrimSuffix(normalized, "/")
+	}
+	return normalized, quality, nil
+}
+
+func normalizeExactCommand(rawCommand string) (string, error) {
+	if strings.IndexByte(rawCommand, 0) >= 0 || !utf8.ValidString(rawCommand) {
+		return "", errors.New("command is not valid UTF-8")
+	}
+	normalized := strings.TrimSpace(rawCommand)
+	if normalized == "" {
+		return "", errors.New("command is empty")
+	}
+	return normalized, nil
+}
+
+func validLowerHexSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validProjectScopeHint(value string) bool {
+	if len(value) != len("psc_")+52 || !strings.HasPrefix(value, "psc_") {
+		return false
+	}
+	for _, character := range strings.TrimPrefix(value, "psc_") {
+		if (character < 'a' || character > 'z') &&
+			(character < '2' || character > '7') {
+			return false
+		}
+	}
+	return true
+}
+
+func opaqueID(prefix string, key, material []byte) string {
+	return prefix + strings.ToLower(opaqueBase32.EncodeToString(opaqueDigest(key, material)))
+}
+
+func opaqueDigest(key, material []byte) []byte {
+	hash := hmac.New(sha256.New, key)
+	_, _ = hash.Write(material)
+	return hash.Sum(nil)
+}
+
+func lengthPrefixed(values []string) []byte {
+	size := 0
+	for _, value := range values {
+		size += 4 + len(value)
+	}
+	result := make([]byte, 0, size)
+	var length [4]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		result = append(result, length[:]...)
+		result = append(result, value...)
+	}
+	return result
+}

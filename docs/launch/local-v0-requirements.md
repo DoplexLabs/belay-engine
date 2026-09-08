@@ -13,6 +13,12 @@ and exposes the same read-only evidence through a local browser and MCP.
 Belay Local has no account, hosted dependency, product telemetry, model
 inference, write-capable MCP tool, or Teams requirement.
 
+The approved P0 scope now includes an internal deterministic issue repository:
+exact, opaque fingerprints group retained occurrences across matching sessions,
+with analysis completeness and snapshot-stable reads. This foundation does not
+make an attention inbox, issue HTTP route, or issue MCP tool available by
+itself. Those presentation adapters are the next feature.
+
 ## Launch scope
 
 ### Required
@@ -48,11 +54,15 @@ until the clean-machine checklist passes on Intel hardware.
 ### Deferred
 
 - Belay Teams enrollment, upload, API, UI, billing, or deployment
-- Write-capable MCP, remediation, fix recording, or recurrence registration
+- Write-capable MCP, remediation, or automatic fix execution
 - Belay-hosted model inference
 - Enforcement or blocking mode
 - Windows packaging
 - Linux packaging beyond reproducible source builds
+
+Explicit local fix annotation and recurrence measurement are approved later P0
+features, not current Local Alpha capabilities. They must not be advertised as
+implemented until their separate contracts and presentation paths ship.
 
 ## User commands
 
@@ -135,6 +145,11 @@ Required routes:
 - `GET /v1/findings`
 - `GET /v1/stats`
 
+The approved next presentation feature adds `GET /v1/issues` and
+`GET /v1/issues/{id}/occurrences`. These routes are not required or implemented
+by the current Local Alpha. The internal issue repository must not be treated
+as evidence that either route exists.
+
 The embedded browser is a client of these routes and never reads SQLite
 directly. Event-derived strings render as text, never HTML.
 
@@ -170,6 +185,10 @@ Required read-only tools:
 - `list_findings`
 - `get_stats`
 
+The approved next presentation feature adds the read-only `list_issues` and
+`get_issue` contracts. They are not part of the current six-tool Local Alpha
+server.
+
 Responses are bounded, structured, schema-versioned, and label event-derived
 strings as untrusted observations. No tool can execute a command, write a file,
 modify an agent, record a fix, or register recurrence.
@@ -177,6 +196,38 @@ modify an agent, record a fix, or register recurrence.
 The MCP list tools use the same server-side filters, deterministic order,
 stable-snapshot cursor semantics, limits, and completeness rules as the Local
 read API. They do not fetch broad pages and filter them inside MCP.
+
+## P0 issue intelligence foundation
+
+The implemented foundation is an internal, rebuildable projection over retained
+canonical events and immutable Numbat findings. It:
+
+- derives private, store-keyed project scopes and exact command signatures
+  before raw values are discarded;
+- emits conservative deterministic occurrences from a fixed detector catalog;
+- groups only exact compatible fingerprints and calls their sessions
+  "matching sessions," never semantically similar sessions;
+- preserves bounded cited event IDs and detector/catalog provenance;
+- maintains revisioned issue and session-analysis state for stable read
+  snapshots;
+- reports current, pending, failed, truncated, and unscoped analysis coverage.
+
+The foundation does not infer root cause, task intent, correctness, safety,
+stalls, or successful completion. Unknown outcomes remain unknown. Unscoped or
+conflicting sessions may support session-local attention but never
+cross-session recurrence.
+
+The future attention inbox, issue HTTP routes, and `list_issues`/`get_issue` MCP
+tools must:
+
+- show list-level analysis completeness and avoid a complete "no issues" claim
+  while analysis is pending, failed, or truncated;
+- preserve exact matching semantics and expose cited evidence;
+- use fixed catalog language and label event-derived values as untrusted;
+- paginate over an immutable issue-projection generation;
+- expire issue cursors after 15 minutes and require a fresh read rather than
+  silently weakening snapshot stability;
+- remain read-only and provide no remediation or fix-execution action.
 
 ## Launch acceptance
 

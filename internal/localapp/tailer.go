@@ -47,6 +47,25 @@ func ImportSpoolOnce(
 	cursorPath string,
 	newImporter ImporterFactory,
 ) (TailResult, error) {
+	return ImportSpoolOnceAfterCheckpoint(
+		ctx,
+		spoolPath,
+		cursorPath,
+		newImporter,
+		nil,
+	)
+}
+
+// ImportSpoolOnceAfterCheckpoint invokes after only after the durable cursor
+// rename succeeds. Analysis callbacks therefore cannot run before acquisition
+// progress is checkpointed.
+func ImportSpoolOnceAfterCheckpoint(
+	ctx context.Context,
+	spoolPath string,
+	cursorPath string,
+	newImporter ImporterFactory,
+	after func(context.Context, TailResult),
+) (TailResult, error) {
 	if newImporter == nil {
 		return TailResult{}, errors.New("live spool importer factory is required")
 	}
@@ -132,6 +151,9 @@ func ImportSpoolOnce(
 	}
 	result.EndOffset = cursor.Offset
 	result.Import = report
+	if after != nil {
+		after(ctx, result)
+	}
 	return result, nil
 }
 
@@ -207,5 +229,19 @@ func saveTailCursor(path string, cursor TailCursor) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open live cursor directory: %w", err)
+	}
+	if err := directory.Sync(); err != nil {
+		directory.Close()
+		return fmt.Errorf("sync live cursor directory: %w", err)
+	}
+	if err := directory.Close(); err != nil {
+		return fmt.Errorf("close live cursor directory: %w", err)
+	}
+	return nil
 }

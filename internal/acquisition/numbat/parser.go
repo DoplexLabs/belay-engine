@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/DoplexLabs/belay-engine/internal/limits"
 )
 
 type IssueCategory string
@@ -190,6 +192,9 @@ func validateFinding(record FindingRecord) error {
 	if len(record.EvidenceRefs) == 0 || len(record.CitedEventIDs) == 0 ||
 		duplicates(record.Tags) || duplicates(record.CitedEventIDs) {
 		return issue(IssueInvalidRecord, "finding contains invalid arrays")
+	}
+	if len(record.CitedEventIDs) > limits.MaxFindingCitedEventIDs {
+		return issue(IssueInvalidRecord, "finding cited_event_ids exceeds limit")
 	}
 	for _, evidence := range record.EvidenceRefs {
 		if err := validateEvidence(evidence); err != nil {

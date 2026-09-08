@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/pipeline"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
@@ -66,6 +67,9 @@ func DiscoverAndScan(
 		report.Import, err = pipeline.New(store, config.InstallationID, engineVersion).Import(scanCtx, scan.Stdout)
 		_ = scan.Stdout.Close()
 		command, waitErr := scan.Wait()
+		if err == nil {
+			_, _ = analysis.NewReconciler(store).Drain(scanCtx)
+		}
 		cancelScan()
 		report.ExitCode = command.ExitCode
 		switch {
@@ -100,16 +104,28 @@ func ImportLive(
 		{spool: paths.ClaudeSpool, cursor: filepath.Join(paths.Root, "live", "claude.cursor.json")},
 	}
 	results := make([]TailResult, 0, len(sources))
+	reconciler := analysis.NewReconciler(store)
 	for _, item := range sources {
-		result, err := ImportSpoolOnce(ctx, item.spool, item.cursor, func(sequenceBase int64) StreamImporter {
-			return pipeline.New(store, config.InstallationID, engineVersion).
-				WithSequenceBase(sequenceBase)
-		})
+		result, err := ImportSpoolOnceAfterCheckpoint(
+			ctx,
+			item.spool,
+			item.cursor,
+			func(sequenceBase int64) StreamImporter {
+				return pipeline.New(store, config.InstallationID, engineVersion).
+					WithSequenceBase(sequenceBase)
+			},
+			func(callbackCtx context.Context, _ TailResult) {
+				_, _ = reconciler.Drain(callbackCtx)
+			},
+		)
 		if err != nil {
 			return results, err
 		}
 		results = append(results, result)
 	}
+	// Retry durable failed/pending analysis even when no spool advanced during
+	// this poll. Newly imported live work has already crossed its cursor save.
+	_, _ = reconciler.Drain(ctx)
 	return results, nil
 }
 

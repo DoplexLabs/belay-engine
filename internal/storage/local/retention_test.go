@@ -8,6 +8,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 )
 
 func TestAppendOnlyEnforcementOutsideControlledPrune(t *testing.T) {
@@ -58,12 +60,40 @@ func TestAppendOnlyEnforcementOutsideControlledPrune(t *testing.T) {
 		t.Fatalf("non-eligible prune removed records: %+v", result)
 	}
 	injected := errors.New("injected mutation failure")
-	if err := store.mutations.with(mutationRetentionPrune, func() error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withMutationTx(ctx, tx, mutationRetentionPrune, func() error {
 		return injected
 	}); !errors.Is(err, injected) {
 		t.Fatalf("mutation authorization failure = %v", err)
 	}
-	if store.mutations.mode.Load() != mutationNone {
+	var transactionAuthorization int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM temp.belay_mutation_authorization",
+	).Scan(&transactionAuthorization); err != nil {
+		t.Fatal(err)
+	}
+	if transactionAuthorization != 0 {
+		t.Fatal("mutation authorization remained active in failed transaction")
+	}
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM events WHERE event_id = ?",
+		event.EventID,
+	); err == nil {
+		t.Fatal("failed transaction leaked mutation authorization")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var activeAuthorization int
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM temp.belay_mutation_authorization",
+	).Scan(&activeAuthorization); err != nil {
+		t.Fatal(err)
+	}
+	if activeAuthorization != 0 {
 		t.Fatal("mutation authorization remained active after failure")
 	}
 }
@@ -464,6 +494,196 @@ func TestRetentionRequiresAnExplicitBound(t *testing.T) {
 		time.Now().UTC(),
 	); err == nil {
 		t.Fatal("zero retention policy unexpectedly acquired a default")
+	}
+}
+
+func TestRetentionKeepsFreshOrphanedAnalysisRevisionsForProtectionFloor(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Now().UTC()
+	event := storageTestEvent(
+		"00000000-0000-7000-8000-000000000070",
+		"session-analysis-floor",
+		1,
+		now.Add(-2*time.Hour),
+	)
+	if _, err := store.AppendEventResolved(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var originalRevision string
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT revision_id
+		FROM session_analysis_revisions
+		WHERE session_key = ? AND visible_until_generation IS NULL`,
+		event.Session.Key,
+	).Scan(&originalRevision); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withMutationTx(ctx, tx, mutationProjectionRebuild, func() error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE session_analysis_revisions
+			SET created_at = ?, updated_at = ?
+			WHERE revision_id = ?`,
+			formatProjectionTime(now.Add(-4*time.Hour)),
+			formatProjectionTime(now.Add(-4*time.Hour)),
+			originalRevision,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Prune(
+		ctx,
+		RetentionPolicy{MaxAge: time.Hour},
+		now.Add(30*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := store.Count(ctx, "events"); err != nil || count != 0 {
+		t.Fatalf("event count = %d, error %v", count, err)
+	}
+	if count, err := store.Count(ctx, "session_analysis_revisions"); err != nil || count == 0 {
+		t.Fatalf("fresh analysis revision count = %d, error %v", count, err)
+	}
+	var originalRetained int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_analysis_revisions WHERE revision_id = ?`,
+		originalRevision,
+	).Scan(&originalRetained); err != nil || originalRetained != 1 {
+		t.Fatalf("recently closed old revision retained = %d, error %v", originalRetained, err)
+	}
+	if _, err := store.Prune(
+		ctx,
+		RetentionPolicy{MaxAge: time.Hour},
+		now.Add(2*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := store.Count(ctx, "session_analysis_revisions"); err != nil || count != 0 {
+		t.Fatalf("expired analysis revision count = %d, error %v", count, err)
+	}
+}
+
+func TestRetentionProtectsIssueRevisionFromMostRecentClose(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Now().UTC()
+	event := storageTestEvent(
+		"00000000-0000-7000-8000-000000000182",
+		"session-issue-close-floor",
+		1,
+		now.Add(-4*time.Hour),
+	)
+	appendResult, err := store.AppendEventResolved(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, issueID, _ := store.DeriveIssueIdentity(
+		"v1", "detector", event.Session.Key, "recent-close",
+	)
+	firstCommit, err := store.ReplaceSessionProjection(ctx, SessionProjectionReplacement{
+		SessionKey:        event.Session.Key,
+		ClaimedGeneration: appendResult.ReadGeneration,
+		Status:            model.AnalysisCurrent,
+		ScopeQuality:      model.ScopeUnscoped,
+		BelayOccurrences: []model.IssueOccurrence{testIssueOccurrence(
+			event.Session.Key,
+			"codex",
+			event.EventID,
+			fingerprint,
+			issueID,
+			"low",
+			"high",
+			event.OccurredAt,
+			model.ScopeUnscoped,
+		)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revisionID string
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT revision_id FROM issue_occurrences
+		WHERE session_key = ? AND visible_until_generation IS NULL`,
+		event.Session.Key,
+	).Scan(&revisionID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withMutationTx(ctx, tx, mutationProjectionRebuild, func() error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE issue_occurrences
+			SET created_at = ?, updated_at = ?
+			WHERE revision_id = ?`,
+			formatProjectionTime(now.Add(-4*time.Hour)),
+			formatProjectionTime(now.Add(-4*time.Hour)),
+			revisionID,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.MarkSessionDirty(ctx, event.Session.Key, "close_floor_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReplaceSessionProjection(ctx, SessionProjectionReplacement{
+		SessionKey:        event.Session.Key,
+		ClaimedGeneration: target,
+		Status:            model.AnalysisCurrent,
+		ScopeQuality:      model.ScopeUnscoped,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	issuedAt := time.Now().UTC()
+
+	if _, err := store.Prune(
+		ctx,
+		RetentionPolicy{MaxAge: time.Hour},
+		now.Add(30*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var retained int
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM issue_occurrences WHERE revision_id = ?",
+		revisionID,
+	).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("recently closed issue retained = %d, error %v", retained, err)
+	}
+	page, err := store.QueryIssues(ctx, model.IssueQuery{
+		Snapshot: firstCommit.ProjectionGeneration,
+		IssuedAt: issuedAt,
+	})
+	if err != nil || len(page.Data) != 1 {
+		t.Fatalf("protected issue snapshot = %+v, error %v", page, err)
+	}
+
+	if _, err := store.Prune(
+		ctx,
+		RetentionPolicy{MaxAge: time.Hour},
+		now.Add(2*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM issue_occurrences WHERE revision_id = ?",
+		revisionID,
+	).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("expired closed issue retained = %d, error %v", retained, err)
 	}
 }
 

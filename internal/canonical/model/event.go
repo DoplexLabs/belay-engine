@@ -141,15 +141,16 @@ type OutcomeExplanation struct {
 }
 
 type FindingSummary struct {
-	FindingID     string    `json:"finding_id"`
-	SessionID     string    `json:"session_id"`
-	DetectedAt    time.Time `json:"detected_at"`
-	RuleID        string    `json:"rule_id"`
-	RuleVersion   string    `json:"rule_version"`
-	Severity      string    `json:"severity"`
-	Harness       string    `json:"harness"`
-	Confidence    string    `json:"confidence"`
-	CitedEventIDs []string  `json:"cited_event_ids"`
+	FindingID        string    `json:"finding_id"`
+	SessionID        string    `json:"session_id"`
+	ProjectScopeHint string    `json:"-"`
+	DetectedAt       time.Time `json:"detected_at"`
+	RuleID           string    `json:"rule_id"`
+	RuleVersion      string    `json:"rule_version"`
+	Severity         string    `json:"severity"`
+	Harness          string    `json:"harness"`
+	Confidence       string    `json:"confidence"`
+	CitedEventIDs    []string  `json:"cited_event_ids"`
 }
 
 type ActivityFilter struct {
