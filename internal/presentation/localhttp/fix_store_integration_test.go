@@ -77,6 +77,7 @@ func TestRealStoreFixEligibilityReplayHistoryRetractionAndExpiry(t *testing.T) {
 		readmodel.New(
 			store,
 			readmodel.WithIssueRepository(store),
+			readmodel.WithIssueCursorCodec(store),
 			readmodel.WithClock(func() time.Time { return storeNow }),
 		),
 		"launch-secret",
@@ -332,6 +333,7 @@ func TestRealStoreFixHistoryAndIdempotentReplaySurviveRestart(t *testing.T) {
 			readmodel.New(
 				store,
 				readmodel.WithIssueRepository(store),
+				readmodel.WithIssueCursorCodec(store),
 				readmodel.WithClock(func() time.Time { return storeNow }),
 			),
 			"launch-secret",

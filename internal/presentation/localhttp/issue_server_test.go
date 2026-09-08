@@ -2,6 +2,8 @@ package localhttp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,6 +25,31 @@ type issueHTTPRepository struct {
 	eventQuery      model.EventLookupQuery
 	issueErr        error
 	issueAbsent     bool
+	now             time.Time
+}
+
+type issueHTTPCursorCodec struct{}
+
+func (issueHTTPCursorCodec) SealIssueCursor(payload []byte) (string, error) {
+	sum := sha256.Sum256(append([]byte("localhttp-test:"), payload...))
+	return base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+func (issueHTTPCursorCodec) OpenIssueCursor(value string) ([]byte, error) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 {
+		return nil, model.ErrIssueCursorInvalid
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, model.ErrIssueCursorInvalid
+	}
+	expected, _ := issueHTTPCursorCodec{}.SealIssueCursor(payload)
+	if expected != value {
+		return nil, model.ErrIssueCursorInvalid
+	}
+	return payload, nil
 }
 
 func (repository *issueHTTPRepository) QueryIssues(
@@ -33,8 +60,17 @@ func (repository *issueHTTPRepository) QueryIssues(
 	if repository.issueErr != nil {
 		return model.IssuePage{}, repository.issueErr
 	}
+	epoch, snapshot, retentionGeneration, issuedAt := issueHTTPPageMetadata(
+		query,
+		repository.now,
+	)
 	if repository.issueAbsent && query.Filter.IssueID != "" {
-		return model.IssuePage{Snapshot: 31}, nil
+		return model.IssuePage{
+			CursorEpoch:         epoch,
+			Snapshot:            snapshot,
+			RetentionGeneration: retentionGeneration,
+			IssuedAt:            issuedAt,
+		}, nil
 	}
 	issueID := httpTestIssueID("a")
 	if query.Filter.IssueID != "" {
@@ -45,6 +81,7 @@ func (repository *issueHTTPRepository) QueryIssues(
 			IssueID:        issueID,
 			FingerprintID:  httpTestFingerprintID("b"),
 			Severity:       "high",
+			TitleCode:      "issue.explicit_command_failure",
 			SessionCount:   2,
 			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
 		}},
@@ -52,9 +89,25 @@ func (repository *issueHTTPRepository) QueryIssues(
 			CurrentSessions: 1,
 			Complete:        true,
 		},
-		Snapshot: 31,
-		HasMore:  query.Filter.IssueID == "",
+		CursorEpoch:         epoch,
+		Snapshot:            snapshot,
+		RetentionGeneration: retentionGeneration,
+		IssuedAt:            issuedAt,
+		HasMore:             query.Filter.IssueID == "",
 	}, nil
+}
+
+func issueHTTPPageMetadata(
+	query model.IssueQuery,
+	now time.Time,
+) (string, int64, int64, time.Time) {
+	if query.Snapshot != 0 {
+		return query.CursorEpoch, query.Snapshot, query.RetentionGeneration, query.IssuedAt
+	}
+	if now.IsZero() {
+		now = time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	}
+	return "http-epoch", 31, 4, now.UTC()
 }
 
 func (repository *issueHTTPRepository) QueryIssueOccurrences(
@@ -69,7 +122,10 @@ func (repository *issueHTTPRepository) QueryIssueOccurrences(
 			SessionID:      "session-1",
 			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
 		}},
-		Snapshot: query.Snapshot,
+		CursorEpoch:         query.CursorEpoch,
+		Snapshot:            query.Snapshot,
+		RetentionGeneration: query.RetentionGeneration,
+		IssuedAt:            query.IssuedAt,
 	}, nil
 }
 
@@ -90,12 +146,36 @@ func (repository *issueHTTPRepository) LookupSessionEvents(
 	}, nil
 }
 
+func (repository *issueHTTPRepository) VisitSessionEvents(
+	_ context.Context,
+	query model.EventLookupQuery,
+	visit func(model.Event) error,
+) (model.EventLookupSummary, error) {
+	result, err := repository.LookupSessionEvents(context.Background(), query)
+	if err != nil {
+		return model.EventLookupSummary{}, err
+	}
+	for _, event := range result.Data {
+		if err := visit(event); err != nil {
+			return model.EventLookupSummary{}, err
+		}
+	}
+	return model.EventLookupSummary{
+		RequestedCount:  result.RequestedCount,
+		FoundCount:      result.FoundCount,
+		MissingCount:    result.MissingCount,
+		MissingEventIDs: result.MissingEventIDs,
+		DataThrough:     result.DataThrough,
+	}, nil
+}
+
 func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T) {
 	repository := &issueHTTPRepository{}
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	readService := readmodel.New(
 		repository,
 		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
 		readmodel.WithClock(func() time.Time { return now }),
 	)
 	fixService := &fixHTTPService{}
@@ -148,6 +228,9 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 	if list.ViewCursor == "" ||
 		list.NextCursor == nil ||
 		list.ProjectionVersion != readmodel.IssueProjectionVersion ||
+		list.Selection.AttentionKind != model.AttentionKindAll ||
+		!list.Selection.IncludesEvidenceGaps ||
+		!list.Selection.IncludesExperimental ||
 		!list.HasMore ||
 		list.ReturnedCount != 1 {
 		t.Fatalf("issue list response = %+v", list)
@@ -187,6 +270,8 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 		len(detail.Data.Occurrences) != 1 ||
 		repository.issueQuery.Snapshot != 31 ||
 		repository.occurrenceQuery.Snapshot != 31 ||
+		detail.Catalog.TitleCode != "issue.explicit_command_failure" ||
+		detail.GlobalAnalysisCoverage.CurrentSessions != 1 ||
 		!repository.issueQuery.IssuedAt.Equal(now) ||
 		!repository.occurrenceQuery.IssuedAt.Equal(now) {
 		t.Fatalf("snapshot-stable detail=%+v summary=%+v occurrence=%+v",
@@ -229,7 +314,9 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 			eligibilityResponse.Code, eligibilityResponse.Body.String())
 	}
 	if fixService.prepareIssueID != targetIssueID ||
+		fixService.prepareClaims.CursorEpoch != "http-epoch" ||
 		fixService.prepareClaims.Snapshot != 31 ||
+		fixService.prepareClaims.RetentionGeneration != 4 ||
 		!fixService.prepareClaims.IssuedAt.Equal(now) {
 		t.Fatalf("exact eligibility handoff issue=%q claims=%+v",
 			fixService.prepareIssueID, fixService.prepareClaims)
@@ -263,6 +350,7 @@ func TestIssueHTTPErrorMatrixIsFixedAndNonReflective(t *testing.T) {
 	server, err := New(readmodel.New(
 		repository,
 		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
 		readmodel.WithClock(func() time.Time { return now }),
 	), "launch-secret")
 	if err != nil {
@@ -351,7 +439,7 @@ func TestIssueHTTPErrorMatrixIsFixedAndNonReflective(t *testing.T) {
 
 	repository.issueErr = model.ErrIssueSnapshotExpired
 	expired := assertProblem(
-		"/v1/issues?limit=1&cursor="+*list.NextCursor,
+		"/v1/issues?cursor="+*list.NextCursor,
 		http.StatusGone,
 		*list.NextCursor,
 	)
@@ -363,7 +451,7 @@ func TestIssueHTTPErrorMatrixIsFixedAndNonReflective(t *testing.T) {
 
 	repository.issueErr = model.ErrIssueSnapshotInvalid
 	assertProblem(
-		"/v1/issues?limit=1&cursor="+*list.NextCursor,
+		"/v1/issues?cursor="+*list.NextCursor,
 		http.StatusBadRequest,
 		*list.NextCursor,
 	)
@@ -381,6 +469,7 @@ func TestExactEventLookupRejectsEveryParameterExceptRepeatedEventID(t *testing.T
 	server, err := New(readmodel.New(
 		repository,
 		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
 	), "launch-secret")
 	if err != nil {
 		t.Fatal(err)

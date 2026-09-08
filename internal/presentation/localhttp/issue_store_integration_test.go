@@ -98,6 +98,7 @@ func TestRealStoreIssueDefaultsSnapshotExpiryAndExactEventLookup(t *testing.T) {
 	server, err := New(readmodel.New(
 		store,
 		readmodel.WithIssueRepository(store),
+		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithClock(func() time.Time { return readNow }),
 	), "launch-secret")
 	if err != nil {

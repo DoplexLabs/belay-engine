@@ -386,7 +386,7 @@ func TestFixResponsesUseExactContractsAndNullRetractionFields(t *testing.T) {
 
 func TestFixEligibilityRequiresExactViewCursorAndUsesNullActionFields(t *testing.T) {
 	now := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
-	repository := &issueHTTPRepository{}
+	repository := &issueHTTPRepository{now: now}
 	service := &fixHTTPService{eligibility: localaction.FixEligibility{
 		Reason:               model.FixEligibilityEvidenceGap,
 		ChangeCatalogVersion: model.FixChangeCatalogVersion,
@@ -395,6 +395,7 @@ func TestFixEligibilityRequiresExactViewCursorAndUsesNullActionFields(t *testing
 		readmodel.New(
 			repository,
 			readmodel.WithIssueRepository(repository),
+			readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
 			readmodel.WithClock(func() time.Time { return now }),
 		),
 		"launch-secret",

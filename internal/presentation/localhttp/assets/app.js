@@ -1582,6 +1582,11 @@
           "Local API returned issue results without a view cursor.",
         );
       }
+      if (cursor && viewCursor !== bucket.viewCursor) {
+        throw new Error(
+          "Local API changed the issue-list view cursor during continuation.",
+        );
+      }
       const selection = readIssueSelection(response.selection, bucket.kind);
       bucket.data =
         append && cursor
@@ -1973,6 +1978,14 @@
       if (!responseViewCursor) {
         throw new Error(
           "Local API returned issue detail without a view cursor.",
+        );
+      }
+      if (
+        cursor &&
+        responseViewCursor !== state.selectedIssueViewCursor
+      ) {
+        throw new Error(
+          "Local API changed the issue-detail view cursor during continuation.",
         );
       }
       const catalog = readIssueCatalog(

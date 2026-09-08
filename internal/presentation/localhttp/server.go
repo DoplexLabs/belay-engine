@@ -287,27 +287,115 @@ func (s *Server) listFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
-	observedAfter, err := optionalTime(r, "observed_after")
+	parameters, err := exactQuery(
+		r,
+		"limit",
+		"cursor",
+		"severity",
+		"category",
+		"harness",
+		"origin",
+		"analysis_status",
+		"observed_after",
+		"recurrence",
+		"session_id",
+		"fingerprint_id",
+		"attention_kind",
+		"experimental",
+	)
 	if err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "Invalid request", "The supplied read cursor or filters are invalid.")
+		writeReadInvalidRequest(w, r)
 		return
 	}
+	cursor, cursorPresent, err := optionalExactParameter(parameters, "cursor")
+	if err != nil {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	if cursorPresent {
+		if len(parameters) != 1 {
+			writeReadInvalidRequest(w, r)
+			return
+		}
+		response, err := s.read.ListIssues(
+			r.Context(),
+			readmodel.IssueListRequest{Cursor: cursor},
+		)
+		writeReadResult(w, r, response, err)
+		return
+	}
+	limit, err := optionalIssueLimit(parameters)
+	if err != nil {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	values := make(map[string]string, len(parameters))
+	for _, name := range []string{
+		"severity",
+		"category",
+		"harness",
+		"origin",
+		"analysis_status",
+		"recurrence",
+		"session_id",
+		"fingerprint_id",
+		"attention_kind",
+		"experimental",
+	} {
+		value, present, err := optionalExactParameter(parameters, name)
+		if err != nil {
+			writeReadInvalidRequest(w, r)
+			return
+		}
+		if present {
+			values[name] = value
+		}
+	}
+	var observedAfter *time.Time
+	observedAfterValue, present, err := optionalExactParameter(
+		parameters,
+		"observed_after",
+	)
+	if err != nil {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	if present {
+		parsed, err := time.Parse(time.RFC3339Nano, observedAfterValue)
+		if err != nil {
+			writeReadInvalidRequest(w, r)
+			return
+		}
+		parsed = parsed.UTC()
+		observedAfter = &parsed
+	}
 	response, err := s.read.ListIssues(r.Context(), readmodel.IssueListRequest{
-		Limit:          boundedInt(r, "limit", 20, 100),
-		Cursor:         queryValue(r, "cursor"),
-		Severity:       queryValue(r, "severity"),
-		Category:       queryValue(r, "category"),
-		Harness:        queryValue(r, "harness"),
-		Origin:         queryValue(r, "origin"),
-		AnalysisStatus: queryValue(r, "analysis_status"),
+		Limit:          limit,
+		Severity:       values["severity"],
+		Category:       values["category"],
+		Harness:        values["harness"],
+		Origin:         values["origin"],
+		AnalysisStatus: values["analysis_status"],
 		ObservedAfter:  observedAfter,
-		Recurrence:     queryValue(r, "recurrence"),
-		SessionID:      queryValue(r, "session_id"),
-		FingerprintID:  queryValue(r, "fingerprint_id"),
-		AttentionKind:  queryValue(r, "attention_kind"),
-		Experimental:   queryValue(r, "experimental"),
+		Recurrence:     values["recurrence"],
+		SessionID:      values["session_id"],
+		FingerprintID:  values["fingerprint_id"],
+		AttentionKind:  values["attention_kind"],
+		Experimental:   values["experimental"],
 	})
 	writeReadResult(w, r, response, err)
+}
+
+func optionalIssueLimit(parameters url.Values) (int, error) {
+	value, present, err := optionalExactParameter(parameters, "limit")
+	if err != nil || !present {
+		return 0, err
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, errors.New("invalid issue limit")
+	}
+	return limit, nil
 }
 
 func (s *Server) getIssue(w http.ResponseWriter, r *http.Request) {

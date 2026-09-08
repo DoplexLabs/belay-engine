@@ -59,6 +59,7 @@ type issueTestRepository struct {
 	queryIssues      func(model.IssueQuery) (model.IssuePage, error)
 	queryOccurrences func(model.IssueOccurrenceQuery) (model.IssueOccurrencePage, error)
 	lookupEvents     func(model.EventLookupQuery) (model.EventLookupResult, error)
+	visitEvents      func(model.EventLookupQuery, func(model.Event) error) (model.EventLookupSummary, error)
 }
 
 type issueCapableCoreRepository struct {
@@ -96,8 +97,35 @@ func (repository *issueTestRepository) LookupSessionEvents(
 	return repository.lookupEvents(query)
 }
 
+func (repository *issueTestRepository) VisitSessionEvents(
+	_ context.Context,
+	query model.EventLookupQuery,
+	visit func(model.Event) error,
+) (model.EventLookupSummary, error) {
+	if repository.visitEvents != nil {
+		return repository.visitEvents(query, visit)
+	}
+	result, err := repository.LookupSessionEvents(context.Background(), query)
+	if err != nil {
+		return model.EventLookupSummary{}, err
+	}
+	for _, event := range result.Data {
+		if err := visit(event); err != nil {
+			return model.EventLookupSummary{}, err
+		}
+	}
+	return model.EventLookupSummary{
+		RequestedCount:  result.RequestedCount,
+		FoundCount:      result.FoundCount,
+		MissingCount:    result.MissingCount,
+		MissingEventIDs: result.MissingEventIDs,
+		DataThrough:     result.DataThrough,
+	}, nil
+}
+
 func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	issuedAt := now
 	issueID := testIssueID("a")
 	fingerprintID := testFingerprintID("b")
 	observedAfter := now.Add(-time.Hour).In(time.FixedZone("offset", 2*60*60))
@@ -116,9 +144,12 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 					AnalysisStatus:   model.AnalysisCurrent,
 					EvidenceComplete: true,
 				}},
-				Analysis: model.IssueAnalysisCoverage{CurrentSessions: 3, Complete: true},
-				Snapshot: 17,
-				HasMore:  true,
+				Analysis:            model.IssueAnalysisCoverage{CurrentSessions: 3, Complete: true},
+				CursorEpoch:         "epoch-1",
+				Snapshot:            17,
+				RetentionGeneration: 3,
+				IssuedAt:            issuedAt,
+				HasMore:             true,
 			}, nil
 		}
 		return model.IssuePage{
@@ -128,12 +159,16 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 				SessionCount:   1,
 				LastObservedAt: now.Add(-2 * time.Minute),
 			}},
-			Snapshot: 17,
+			CursorEpoch:         query.CursorEpoch,
+			Snapshot:            query.Snapshot,
+			RetentionGeneration: query.RetentionGeneration,
+			IssuedAt:            query.IssuedAt,
 		}, nil
 	}
 	service := New(
 		issueTestCoreRepository{},
 		WithIssueRepository(repository),
+		WithIssueCursorCodec(issueTestCursorCodec{}),
 		WithClock(func() time.Time { return now }),
 	)
 	request := IssueListRequest{
@@ -184,8 +219,9 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 	}
 
 	now = now.Add(5 * time.Minute)
-	request.Cursor = *first.NextCursor
-	second, err := service.ListIssues(context.Background(), request)
+	second, err := service.ListIssues(context.Background(), IssueListRequest{
+		Cursor: *first.NextCursor,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +237,7 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 		!query.Cursor.Repeated {
 		t.Fatalf("continued issue query = %+v", query)
 	}
-	view, err := decodeViewCursor(second.ViewCursor, now)
+	view, err := service.openIssueCursor(second.ViewCursor, "issue_view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,9 +246,11 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 		t.Fatalf("continued view cursor = %+v", view)
 	}
 
-	request.Category = "different"
-	if _, err := service.ListIssues(context.Background(), request); !errors.Is(err, ErrInvalidCursor) {
-		t.Fatalf("changed-filter cursor error = %v, want ErrInvalidCursor", err)
+	if _, err := service.ListIssues(context.Background(), IssueListRequest{
+		Cursor:   *first.NextCursor,
+		Category: "different",
+	}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("cursor-plus-filter error = %v, want ErrInvalidRequest", err)
 	}
 	if len(queries) != 2 {
 		t.Fatalf("repository called after cursor/filter mismatch: %d calls", len(queries))
@@ -221,6 +259,7 @@ func TestIssueListNormalizesAndPreservesCursorSnapshot(t *testing.T) {
 
 func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	issuedAt := now
 	issueID := testIssueID("d")
 	otherIssueID := testIssueID("e")
 	var summaryQueries []model.IssueQuery
@@ -235,7 +274,11 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 				SessionCount:   2,
 				LastObservedAt: now.Add(-time.Minute),
 			}},
-			Snapshot: 23,
+			Analysis:            model.IssueAnalysisCoverage{CurrentSessions: 2, Complete: true},
+			CursorEpoch:         "epoch-2",
+			Snapshot:            23,
+			RetentionGeneration: 5,
+			IssuedAt:            issuedAt,
 		}, nil
 	}
 	repository.queryOccurrences = func(query model.IssueOccurrenceQuery) (model.IssueOccurrencePage, error) {
@@ -246,21 +289,26 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 				IssueID:        issueID,
 				LastObservedAt: now.Add(-time.Minute),
 			}},
-			Snapshot: 23,
-			HasMore:  len(occurrenceQueries) == 1,
+			CursorEpoch:         query.CursorEpoch,
+			Snapshot:            query.Snapshot,
+			RetentionGeneration: query.RetentionGeneration,
+			IssuedAt:            query.IssuedAt,
+			HasMore:             len(occurrenceQueries) == 1,
 		}, nil
 	}
 	service := New(
 		issueTestCoreRepository{},
 		WithIssueRepository(repository),
+		WithIssueCursorCodec(issueTestCursorCodec{}),
 		WithClock(func() time.Time { return now }),
 	)
-	viewCursor, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_view",
-		Snapshot:    23,
-		Fingerprint: issueViewFingerprint(),
-		IssuedAt:    now.Format(time.RFC3339Nano),
+	viewCursor, err := service.sealIssueCursor(issueCursorEnvelope{
+		Version:             issueCursorVersion,
+		Kind:                "issue_view",
+		CursorEpoch:         "epoch-2",
+		Snapshot:            23,
+		RetentionGeneration: 5,
+		IssuedAt:            now.Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +328,7 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 		first.Data.Occurrences[0].Evidence.CitedEventIDs == nil {
 		t.Fatalf("first issue detail = %+v", first)
 	}
-	detailView, err := decodeViewCursor(first.ViewCursor, now)
+	detailView, err := service.openIssueCursor(first.ViewCursor, "issue_view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +348,6 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 	now = now.Add(2 * time.Minute)
 	second, err := service.GetIssue(context.Background(), IssueDetailRequest{
 		IssueID: issueID,
-		Limit:   1,
 		Cursor:  *first.NextCursor,
 	})
 	if err != nil {
@@ -309,7 +356,7 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 	if second.HasMore || second.NextCursor != nil {
 		t.Fatalf("second issue detail = %+v", second)
 	}
-	continuedView, err := decodeViewCursor(second.ViewCursor, now)
+	continuedView, err := service.openIssueCursor(second.ViewCursor, "issue_view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,14 +391,16 @@ func TestDecodeIssueViewCursorReturnsNeutralClaims(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	service := New(
 		issueTestCoreRepository{},
+		WithIssueCursorCodec(issueTestCursorCodec{}),
 		WithClock(func() time.Time { return now }),
 	)
-	cursor, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_view",
-		Snapshot:    23,
-		Fingerprint: issueViewFingerprint(),
-		IssuedAt:    now.Format(time.RFC3339Nano),
+	cursor, err := service.sealIssueCursor(issueCursorEnvelope{
+		Version:             issueCursorVersion,
+		Kind:                "issue_view",
+		CursorEpoch:         "epoch-3",
+		Snapshot:            23,
+		RetentionGeneration: 7,
+		IssuedAt:            now.Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -360,22 +409,26 @@ func TestDecodeIssueViewCursorReturnsNeutralClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.Snapshot != 23 || !claims.IssuedAt.Equal(now) {
+	if claims.CursorEpoch != "epoch-3" ||
+		claims.Snapshot != 23 ||
+		claims.RetentionGeneration != 7 ||
+		!claims.IssuedAt.Equal(now) {
 		t.Fatalf("claims = %+v", claims)
 	}
 
-	empty, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_view",
-		Snapshot:    0,
-		Fingerprint: issueViewFingerprint(),
-		IssuedAt:    now.Format(time.RFC3339Nano),
+	empty, err := service.sealIssueCursor(issueCursorEnvelope{
+		Version:             issueCursorVersion,
+		Kind:                "issue_view",
+		CursorEpoch:         "epoch-3",
+		Snapshot:            0,
+		RetentionGeneration: 7,
+		IssuedAt:            now.Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.DecodeIssueViewCursor(empty); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("empty snapshot error = %v, want ErrNotFound", err)
+	if _, err := service.DecodeIssueViewCursor(empty); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("empty snapshot error = %v, want ErrInvalidCursor", err)
 	}
 	if _, err := service.DecodeIssueViewCursor("PRIVATE_CURSOR"); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("malformed cursor error = %v, want ErrInvalidCursor", err)
@@ -393,15 +446,17 @@ func TestIssueErrorPrecedenceAndLegacyCursorIsolation(t *testing.T) {
 	service := New(
 		issueTestCoreRepository{},
 		WithIssueRepository(repository),
+		WithIssueCursorCodec(issueTestCursorCodec{}),
 		WithClock(func() time.Time { return now }),
 	)
 	view := func(issuedAt time.Time) string {
-		value, err := encodeCursor(cursorEnvelope{
-			Version:     cursorVersion,
-			Kind:        "issue_view",
-			Snapshot:    7,
-			Fingerprint: issueViewFingerprint(),
-			IssuedAt:    issuedAt.Format(time.RFC3339Nano),
+		value, err := service.sealIssueCursor(issueCursorEnvelope{
+			Version:             issueCursorVersion,
+			Kind:                "issue_view",
+			CursorEpoch:         "epoch-4",
+			Snapshot:            7,
+			RetentionGeneration: 2,
+			IssuedAt:            issuedAt.Format(time.RFC3339Nano),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -446,7 +501,12 @@ func TestIssueErrorPrecedenceAndLegacyCursorIsolation(t *testing.T) {
 		t.Fatalf("newer snapshot error = %v", err)
 	}
 	repository.queryIssues = func(model.IssueQuery) (model.IssuePage, error) {
-		return model.IssuePage{Snapshot: 7}, nil
+		return model.IssuePage{
+			CursorEpoch:         "epoch-4",
+			Snapshot:            7,
+			RetentionGeneration: 2,
+			IssuedAt:            now,
+		}, nil
 	}
 	if _, err := service.GetIssue(context.Background(), IssueDetailRequest{
 		IssueID:    issueID,
@@ -565,6 +625,7 @@ func TestExactEventLookupValidatesDeduplicatesAndReturnsNonNilSlices(t *testing.
 	service := New(
 		issueTestCoreRepository{},
 		WithIssueRepository(repository),
+		WithIssueCursorCodec(issueTestCursorCodec{}),
 	)
 	response, err := service.LookupSessionEvents(context.Background(), EventLookupRequest{
 		SessionID: " session-1 ",

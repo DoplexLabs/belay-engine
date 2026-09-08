@@ -72,7 +72,7 @@ func TestRealStoreFixMonitoringRestartRetentionAndHistoryOnly(t *testing.T) {
 		false,
 	)
 	initialOccurrence.ScopeQuality = model.ScopeResolved
-	initialCommit, err := store.ReplaceIssueProjection(
+	_, err = store.ReplaceIssueProjection(
 		ctx,
 		local.ProjectionReplacement{
 			SessionKey:        initialEvent.Session.Key,
@@ -85,15 +85,28 @@ func TestRealStoreFixMonitoringRestartRetentionAndHistoryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	issuePage, err := store.QueryIssues(ctx, model.IssueQuery{
+		Filter: model.IssueFilter{
+			IssueID:       initialOccurrence.IssueID,
+			AttentionKind: model.AttentionKindAll,
+			Experimental:  model.ExperimentalInclude,
+		},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	annotation, err := store.RecordFixAnnotation(
 		ctx,
 		local.FixAnnotationInput{
 			Claims: model.FixActionClaims{
-				Version:   model.FixActionTokenVersion,
-				IssueID:   initialOccurrence.IssueID,
-				Snapshot:  initialCommit.ProjectionGeneration,
-				IssuedAt:  storeNow,
-				ExpiresAt: storeNow.Add(15 * time.Minute),
+				Version:             model.FixActionTokenVersion,
+				CursorEpoch:         issuePage.CursorEpoch,
+				IssueID:             initialOccurrence.IssueID,
+				Snapshot:            issuePage.Snapshot,
+				RetentionGeneration: issuePage.RetentionGeneration,
+				IssuedAt:            issuePage.IssuedAt,
+				ExpiresAt:           issuePage.IssuedAt.Add(15 * time.Minute),
 			},
 			ChangeKind:     model.FixChangeCode,
 			RecordedVia:    model.FixRecordedViaLocalUI,

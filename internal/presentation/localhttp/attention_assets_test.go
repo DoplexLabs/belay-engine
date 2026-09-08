@@ -345,6 +345,46 @@ func TestAttentionBrowserUsesCursorOnlyContinuationAndAdditiveMetadata(t *testin
 	}
 }
 
+func TestAttentionBrowserRejectsContinuationViewCursorMismatchBeforeMutation(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	list := browserSourceBlock(
+		t,
+		app,
+		"  async function loadIssueBucket(bucket, append) {",
+		"  function buildIssuePath(kind, cursor) {",
+	)
+	detail := browserSourceBlock(
+		t,
+		app,
+		"  async function loadIssueDetail(append, viewCursor) {",
+		"  function loadMoreOccurrences() {",
+	)
+
+	listCheck := `if (cursor && viewCursor !== bucket.viewCursor) {`
+	listError := `Local API changed the issue-list view cursor during continuation.`
+	listMutation := `bucket.data =`
+	for _, required := range []string{listCheck, listError} {
+		if !strings.Contains(list, required) {
+			t.Errorf("issue-list continuation mismatch handling is missing %q", required)
+		}
+	}
+	if check, mutation := strings.Index(list, listCheck), strings.Index(list, listMutation); check < 0 || mutation < 0 || check > mutation {
+		t.Error("issue-list view cursor mismatch must fail before cached rows are mutated")
+	}
+
+	detailCheck := `responseViewCursor !== state.selectedIssueViewCursor`
+	detailError := `Local API changed the issue-detail view cursor during continuation.`
+	detailMutation := `state.selectedIssue = issue;`
+	for _, required := range []string{detailCheck, detailError} {
+		if !strings.Contains(detail, required) {
+			t.Errorf("issue-detail continuation mismatch handling is missing %q", required)
+		}
+	}
+	if check, mutation := strings.Index(detail, detailCheck), strings.Index(detail, detailMutation); check < 0 || mutation < 0 || check > mutation {
+		t.Error("issue-detail view cursor mismatch must fail before detail state is mutated")
+	}
+}
+
 func TestAttentionBrowserCursorExpiryClearsEveryDependentState(t *testing.T) {
 	app := readBrowserAsset(t, "assets/app.js")
 	refresh := browserSourceBlock(

@@ -43,6 +43,7 @@ var (
 	ErrInvalidRequest          = errors.New("invalid read request")
 	ErrCursorExpired           = errors.New("read cursor expired")
 	ErrNotFound                = errors.New("read resource not found")
+	ErrCapabilityUnavailable   = errors.New("read capability unavailable")
 	ErrMonitoringCatchingUp    = errors.New("fix monitoring catch-up is in progress")
 	ErrMonitoringCatchupFailed = errors.New("fix monitoring catch-up failed")
 
@@ -70,6 +71,11 @@ type IssueRepository interface {
 		context.Context,
 		model.EventLookupQuery,
 	) (model.EventLookupResult, error)
+	VisitSessionEvents(
+		context.Context,
+		model.EventLookupQuery,
+		func(model.Event) error,
+	) (model.EventLookupSummary, error)
 }
 
 type FixMonitoringRepository interface {
@@ -90,6 +96,7 @@ type FixMonitoringRepository interface {
 type Service struct {
 	repository              Repository
 	issueRepository         IssueRepository
+	issueCursorCodec        IssueCursorCodec
 	fixMonitoringRepository FixMonitoringRepository
 	now                     func() time.Time
 }
@@ -99,6 +106,12 @@ type Option func(*Service)
 func WithIssueRepository(repository IssueRepository) Option {
 	return func(service *Service) {
 		service.issueRepository = repository
+	}
+}
+
+func WithIssueCursorCodec(codec IssueCursorCodec) Option {
+	return func(service *Service) {
+		service.issueCursorCodec = codec
 	}
 }
 
@@ -234,6 +247,7 @@ type IssueList struct {
 	ProjectionVersion string                      `json:"projection_version"`
 	Data              []model.IssueSummary        `json:"data"`
 	Analysis          model.IssueAnalysisCoverage `json:"analysis"`
+	Selection         IssueSelection              `json:"selection"`
 	ViewCursor        string                      `json:"view_cursor"`
 	NextCursor        *string                     `json:"next_cursor"`
 	HasMore           bool                        `json:"has_more"`
@@ -247,14 +261,16 @@ type IssueDetailData struct {
 }
 
 type IssueDetail struct {
-	SchemaVersion     string          `json:"schema_version"`
-	ProjectionVersion string          `json:"projection_version"`
-	Data              IssueDetailData `json:"data"`
-	ViewCursor        string          `json:"view_cursor"`
-	NextCursor        *string         `json:"next_cursor"`
-	HasMore           bool            `json:"has_more"`
-	ReturnedCount     int             `json:"returned_count"`
-	Limit             int             `json:"limit"`
+	SchemaVersion          string                      `json:"schema_version"`
+	ProjectionVersion      string                      `json:"projection_version"`
+	Data                   IssueDetailData             `json:"data"`
+	Catalog                IssueCatalogMetadata        `json:"catalog"`
+	GlobalAnalysisCoverage model.IssueAnalysisCoverage `json:"global_analysis_coverage"`
+	ViewCursor             string                      `json:"view_cursor"`
+	NextCursor             *string                     `json:"next_cursor"`
+	HasMore                bool                        `json:"has_more"`
+	ReturnedCount          int                         `json:"returned_count"`
+	Limit                  int                         `json:"limit"`
 }
 
 type EventLookup struct {
@@ -293,24 +309,43 @@ func New(repository Repository, options ...Option) *Service {
 	return service
 }
 
+func (s *Service) RequireIssueEvidenceCapabilities() error {
+	if s == nil || s.issueRepository == nil || s.issueCursorCodec == nil {
+		return capabilityUnavailable()
+	}
+	return nil
+}
+
 // DecodeIssueViewCursor converts the private rowless issue-view cursor into
 // neutral claims for non-presentation services. It preserves the cursor's
 // structural and freshness validation without exposing its envelope.
 func (s *Service) DecodeIssueViewCursor(value string) (model.IssueViewClaims, error) {
-	cursor, err := decodeViewCursor(strings.TrimSpace(value), s.nowUTC())
+	cursor, err := s.openIssueCursor(
+		strings.TrimSpace(value),
+		"issue_view",
+	)
 	if err != nil {
 		return model.IssueViewClaims{}, err
 	}
-	if cursor.Snapshot == 0 {
-		return model.IssueViewClaims{}, notFound()
+	if cursor.Kind != "issue_view" ||
+		cursor.Filters != nil ||
+		cursor.Limit != 0 ||
+		cursor.IssueID != "" ||
+		cursor.Time != "" ||
+		cursor.PositionID != "" ||
+		cursor.SeverityRank != 0 ||
+		cursor.Repeated {
+		return model.IssueViewClaims{}, invalidCursor()
 	}
-	issuedAt, err := parseUTCTime(cursor.IssuedAt)
-	if err != nil {
+	if err := validateIssueCursorSnapshot(cursor, s.nowUTC()); err != nil {
 		return model.IssueViewClaims{}, err
 	}
+	issuedAt, _ := parseUTCTime(cursor.IssuedAt)
 	return model.IssueViewClaims{
-		Snapshot: cursor.Snapshot,
-		IssuedAt: issuedAt,
+		CursorEpoch:         cursor.CursorEpoch,
+		Snapshot:            cursor.Snapshot,
+		RetentionGeneration: cursor.RetentionGeneration,
+		IssuedAt:            issuedAt,
 	}, nil
 }
 
@@ -592,13 +627,60 @@ func (s *Service) ListIssues(
 	ctx context.Context,
 	request IssueListRequest,
 ) (IssueList, error) {
-	request = normalizeIssueListRequest(request)
-	if err := validateIssueListRequest(request); err != nil {
+	if err := s.RequireIssueEvidenceCapabilities(); err != nil {
 		return IssueList{}, err
 	}
+	var cursor *issueCursorEnvelope
+	if strings.TrimSpace(request.Cursor) != "" {
+		if request.Limit != 0 ||
+			request.Severity != "" ||
+			request.Category != "" ||
+			request.Harness != "" ||
+			request.Origin != "" ||
+			request.AnalysisStatus != "" ||
+			request.ObservedAfter != nil ||
+			request.Recurrence != "" ||
+			request.SessionID != "" ||
+			request.FingerprintID != "" ||
+			request.AttentionKind != "" ||
+			request.Experimental != "" {
+			return IssueList{}, invalidRequest("cursor continuation accepts only cursor")
+		}
+		decoded, err := s.openIssueCursor(request.Cursor, "issues")
+		if err != nil {
+			return IssueList{}, err
+		}
+		if decoded.Kind != "issues" ||
+			decoded.IssueID != "" ||
+			decoded.PositionID == "" ||
+			!issueIDPattern.MatchString(decoded.PositionID) ||
+			decoded.SeverityRank < 1 ||
+			decoded.SeverityRank > 5 ||
+			decoded.Time == "" {
+			return IssueList{}, invalidCursor()
+		}
+		if err := validateIssueCursorSnapshot(decoded, s.nowUTC()); err != nil {
+			return IssueList{}, err
+		}
+		if _, err := validateIssueCursorPositionTime(decoded.Time); err != nil {
+			return IssueList{}, err
+		}
+		recovered, err := issueListRequestFromCursor(decoded)
+		if err != nil {
+			return IssueList{}, err
+		}
+		request = recovered
+		cursor = &decoded
+	} else {
+		if request.Limit < 0 || request.Limit > maxIssueLimit {
+			return IssueList{}, invalidRequest("limit must be between one and 100")
+		}
+		request = normalizeIssueListRequest(request)
+		if err := validateIssueListRequest(request); err != nil {
+			return IssueList{}, err
+		}
+	}
 
-	fingerprint := issueFingerprint(request)
-	issuedAt := s.nowUTC()
 	query := model.IssueQuery{
 		Filter: model.IssueFilter{
 			Severity:       request.Severity,
@@ -613,58 +695,65 @@ func (s *Service) ListIssues(
 			AttentionKind:  request.AttentionKind,
 			Experimental:   request.Experimental,
 		},
-		Limit:    request.Limit,
-		IssuedAt: issuedAt,
+		Limit: request.Limit,
 	}
-	if request.Cursor != "" {
-		cursor, err := decodeIssueCursor(
-			request.Cursor,
-			fingerprint,
-			issuedAt,
-		)
-		if err != nil {
-			return IssueList{}, err
-		}
-		cursorTime, _ := time.Parse(time.RFC3339Nano, cursor.Time)
-		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+	if cursor != nil {
+		cursorTime, _ := validateIssueCursorPositionTime(cursor.Time)
+		issuedAt, _ := time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		query.CursorEpoch = cursor.CursorEpoch
 		query.Snapshot = cursor.Snapshot
+		query.RetentionGeneration = cursor.RetentionGeneration
 		query.IssuedAt = issuedAt
 		query.Cursor = &model.IssuePosition{
 			SeverityRank: cursor.SeverityRank,
 			Repeated:     cursor.Repeated,
 			LastObserved: cursorTime,
-			IssueID:      cursor.ID,
+			IssueID:      cursor.PositionID,
 		}
-	}
-	if s.issueRepository == nil {
-		return IssueList{}, errors.New("issue read repository is unavailable")
 	}
 
 	page, err := s.issueRepository.QueryIssues(ctx, query)
 	if err != nil {
 		return IssueList{}, mapIssueRepositoryError(err)
 	}
-	if page.Snapshot < 0 {
-		return IssueList{}, errors.New("issue repository returned an invalid snapshot")
+	if err := validateIssuePageSnapshot(
+		page.CursorEpoch,
+		page.Snapshot,
+		page.RetentionGeneration,
+		page.IssuedAt,
+	); err != nil {
+		return IssueList{}, err
+	}
+	if cursor != nil && !sameIssueSnapshot(
+		page.CursorEpoch,
+		page.Snapshot,
+		page.RetentionGeneration,
+		page.IssuedAt,
+		cursor.CursorEpoch,
+		cursor.Snapshot,
+		cursor.RetentionGeneration,
+		query.IssuedAt,
+	) {
+		return IssueList{}, errors.New("issue repository changed snapshots during list continuation")
 	}
 	data, hasMore := boundedIssuePage(page.Data, request.Limit, page.HasMore)
 	normalizeIssueSummaries(data)
-	nextCursor, err := issueNextCursor(
+	nextCursor, err := s.issueNextCursor(
 		data,
 		hasMore,
-		page.Snapshot,
-		fingerprint,
-		issuedAt,
+		request,
+		page,
 	)
 	if err != nil {
 		return IssueList{}, err
 	}
-	viewCursor, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_view",
-		Snapshot:    page.Snapshot,
-		Fingerprint: issueViewFingerprint(),
-		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
+	viewCursor, err := s.sealIssueCursor(issueCursorEnvelope{
+		Version:             issueCursorVersion,
+		Kind:                "issue_view",
+		CursorEpoch:         page.CursorEpoch,
+		Snapshot:            page.Snapshot,
+		RetentionGeneration: page.RetentionGeneration,
+		IssuedAt:            page.IssuedAt.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		return IssueList{}, err
@@ -674,6 +763,7 @@ func (s *Service) ListIssues(
 		ProjectionVersion: IssueProjectionVersion,
 		Data:              nonNil(data),
 		Analysis:          page.Analysis,
+		Selection:         normalizedIssueSelection(request),
 		ViewCursor:        viewCursor,
 		NextCursor:        nextCursor,
 		HasMore:           hasMore,
@@ -686,49 +776,89 @@ func (s *Service) GetIssue(
 	ctx context.Context,
 	request IssueDetailRequest,
 ) (IssueDetail, error) {
+	if err := s.RequireIssueEvidenceCapabilities(); err != nil {
+		return IssueDetail{}, err
+	}
 	request.IssueID = strings.ToLower(strings.TrimSpace(request.IssueID))
 	request.Cursor = strings.TrimSpace(request.Cursor)
 	request.ViewCursor = strings.TrimSpace(request.ViewCursor)
-	request.Limit = boundedLimit(request.Limit, defaultIssueLimit, maxIssueLimit)
 	if !issueIDPattern.MatchString(request.IssueID) {
 		return IssueDetail{}, invalidRequest("issue_id is malformed")
 	}
 	if request.Cursor != "" && request.ViewCursor != "" {
 		return IssueDetail{}, invalidRequest("cursor and view_cursor are mutually exclusive")
 	}
+	if request.Cursor != "" && request.Limit != 0 {
+		return IssueDetail{}, invalidRequest("cursor continuation accepts no limit")
+	}
+	if request.Limit < 0 || request.Limit > maxIssueLimit {
+		return IssueDetail{}, invalidRequest("limit must be between one and 100")
+	}
 
-	issuedAt := s.nowUTC()
+	limit := request.Limit
+	if limit == 0 {
+		limit = defaultIssueLimit
+	}
+	cursorEpoch := ""
 	snapshot := int64(0)
+	retentionGeneration := int64(0)
+	issuedAt := time.Time{}
 	var position *model.IssueOccurrencePosition
 	if request.Cursor != "" {
-		cursor, err := decodeOccurrenceCursor(
-			request.Cursor,
-			request.IssueID,
-			issuedAt,
-		)
+		cursor, err := s.openIssueCursor(request.Cursor, "issue_occurrences")
 		if err != nil {
 			return IssueDetail{}, err
 		}
-		cursorTime, _ := time.Parse(time.RFC3339Nano, cursor.Time)
+		if cursor.Kind != "issue_occurrences" ||
+			cursor.Filters != nil ||
+			cursor.IssueID != request.IssueID ||
+			cursor.Limit < 1 ||
+			cursor.Limit > maxIssueLimit ||
+			cursor.PositionID == "" ||
+			len(cursor.PositionID) > 256 ||
+			cursor.Time == "" ||
+			cursor.SeverityRank != 0 ||
+			cursor.Repeated {
+			return IssueDetail{}, invalidCursor()
+		}
+		if err := validateIssueCursorSnapshot(cursor, s.nowUTC()); err != nil {
+			return IssueDetail{}, err
+		}
+		cursorTime, err := validateIssueCursorPositionTime(cursor.Time)
+		if err != nil {
+			return IssueDetail{}, err
+		}
 		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		cursorEpoch = cursor.CursorEpoch
 		snapshot = cursor.Snapshot
+		retentionGeneration = cursor.RetentionGeneration
+		limit = cursor.Limit
 		position = &model.IssueOccurrencePosition{
 			LastObserved: cursorTime,
-			OccurrenceID: cursor.ID,
+			OccurrenceID: cursor.PositionID,
 		}
 	} else if request.ViewCursor != "" {
-		cursor, err := decodeViewCursor(request.ViewCursor, issuedAt)
+		cursor, err := s.openIssueCursor(request.ViewCursor, "issue_view")
 		if err != nil {
 			return IssueDetail{}, err
 		}
-		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
-		snapshot = cursor.Snapshot
-		if snapshot == 0 {
-			return IssueDetail{}, notFound()
+		if cursor.Kind != "issue_view" ||
+			cursor.Filters != nil ||
+			cursor.Limit != 0 ||
+			cursor.IssueID != "" ||
+			cursor.Time != "" ||
+			cursor.PositionID != "" ||
+			cursor.SeverityRank != 0 ||
+			cursor.Repeated {
+			return IssueDetail{}, invalidCursor()
 		}
-	}
-	if s.issueRepository == nil {
-		return IssueDetail{}, errors.New("issue read repository is unavailable")
+		if err := validateIssueCursorSnapshot(cursor, s.nowUTC()); err != nil {
+			return IssueDetail{}, err
+		}
+		issuedAt, _ = time.Parse(time.RFC3339Nano, cursor.IssuedAt)
+		cursorEpoch = cursor.CursorEpoch
+		snapshot = cursor.Snapshot
+		retentionGeneration = cursor.RetentionGeneration
 	}
 
 	summaryPage, err := s.issueRepository.QueryIssues(ctx, model.IssueQuery{
@@ -737,18 +867,39 @@ func (s *Service) GetIssue(
 			AttentionKind: model.AttentionKindAll,
 			Experimental:  model.ExperimentalInclude,
 		},
-		Limit:    1,
-		Snapshot: snapshot,
-		IssuedAt: issuedAt,
+		Limit:               1,
+		CursorEpoch:         cursorEpoch,
+		Snapshot:            snapshot,
+		RetentionGeneration: retentionGeneration,
+		IssuedAt:            issuedAt,
 	})
 	if err != nil {
 		return IssueDetail{}, mapIssueRepositoryError(err)
 	}
+	if err := validateIssuePageSnapshot(
+		summaryPage.CursorEpoch,
+		summaryPage.Snapshot,
+		summaryPage.RetentionGeneration,
+		summaryPage.IssuedAt,
+	); err != nil {
+		return IssueDetail{}, err
+	}
+	if snapshot != 0 && !sameIssueSnapshot(
+		summaryPage.CursorEpoch,
+		summaryPage.Snapshot,
+		summaryPage.RetentionGeneration,
+		summaryPage.IssuedAt,
+		cursorEpoch,
+		snapshot,
+		retentionGeneration,
+		issuedAt,
+	) {
+		return IssueDetail{}, errors.New("issue repository changed snapshots during detail read")
+	}
 	if len(summaryPage.Data) == 0 {
 		return IssueDetail{}, notFound()
 	}
-	if summaryPage.Snapshot < 0 ||
-		summaryPage.Data[0].IssueID != request.IssueID {
+	if summaryPage.Data[0].IssueID != request.IssueID {
 		return IssueDetail{}, errors.New("issue repository returned an inconsistent summary")
 	}
 	summary := summaryPage.Data[0]
@@ -757,41 +908,53 @@ func (s *Service) GetIssue(
 	occurrencePage, err := s.issueRepository.QueryIssueOccurrences(
 		ctx,
 		model.IssueOccurrenceQuery{
-			IssueID:  request.IssueID,
-			Limit:    request.Limit,
-			Snapshot: summaryPage.Snapshot,
-			IssuedAt: issuedAt,
-			Cursor:   position,
+			IssueID:             request.IssueID,
+			Limit:               limit,
+			CursorEpoch:         summaryPage.CursorEpoch,
+			Snapshot:            summaryPage.Snapshot,
+			RetentionGeneration: summaryPage.RetentionGeneration,
+			IssuedAt:            summaryPage.IssuedAt,
+			Cursor:              position,
 		},
 	)
 	if err != nil {
 		return IssueDetail{}, mapIssueRepositoryError(err)
 	}
-	if occurrencePage.Snapshot != summaryPage.Snapshot {
+	if !sameIssueSnapshot(
+		occurrencePage.CursorEpoch,
+		occurrencePage.Snapshot,
+		occurrencePage.RetentionGeneration,
+		occurrencePage.IssuedAt,
+		summaryPage.CursorEpoch,
+		summaryPage.Snapshot,
+		summaryPage.RetentionGeneration,
+		summaryPage.IssuedAt,
+	) {
 		return IssueDetail{}, errors.New("issue repository changed snapshots during detail read")
 	}
 	occurrences, hasMore := boundedOccurrencePage(
 		occurrencePage.Data,
-		request.Limit,
+		limit,
 		occurrencePage.HasMore,
 	)
 	normalizeIssueOccurrences(occurrences)
-	nextCursor, err := occurrenceNextCursor(
+	nextCursor, err := s.occurrenceNextCursor(
 		occurrences,
 		hasMore,
-		summaryPage.Snapshot,
 		request.IssueID,
-		issuedAt,
+		limit,
+		summaryPage,
 	)
 	if err != nil {
 		return IssueDetail{}, err
 	}
-	viewCursor, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_view",
-		Snapshot:    summaryPage.Snapshot,
-		Fingerprint: issueViewFingerprint(),
-		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
+	viewCursor, err := s.sealIssueCursor(issueCursorEnvelope{
+		Version:             issueCursorVersion,
+		Kind:                "issue_view",
+		CursorEpoch:         summaryPage.CursorEpoch,
+		Snapshot:            summaryPage.Snapshot,
+		RetentionGeneration: summaryPage.RetentionGeneration,
+		IssuedAt:            summaryPage.IssuedAt.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		return IssueDetail{}, err
@@ -803,11 +966,13 @@ func (s *Service) GetIssue(
 			Issue:       summary,
 			Occurrences: nonNil(occurrences),
 		},
-		ViewCursor:    viewCursor,
-		NextCursor:    nextCursor,
-		HasMore:       hasMore,
-		ReturnedCount: len(occurrences),
-		Limit:         request.Limit,
+		Catalog:                issueCatalog(summary.TitleCode),
+		GlobalAnalysisCoverage: summaryPage.Analysis,
+		ViewCursor:             viewCursor,
+		NextCursor:             nextCursor,
+		HasMore:                hasMore,
+		ReturnedCount:          len(occurrences),
+		Limit:                  limit,
 	}, nil
 }
 
@@ -815,34 +980,20 @@ func (s *Service) LookupSessionEvents(
 	ctx context.Context,
 	request EventLookupRequest,
 ) (EventLookup, error) {
-	request.SessionID = strings.TrimSpace(request.SessionID)
-	if request.SessionID == "" || len(request.SessionID) > 256 {
-		return EventLookup{}, invalidRequest("session_id is required and must not exceed 256 bytes")
-	}
-	if len(request.EventIDs) == 0 ||
-		len(request.EventIDs) > model.MaxEventLookupIDs {
-		return EventLookup{}, invalidRequest("event_id must be supplied between one and 50 times")
-	}
-	eventIDs := make([]string, 0, len(request.EventIDs))
-	seen := make(map[string]struct{}, len(request.EventIDs))
-	for _, value := range request.EventIDs {
-		eventID := strings.TrimSpace(value)
-		if !model.IsCanonicalUUIDv7(eventID) {
-			return EventLookup{}, invalidRequest("event_id is malformed")
-		}
-		if _, exists := seen[eventID]; exists {
-			continue
-		}
-		seen[eventID] = struct{}{}
-		eventIDs = append(eventIDs, eventID)
+	sessionID, eventIDs, err := normalizeEventLookupRequest(
+		request.SessionID,
+		request.EventIDs,
+	)
+	if err != nil {
+		return EventLookup{}, err
 	}
 	if s.issueRepository == nil {
-		return EventLookup{}, errors.New("issue read repository is unavailable")
+		return EventLookup{}, capabilityUnavailable()
 	}
 	result, err := s.issueRepository.LookupSessionEvents(
 		ctx,
 		model.EventLookupQuery{
-			SessionID: request.SessionID,
+			SessionID: sessionID,
 			EventIDs:  eventIDs,
 		},
 	)
@@ -920,80 +1071,10 @@ func eventNextCursor(
 	return &encoded, nil
 }
 
-func issueNextCursor(
-	data []model.IssueSummary,
-	hasMore bool,
-	snapshot int64,
-	fingerprint string,
-	issuedAt time.Time,
-) (*string, error) {
-	if !hasMore {
-		return nil, nil
-	}
-	if len(data) == 0 || snapshot <= 0 {
-		return nil, errors.New("issue repository reported an unusable continuation")
-	}
-	last := data[len(data)-1]
-	if !issueIDPattern.MatchString(last.IssueID) {
-		return nil, errors.New("issue repository returned a malformed issue ID")
-	}
-	rank := severityRank(last.Severity)
-	if rank == 0 || last.LastObservedAt.IsZero() {
-		return nil, errors.New("issue repository returned an invalid position")
-	}
-	encoded, err := encodeCursor(cursorEnvelope{
-		Version:      cursorVersion,
-		Kind:         "issues",
-		Snapshot:     snapshot,
-		Fingerprint:  fingerprint,
-		Time:         last.LastObservedAt.UTC().Format(time.RFC3339Nano),
-		ID:           last.IssueID,
-		IssuedAt:     issuedAt.UTC().Format(time.RFC3339Nano),
-		SeverityRank: rank,
-		Repeated:     last.SessionCount >= 2,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &encoded, nil
-}
-
-func occurrenceNextCursor(
-	data []model.IssueOccurrence,
-	hasMore bool,
-	snapshot int64,
-	issueID string,
-	issuedAt time.Time,
-) (*string, error) {
-	if !hasMore {
-		return nil, nil
-	}
-	if len(data) == 0 || snapshot <= 0 {
-		return nil, errors.New("issue repository reported an unusable occurrence continuation")
-	}
-	last := data[len(data)-1]
-	if last.OccurrenceID == "" ||
-		len(last.OccurrenceID) > 256 ||
-		last.LastObservedAt.IsZero() {
-		return nil, errors.New("issue repository returned an invalid occurrence position")
-	}
-	encoded, err := encodeCursor(cursorEnvelope{
-		Version:     cursorVersion,
-		Kind:        "issue_occurrences",
-		Snapshot:    snapshot,
-		Fingerprint: occurrenceFingerprint(issueID),
-		Time:        last.LastObservedAt.UTC().Format(time.RFC3339Nano),
-		ID:          last.OccurrenceID,
-		IssuedAt:    issuedAt.UTC().Format(time.RFC3339Nano),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &encoded, nil
-}
-
 func normalizeIssueListRequest(request IssueListRequest) IssueListRequest {
-	request.Limit = boundedLimit(request.Limit, defaultIssueLimit, maxIssueLimit)
+	if request.Limit == 0 {
+		request.Limit = defaultIssueLimit
+	}
 	request.Cursor = strings.TrimSpace(request.Cursor)
 	request.Severity = strings.ToLower(strings.TrimSpace(request.Severity))
 	request.Category = strings.ToLower(strings.TrimSpace(request.Category))
@@ -1066,46 +1147,6 @@ func validateIssueListRequest(request IssueListRequest) error {
 		return invalidRequest("experimental is unsupported")
 	}
 	return nil
-}
-
-func issueFingerprint(request IssueListRequest) string {
-	return stableFingerprint(struct {
-		Severity       string `json:"severity"`
-		Category       string `json:"category"`
-		Harness        string `json:"harness"`
-		Origin         string `json:"origin"`
-		AnalysisStatus string `json:"analysis_status"`
-		ObservedAfter  string `json:"observed_after"`
-		Recurrence     string `json:"recurrence"`
-		SessionID      string `json:"session_id"`
-		FingerprintID  string `json:"fingerprint_id"`
-		AttentionKind  string `json:"attention_kind"`
-		Experimental   string `json:"experimental"`
-	}{
-		Severity:       request.Severity,
-		Category:       request.Category,
-		Harness:        strings.ToLower(request.Harness),
-		Origin:         request.Origin,
-		AnalysisStatus: request.AnalysisStatus,
-		ObservedAfter:  timeString(request.ObservedAfter),
-		Recurrence:     request.Recurrence,
-		SessionID:      request.SessionID,
-		FingerprintID:  request.FingerprintID,
-		AttentionKind:  request.AttentionKind,
-		Experimental:   request.Experimental,
-	})
-}
-
-func issueViewFingerprint() string {
-	return stableFingerprint(struct {
-		Kind string `json:"kind"`
-	}{Kind: "issue_view"})
-}
-
-func occurrenceFingerprint(issueID string) string {
-	return stableFingerprint(struct {
-		IssueID string `json:"issue_id"`
-	}{IssueID: issueID})
 }
 
 func severityRank(severity string) int {
@@ -1303,85 +1344,6 @@ func decodeCursor(value, kind, fingerprint string) (cursorEnvelope, error) {
 	return cursor, nil
 }
 
-func decodeIssueCursor(
-	value string,
-	fingerprint string,
-	now time.Time,
-) (cursorEnvelope, error) {
-	cursor, err := decodeCursorEnvelope(value)
-	if err != nil {
-		return cursorEnvelope{}, err
-	}
-	if cursor.Version != cursorVersion ||
-		cursor.Kind != "issues" ||
-		cursor.Snapshot <= 0 ||
-		cursor.Fingerprint != fingerprint ||
-		!issueIDPattern.MatchString(cursor.ID) ||
-		cursor.Sequence != 0 ||
-		cursor.SeverityRank < 1 ||
-		cursor.SeverityRank > 5 {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	if _, err := parseUTCTime(cursor.Time); err != nil {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
-		return cursorEnvelope{}, err
-	}
-	return cursor, nil
-}
-
-func decodeViewCursor(value string, now time.Time) (cursorEnvelope, error) {
-	cursor, err := decodeCursorEnvelope(value)
-	if err != nil {
-		return cursorEnvelope{}, err
-	}
-	if cursor.Version != cursorVersion ||
-		cursor.Kind != "issue_view" ||
-		cursor.Snapshot < 0 ||
-		cursor.Fingerprint != issueViewFingerprint() ||
-		cursor.Time != "" ||
-		cursor.Sequence != 0 ||
-		cursor.ID != "" ||
-		cursor.SeverityRank != 0 ||
-		cursor.Repeated {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
-		return cursorEnvelope{}, err
-	}
-	return cursor, nil
-}
-
-func decodeOccurrenceCursor(
-	value string,
-	issueID string,
-	now time.Time,
-) (cursorEnvelope, error) {
-	cursor, err := decodeCursorEnvelope(value)
-	if err != nil {
-		return cursorEnvelope{}, err
-	}
-	if cursor.Version != cursorVersion ||
-		cursor.Kind != "issue_occurrences" ||
-		cursor.Snapshot <= 0 ||
-		cursor.Fingerprint != occurrenceFingerprint(issueID) ||
-		cursor.ID == "" ||
-		len(cursor.ID) > 256 ||
-		cursor.Sequence != 0 ||
-		cursor.SeverityRank != 0 ||
-		cursor.Repeated {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	if _, err := parseUTCTime(cursor.Time); err != nil {
-		return cursorEnvelope{}, invalidCursor()
-	}
-	if err := validateCursorIssuedAt(cursor.IssuedAt, now); err != nil {
-		return cursorEnvelope{}, err
-	}
-	return cursor, nil
-}
-
 func decodeCursorEnvelope(value string) (cursorEnvelope, error) {
 	if value == "" || len(value) > maxCursorBytes {
 		return cursorEnvelope{}, invalidCursor()
@@ -1435,6 +1397,13 @@ func invalidRequest(message string) error {
 
 func cursorExpired() error {
 	return fmt.Errorf("%w: opaque cursor lifetime elapsed", ErrCursorExpired)
+}
+
+func capabilityUnavailable() error {
+	return fmt.Errorf(
+		"%w: issue repository and authenticated issue cursor codec are required",
+		ErrCapabilityUnavailable,
+	)
 }
 
 func notFound() error {
