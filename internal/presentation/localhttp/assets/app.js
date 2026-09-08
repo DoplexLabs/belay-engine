@@ -6,6 +6,7 @@
     events: { initial: 100, step: 100, maximum: 500 },
     findings: { page: 20 },
     issues: { page: 20 },
+    familyMembers: { page: 20 },
     occurrences: { page: 20 },
     fixMonitoring: { page: 20 },
     fixMonitoringDetail: { page: 20 },
@@ -188,17 +189,24 @@
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
     activeView: "attention",
-    issues: createIssueBucket("issue"),
+    issues: createAttentionFamilyBucket(),
     evidenceGaps: createIssueBucket("evidence_gap"),
     issueFilters: {
       severity: "",
-      recurrence: "",
       harness: "",
-      category: "",
       origin: "",
       analysisStatus: "",
       experimental: false,
     },
+    selectedFamily: null,
+    selectedFamilyViewCursor: "",
+    familyMembers: [],
+    familyMemberNextCursor: "",
+    familyMemberHasMore: false,
+    familyMemberStatus: "idle",
+    familyMemberError: "",
+    familyMemberRequestGeneration: 0,
+    familyReturnFocus: null,
     fixMonitoring: createFixMonitoringBucket(),
     fixMonitoringFilters: {
       state: "",
@@ -302,9 +310,7 @@
     coverageCompleteness: document.querySelector("#coverage-completeness"),
     attentionFilters: document.querySelector("#attention-filters"),
     issueFilterSeverity: document.querySelector("#issue-filter-severity"),
-    issueFilterRecurrence: document.querySelector("#issue-filter-recurrence"),
     issueFilterHarness: document.querySelector("#issue-filter-harness"),
-    issueFilterCategory: document.querySelector("#issue-filter-category"),
     issueFilterOrigin: document.querySelector("#issue-filter-origin"),
     issueFilterStatus: document.querySelector("#issue-filter-status"),
     issueFilterExperimental: document.querySelector(
@@ -390,6 +396,30 @@
       "#evidence-gaps-load-more",
     ),
     attentionWelcome: document.querySelector("#attention-welcome"),
+    familyDetail: document.querySelector("#family-detail"),
+    familyBackButton: document.querySelector("#family-back-button"),
+    familyDetailHeading: document.querySelector("#family-detail-heading"),
+    familyDetailBadges: document.querySelector("#family-detail-badges"),
+    familyAnalysisQualifier: document.querySelector(
+      "#family-analysis-qualifier",
+    ),
+    familyObservation: document.querySelector("#family-observation"),
+    familyCaveat: document.querySelector("#family-caveat"),
+    familyNextAction: document.querySelector("#family-next-action"),
+    familySummary: document.querySelector("#family-summary"),
+    familyMemberCount: document.querySelector("#family-member-count"),
+    familyMemberList: document.querySelector("#family-member-list"),
+    familyMembersLoading: document.querySelector("#family-members-loading"),
+    familyMembersEmpty: document.querySelector("#family-members-empty"),
+    familyMembersPagination: document.querySelector(
+      "#family-members-pagination",
+    ),
+    familyMembersPageStatus: document.querySelector(
+      "#family-members-page-status",
+    ),
+    familyMembersLoadMore: document.querySelector(
+      "#family-members-load-more",
+    ),
     issueDetail: document.querySelector("#issue-detail"),
     issueBackButton: document.querySelector("#issue-back-button"),
     issueDetailKind: document.querySelector("#issue-detail-kind"),
@@ -422,6 +452,7 @@
     issueFingerprint: document.querySelector("#issue-fingerprint"),
     copyIssueFingerprint: document.querySelector("#copy-issue-fingerprint"),
     recordFixAttempt: document.querySelector("#record-fix-attempt"),
+    fixAttemptsSection: document.querySelector("#fix-attempts-section"),
     fixEligibilityStatus: document.querySelector("#fix-eligibility-status"),
     fixMonitoringDetailStatus: document.querySelector(
       "#fix-monitoring-detail-status",
@@ -535,6 +566,8 @@
   const focusRegistry = {
     monitoringCards: new Map(),
     issueCards: new Map(),
+    familyCards: new Map(),
+    familyMembers: new Map(),
     occurrenceActions: new Map(),
     sessionCards: new Map(),
     fixTriggers: new Map(),
@@ -562,6 +595,20 @@
       nextCursor: "",
       hasMore: false,
       viewCursor: "",
+      analysis: null,
+      selection: null,
+      status: "idle",
+      error: null,
+      requestGeneration: 0,
+    };
+  }
+
+  function createAttentionFamilyBucket() {
+    return {
+      kind: "family",
+      data: [],
+      nextCursor: "",
+      hasMore: false,
       analysis: null,
       selection: null,
       status: "idle",
@@ -632,8 +679,6 @@
     elements.attentionFilters.addEventListener("submit", (event) => {
       event.preventDefault();
       state.issueFilters.harness = elements.issueFilterHarness.value.trim();
-      state.issueFilters.category =
-        elements.issueFilterCategory.value.trim().toLowerCase();
       resetAndLoadAttention();
     });
     elements.navAttention.addEventListener("click", () => {
@@ -647,6 +692,9 @@
     elements.refreshButton.addEventListener("click", () => refreshAll(true));
     elements.issuesLoadMore.addEventListener("click", () => {
       loadIssueBucket(state.issues, true);
+    });
+    elements.familyMembersLoadMore.addEventListener("click", () => {
+      void loadAttentionFamilyDetail(true);
     });
     elements.evidenceGapsLoadMore.addEventListener("click", () => {
       loadIssueBucket(state.evidenceGaps, true);
@@ -716,6 +764,7 @@
       loadMoreFixMonitoringDetail,
     );
     elements.issueBackButton.addEventListener("click", closeIssueDetail);
+    elements.familyBackButton.addEventListener("click", closeFamilyDetail);
     elements.copyIssueFingerprint.addEventListener("click", () => {
       copyText(
         readText(state.selectedIssue && state.selectedIssue.fingerprint_id),
@@ -779,7 +828,6 @@
 
     [
       [elements.issueFilterSeverity, "severity"],
-      [elements.issueFilterRecurrence, "recurrence"],
       [elements.issueFilterOrigin, "origin"],
       [elements.issueFilterStatus, "analysisStatus"],
     ].forEach(([element, key]) => {
@@ -788,20 +836,13 @@
         resetAndLoadAttention();
       });
     });
-    [elements.issueFilterHarness, elements.issueFilterCategory].forEach(
-      (element) => {
-        element.addEventListener("input", () => {
-          globalThis.clearTimeout(issueFilterTimer);
-          issueFilterTimer = globalThis.setTimeout(() => {
-            state.issueFilters.harness =
-              elements.issueFilterHarness.value.trim();
-            state.issueFilters.category =
-              elements.issueFilterCategory.value.trim().toLowerCase();
-            resetAndLoadAttention();
-          }, 250);
-        });
-      },
-    );
+    elements.issueFilterHarness.addEventListener("input", () => {
+      globalThis.clearTimeout(issueFilterTimer);
+      issueFilterTimer = globalThis.setTimeout(() => {
+        state.issueFilters.harness = elements.issueFilterHarness.value.trim();
+        resetAndLoadAttention();
+      }, 250);
+    });
     elements.issueFilterExperimental.addEventListener("change", () => {
       state.issueFilters.experimental =
         elements.issueFilterExperimental.checked;
@@ -810,17 +851,13 @@
     elements.clearAttentionFilters.addEventListener("click", () => {
       state.issueFilters = {
         severity: "",
-        recurrence: "",
         harness: "",
-        category: "",
         origin: "",
         analysisStatus: "",
         experimental: false,
       };
       elements.issueFilterSeverity.value = "";
-      elements.issueFilterRecurrence.value = "";
       elements.issueFilterHarness.value = "";
-      elements.issueFilterCategory.value = "";
       elements.issueFilterOrigin.value = "";
       elements.issueFilterStatus.value = "";
       elements.issueFilterExperimental.checked = false;
@@ -874,6 +911,8 @@
         closeTimeline();
       } else if (state.activeView === "attention" && state.selectedIssueID) {
         closeIssueDetail();
+      } else if (state.activeView === "attention" && state.selectedFamily) {
+        closeFamilyDetail();
       }
     });
     const handleMobileChange = () => applyPaneAccessibility();
@@ -953,7 +992,7 @@
 
   function applyPaneAccessibility() {
     const mobile = mobileQuery.matches;
-    const issueOpen = Boolean(state.selectedIssueID);
+    const issueOpen = Boolean(state.selectedIssueID || state.selectedFamily);
     const sessionOpen = Boolean(state.selectedSessionID);
     setObscuredPane(
       elements.attentionListPane,
@@ -986,6 +1025,14 @@
     return `${kind === "evidence_gap" ? "evidence_gap" : "issue"}\u0000${issueID}`;
   }
 
+  function familyFocusKey(familyID) {
+    return readText(familyID);
+  }
+
+  function familyMemberFocusKey(familyID, issueID) {
+    return `${readText(familyID)}\u0000${readText(issueID)}`;
+  }
+
   function occurrenceFocusKey(issueID, occurrence) {
     const occurrenceID = readText(occurrence && occurrence.occurrence_id);
     const sessionID = readText(occurrence && occurrence.session_id);
@@ -1006,6 +1053,12 @@
     }
     if (reference.type === "issue") {
       return focusRegistry.issueCards.get(reference.key) || null;
+    }
+    if (reference.type === "family") {
+      return focusRegistry.familyCards.get(reference.familyID) || null;
+    }
+    if (reference.type === "family-member") {
+      return focusRegistry.familyMembers.get(reference.key) || null;
     }
     if (reference.type === "occurrence") {
       return focusRegistry.occurrenceActions.get(reference.key) || null;
@@ -1068,20 +1121,29 @@
     const selectedID = preserveSelection ? state.selectedIssueID : "";
     const selectedKind = preserveSelection ? state.selectedIssueKind : "";
     const selectedSource = preserveSelection ? state.selectedIssueSource : "";
+    const selectedFamilyID =
+      preserveSelection && state.selectedFamily
+        ? readText(state.selectedFamily.family_id)
+        : "";
     const selectedBucket =
       selectedKind === "evidence_gap" ? state.evidenceGaps : state.issues;
     const selectedPageBudget = Math.max(
       1,
       Math.ceil(selectedBucket.data.length / pageLimits.issues.page),
     );
-    if (selectedID && selectedSource !== "monitoring") {
-      closeIssueDetail(false);
+    if (
+      (selectedID || selectedFamilyID) &&
+      selectedSource !== "monitoring"
+    ) {
+      closeIssueDetail(false, true);
+      clearAttentionFamilyDetailState();
       showAttentionNotice(
         "Refreshing Attention; selected detail is hidden until current data confirms it.",
         "pending",
       );
     } else if (!preserveSelection) {
-      closeIssueDetail(false);
+      closeIssueDetail(false, true);
+      clearAttentionFamilyDetailState();
     }
     resetIssueBucket(state.issues);
     resetIssueBucket(state.evidenceGaps);
@@ -1141,12 +1203,23 @@
       }
       return false;
     }
-    if (!selectedID) return true;
+    if (!selectedID && !selectedFamilyID) return true;
 
-    const bucket =
-      selectedKind === "evidence_gap" ? state.evidenceGaps : state.issues;
-    const chainReady = await loadIssuePagesForSelection(
-      bucket,
+    if (selectedKind === "evidence_gap") {
+      const chainReady = await loadIssuePagesForSelection(
+        state.evidenceGaps,
+        selectedID,
+        selectedPageBudget,
+      );
+      if (!chainReady) return false;
+      const summary = state.evidenceGaps.data.find(
+        (issue) => readText(issue.issue_id) === selectedID,
+      );
+      return summary ? selectIssue(summary, selectedKind, false) : true;
+    }
+
+    const chainReady = await loadFamilyPagesForSelection(
+      selectedFamilyID,
       selectedID,
       selectedPageBudget,
     );
@@ -1160,12 +1233,17 @@
       }
       return false;
     }
-    const summary = bucket.data.find(
-      (issue) => readText(issue.issue_id) === selectedID,
+    const summary = state.issues.data.find(
+      (family) =>
+        (selectedFamilyID &&
+          readText(family.family_id) === selectedFamilyID) ||
+        (!selectedFamilyID &&
+          readText(family.kind) === "exact_issue" &&
+          readText(family.representative_issue_id) === selectedID),
     );
     if (!summary) {
       showAttentionNotice(
-        bucket.hasMore
+        state.issues.hasMore
           ? "Attention refreshed. The selected signal was not confirmed in the refreshed loaded results; load more to find it."
           : "Attention refreshed. The selected signal is no longer visible under the current filters.",
         "status",
@@ -1173,7 +1251,43 @@
       );
       return true;
     }
-    const detailReady = await selectIssue(summary, selectedKind, false);
+    let detailReady = false;
+    if (readText(summary.kind) === "mapped_upstream") {
+      detailReady = await selectAttentionFamily(summary, false);
+      if (detailReady && selectedID) {
+        const member = state.familyMembers.find(
+          (value) => readText(value.issue && value.issue.issue_id) === selectedID,
+        );
+        if (member) {
+          detailReady = await selectIssue(member.issue, "issue", false, {
+            viewCursor: readCursor(member.view_cursor),
+            catalog: member.catalog,
+            source: "family",
+            returnFocus: {
+              type: "family-member",
+              key: familyMemberFocusKey(
+                readText(summary.family_id),
+                selectedID,
+              ),
+            },
+          });
+        }
+      }
+    } else {
+      detailReady = await selectIssue(
+        exactFamilyRepresentative(summary),
+        "issue",
+        false,
+        {
+          viewCursor: readCursor(summary.view_cursor),
+          catalog: summary.catalog,
+          returnFocus: {
+            type: "family",
+            familyID: readText(summary.family_id),
+          },
+        },
+      );
+    }
     if (refreshGeneration !== state.attentionRefreshGeneration) return false;
     if (!detailReady) {
       closeIssueDetail(false);
@@ -1207,9 +1321,30 @@
     return true;
   }
 
+  async function loadFamilyPagesForSelection(familyID, issueID, pageBudget) {
+    for (let page = 1; page < pageBudget; page += 1) {
+      if (
+        state.issues.data.some(
+          (family) =>
+            (familyID && readText(family.family_id) === familyID) ||
+            (!familyID &&
+              readText(family.kind) === "exact_issue" &&
+              readText(family.representative_issue_id) === issueID),
+        ) ||
+        !state.issues.hasMore
+      ) {
+        break;
+      }
+      const pageReady = await loadIssueBucket(state.issues, true);
+      if (!pageReady) return false;
+    }
+    return true;
+  }
+
   function resetAndLoadAttention() {
     state.attentionRefreshGeneration += 1;
-    closeIssueDetail(false);
+    closeIssueDetail(false, true);
+    clearAttentionFamilyDetailState();
     hideAttentionNotice();
     resetIssueBucket(state.issues);
     resetIssueBucket(state.evidenceGaps);
@@ -1677,6 +1812,9 @@
   }
 
   async function loadIssueBucket(bucket, append) {
+    if (bucket.kind === "family") {
+      return loadAttentionFamilies(bucket, append);
+    }
     const generation = ++bucket.requestGeneration;
     const cursor = append ? bucket.nextCursor : "";
     bucket.status = append ? "loading-more" : "loading";
@@ -1736,6 +1874,77 @@
     }
   }
 
+  async function loadAttentionFamilies(bucket, append) {
+    const generation = ++bucket.requestGeneration;
+    const cursor = append ? bucket.nextCursor : "";
+    bucket.status = append ? "loading-more" : "loading";
+    bucket.error = null;
+    renderIssueBucket(bucket);
+    try {
+      const response = await apiGet(buildAttentionFamilyPath(cursor));
+      if (generation !== bucket.requestGeneration) return false;
+      const page = Array.isArray(response.data) ? response.data : [];
+      const pagination = requireCursorPage(
+        response,
+        cursor,
+        "attention-family-list",
+      );
+      const selection = readIssueSelection(response.selection, "issue");
+      page.forEach(requireAttentionFamilySummary);
+      bucket.data =
+        append && cursor
+          ? deduplicateByID(bucket.data.concat(page), "family_id")
+          : deduplicateByID(page, "family_id");
+      bucket.nextCursor = pagination.nextCursor;
+      bucket.hasMore = pagination.hasMore;
+      bucket.analysis = readGlobalAnalysisCoverage(
+        response.analysis,
+        bucket.analysis,
+      );
+      bucket.selection = selection;
+      bucket.status = "ready";
+      renderIssueBucket(bucket);
+      renderAnalysisCoverage();
+      return true;
+    } catch (error) {
+      if (generation !== bucket.requestGeneration) return false;
+      if (isCursorExpired(error)) {
+        await refreshAttentionAfterExpiry();
+        return false;
+      }
+      bucket.status = "error";
+      bucket.error = error;
+      renderIssueBucket(bucket);
+      renderAnalysisCoverage();
+      showError("Unable to group Attention signals", error);
+      return false;
+    }
+  }
+
+  function buildAttentionFamilyPath(cursor) {
+    if (cursor) {
+      return `/v1/attention-families?${new URLSearchParams({ cursor }).toString()}`;
+    }
+    const parameters = new URLSearchParams({
+      limit: String(pageLimits.issues.page),
+      attention_kind: "issue",
+      experimental: state.issueFilters.experimental ? "include" : "stable",
+    });
+    if (state.issueFilters.severity) {
+      parameters.set("severity", state.issueFilters.severity);
+    }
+    if (state.issueFilters.harness) {
+      parameters.set("harness", state.issueFilters.harness);
+    }
+    if (state.issueFilters.origin) {
+      parameters.set("origin", state.issueFilters.origin);
+    }
+    if (state.issueFilters.analysisStatus) {
+      parameters.set("analysis_status", state.issueFilters.analysisStatus);
+    }
+    return `/v1/attention-families?${parameters.toString()}`;
+  }
+
   function buildIssuePath(kind, cursor) {
     if (cursor) {
       return `/v1/issues?${new URLSearchParams({ cursor }).toString()}`;
@@ -1748,14 +1957,8 @@
     if (state.issueFilters.severity) {
       parameters.set("severity", state.issueFilters.severity);
     }
-    if (state.issueFilters.recurrence) {
-      parameters.set("recurrence", state.issueFilters.recurrence);
-    }
     if (state.issueFilters.harness) {
       parameters.set("harness", state.issueFilters.harness);
-    }
-    if (state.issueFilters.category) {
-      parameters.set("category", state.issueFilters.category);
     }
     if (state.issueFilters.origin) {
       parameters.set("origin", state.issueFilters.origin);
@@ -1767,6 +1970,10 @@
   }
 
   function renderIssueBucket(bucket) {
+    if (bucket.kind === "family") {
+      renderAttentionFamilyBucket(bucket);
+      return;
+    }
     const selection = bucket.selection || expectedIssueSelection(bucket.kind);
     const isGap = selection.attention_kind === "evidence_gap";
     const list = isGap ? elements.evidenceGapList : elements.issueList;
@@ -1810,6 +2017,33 @@
     renderAttentionFilters();
   }
 
+  function renderAttentionFamilyBucket(bucket) {
+    focusRegistry.familyCards.clear();
+    const fragment = document.createDocumentFragment();
+    bucket.data.forEach((family) => {
+      fragment.append(createAttentionFamilyCard(family));
+    });
+    elements.issueList.replaceChildren(fragment);
+    elements.issuesLoading.hidden = bucket.status !== "loading";
+    elements.issuesEmpty.hidden =
+      bucket.data.length !== 0 ||
+      bucket.status === "loading" ||
+      bucket.status === "idle";
+    elements.issueCount.textContent = bucket.hasMore
+      ? `${bucket.data.length}+`
+      : String(bucket.data.length);
+    elements.issuesPagination.hidden = !bucket.hasMore;
+    elements.issuesLoadMore.disabled = bucket.status === "loading-more";
+    elements.issuesPageStatus.textContent = bucket.hasMore
+      ? `Showing ${bucket.data.length} signal families; more are available.`
+      : `Showing ${bucket.data.length} supported signal ${
+          bucket.data.length === 1 ? "family" : "families"
+        }.`;
+    if (!elements.issuesEmpty.hidden) renderIssueEmptyState(bucket);
+    renderAttentionTotals();
+    renderAttentionFilters();
+  }
+
   function renderIssueEmptyState(bucket) {
     const isGap = bucket.kind === "evidence_gap";
     const title = isGap
@@ -1821,14 +2055,16 @@
     if (bucket.status === "error") {
       title.textContent = isGap
         ? "Evidence gaps unavailable"
-        : "Issues unavailable";
-      detail.textContent = "The Local read failed. Existing session data remains available.";
+        : "Attention grouping is unavailable";
+      detail.textContent = isGap
+        ? "The Local read failed. Existing session data remains available."
+        : "Sessions and exact retained data remain available.";
       return;
     }
     if (attentionFiltersActive()) {
       title.textContent = isGap
         ? "No evidence gaps match these filters"
-        : "No issues match these filters";
+        : "No supported signals match these filters";
       detail.textContent =
         "Analysis coverage is shown above; this is not a global safety claim.";
       return;
@@ -1837,15 +2073,15 @@
     if (analysis && analysis.complete === true) {
       title.textContent = isGap
         ? "No evidence gaps reported by configured detectors"
-        : "No issues reported by configured detectors";
+        : "No supported signals were reported in completed retained analysis";
       detail.textContent = isGap
         ? "Supported completed analysis did not report a verification evidence gap."
-        : "Configured deterministic detectors reported no stable issues.";
+        : "The fixed family catalog admitted no stable Attention signals.";
       return;
     }
     title.textContent = isGap
       ? "No evidence gaps are available from completed analysis"
-      : "No issues are available from completed analysis";
+      : "No supported signals are available from completed analysis";
     detail.textContent = incompleteCoverageText(analysis);
   }
 
@@ -1914,9 +2150,7 @@
       state.issueFilters.experimental ||
       [
         "severity",
-        "recurrence",
         "harness",
-        "category",
         "origin",
         "analysisStatus",
       ].some((key) => Boolean(state.issueFilters[key]))
@@ -1925,8 +2159,448 @@
 
   function occurrenceFiltersActive() {
     return Boolean(
-      state.issueFilters.harness || state.issueFilters.analysisStatus,
+      state.issueFilters.harness ||
+        state.issueFilters.analysisStatus ||
+        state.issueFilters.severity ||
+        state.issueFilters.origin,
     );
+  }
+
+  function requireAttentionFamilySummary(family) {
+    if (
+      !isRecord(family) ||
+      !readText(family.family_id) ||
+      !["exact_issue", "mapped_upstream"].includes(readText(family.kind)) ||
+      !readText(family.representative_issue_id) ||
+      !readCursor(family.view_cursor) ||
+      !isRecord(family.catalog)
+    ) {
+      throw new Error("Local API returned an invalid Attention family.");
+    }
+    return family;
+  }
+
+  function createAttentionFamilyCard(family) {
+    const familyID = readText(family.family_id);
+    const kind = readText(family.kind);
+    const catalog = isRecord(family.catalog) ? family.catalog : {};
+    const article = createElement("article", "issue-card family-card");
+    const button = createElement("button", "issue-card-main");
+    button.type = "button";
+    button.setAttribute(
+      "aria-pressed",
+      String(
+        Boolean(state.selectedFamily) &&
+          readText(state.selectedFamily.family_id) === familyID,
+      ),
+    );
+    button.addEventListener("click", () => {
+      if (kind === "exact_issue") {
+        const issue = exactFamilyRepresentative(family);
+        void selectIssue(issue, "issue", true, {
+          viewCursor: readCursor(family.view_cursor),
+          catalog,
+          returnFocus: {
+            type: "family",
+            familyID,
+          },
+        });
+        return;
+      }
+      void selectAttentionFamily(family, true);
+    });
+    if (familyID) focusRegistry.familyCards.set(familyFocusKey(familyID), button);
+
+    const top = createElement("span", "issue-card-top");
+    const severity = createElement(
+      "span",
+      "severity-badge",
+      readableLabel(family.severity, "Reported"),
+    );
+    severity.dataset.tone = severityTone(family.severity);
+    const title = createElement("span", "issue-card-title");
+    title.append(
+      createElement(
+        "strong",
+        "",
+        readText(catalog.display_title) || "Supported Attention signal",
+      ),
+      createElement("small", "", attentionFamilyObservationSummary(family)),
+    );
+    top.append(severity, title);
+    const status = normalizeAnalysisStatus(family.analysis_status);
+    if (status !== "current") {
+      top.append(
+        createElement("span", "analysis-badge", analysisStatusLabel(status)),
+      );
+    }
+    const meta = createElement("span", "issue-card-meta");
+    meta.append(
+      createElement(
+        "span",
+        "",
+        `${formatNumber(family.occurrence_count)} retained ${
+          toFiniteNumber(family.occurrence_count) === 1
+            ? "observation"
+            : "observations"
+        }`,
+      ),
+      createElement("span", "", issueHarnessLabel(family.harnesses)),
+      createElement("time", "", formatRelativeTime(family.last_observed_at)),
+    );
+    button.append(top, meta);
+    if (kind === "mapped_upstream") {
+      button.append(
+        createElement(
+          "span",
+          "issue-card-caveat family-disclosure",
+          "Grouped by one known signal type. Retained records may come from unrelated sessions or projects and do not establish recurrence or one cause.",
+        ),
+      );
+    }
+    button.append(
+      createElement(
+        "span",
+        "issue-card-action",
+        kind === "mapped_upstream"
+          ? "Review affected sessions and cited configuration evidence"
+          : issueNextActionLabel(catalog.next_evidence_action),
+      ),
+    );
+    if (family.experimental === true) {
+      button.append(
+        createElement("span", "experimental-label", "Experimental signal"),
+      );
+    }
+    article.append(button);
+    return article;
+  }
+
+  function attentionFamilyObservationSummary(family) {
+    const sessions = Number(family && family.session_count);
+    const sessionText =
+      Number.isFinite(sessions) && sessions > 0
+        ? `Observed in ${formatNumber(sessions)} retained ${
+            sessions === 1 ? "session" : "sessions"
+          }`
+        : "Retained session count unavailable";
+    return `${sessionText} · ${issueHarnessLabel(
+      family && family.harnesses,
+    )} · last observed ${formatRelativeTime(family && family.last_observed_at)}`;
+  }
+
+  function exactFamilyRepresentative(family) {
+    return {
+      issue_id: readText(family.representative_issue_id),
+      title_code: "",
+      severity: readText(family.severity),
+      confidence: readText(family.confidence),
+      first_observed_at: family.first_observed_at,
+      last_observed_at: family.last_observed_at,
+      occurrence_count: family.occurrence_count,
+      session_count: family.session_count,
+      harnesses: Array.isArray(family.harnesses) ? family.harnesses : [],
+      analysis_status: readText(family.analysis_status),
+      evidence_complete: family.evidence_complete,
+      retained_history_only: family.retained_history_only === true,
+      experimental: family.experimental === true,
+    };
+  }
+
+  async function selectAttentionFamily(family, moveFocus) {
+    const familyID = readText(family && family.family_id);
+    const viewCursor = readCursor(family && family.view_cursor);
+    if (
+      !familyID ||
+      readText(family && family.kind) !== "mapped_upstream" ||
+      !viewCursor
+    ) {
+      return false;
+    }
+    if (moveFocus) state.attentionRefreshGeneration += 1;
+    state.selectedFamily = family;
+    state.selectedFamilyViewCursor = viewCursor;
+    state.familyMembers = [];
+    state.familyMemberNextCursor = "";
+    state.familyMemberHasMore = false;
+    state.familyMemberStatus = "loading";
+    state.familyMemberError = "";
+    state.familyReturnFocus = { type: "family", familyID };
+    focusRegistry.familyMembers.clear();
+    elements.attentionWelcome.hidden = true;
+    elements.issueDetail.hidden = true;
+    elements.familyDetail.hidden = false;
+    document.body.classList.add("is-attention-detail-open");
+    renderIssueBucket(state.issues);
+    renderAttentionFamilyDetail();
+    applyPaneAccessibility();
+    if (moveFocus) focusCurrentElement(elements.familyDetailHeading);
+    return loadAttentionFamilyDetail(false);
+  }
+
+  async function loadAttentionFamilyDetail(append) {
+    const family = state.selectedFamily;
+    const familyID = readText(family && family.family_id);
+    if (!familyID) return false;
+    const generation = ++state.familyMemberRequestGeneration;
+    const cursor = append ? state.familyMemberNextCursor : "";
+    state.familyMemberStatus = append ? "loading-more" : "loading";
+    state.familyMemberError = "";
+    if (!append) {
+      state.familyMembers = [];
+      state.familyMemberNextCursor = "";
+      state.familyMemberHasMore = false;
+    }
+    renderAttentionFamilyDetail();
+    const parameters = cursor
+      ? new URLSearchParams({ cursor })
+      : new URLSearchParams({
+          limit: String(pageLimits.familyMembers.page),
+          view_cursor: state.selectedFamilyViewCursor,
+        });
+    try {
+      const response = await apiGet(
+        `/v1/attention-families/${encodeURIComponent(
+          familyID,
+        )}?${parameters.toString()}`,
+      );
+      if (
+        generation !== state.familyMemberRequestGeneration ||
+        familyID !==
+          readText(state.selectedFamily && state.selectedFamily.family_id)
+      ) {
+        return false;
+      }
+      const payload = isRecord(response.data) ? response.data : {};
+      const responseFamily = requireAttentionFamilySummary(payload.family);
+      if (
+        readText(responseFamily.family_id) !== familyID ||
+        readText(responseFamily.kind) !== "mapped_upstream"
+      ) {
+        throw new Error(
+          "Local API returned inconsistent Attention family detail.",
+        );
+      }
+      const responseViewCursor = readCursor(response.view_cursor);
+      if (
+        !responseViewCursor ||
+        responseViewCursor !== state.selectedFamilyViewCursor
+      ) {
+        throw new Error(
+          "Local API changed the Attention family view cursor.",
+        );
+      }
+      const members = Array.isArray(payload.members) ? payload.members : [];
+      members.forEach(requireAttentionFamilyMember);
+      const pagination = requireCursorPage(
+        response,
+        cursor,
+        "attention-family-members",
+      );
+      state.selectedFamily = responseFamily;
+      state.familyMembers =
+        append && cursor
+          ? deduplicateFamilyMembers(state.familyMembers.concat(members))
+          : deduplicateFamilyMembers(members);
+      state.familyMemberNextCursor = pagination.nextCursor;
+      state.familyMemberHasMore = pagination.hasMore;
+      state.familyMemberStatus = "ready";
+      state.issues.analysis = readGlobalAnalysisCoverage(
+        response.global_analysis_coverage,
+        state.issues.analysis,
+      );
+      renderAttentionFamilyDetail();
+      renderAnalysisCoverage();
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.familyMemberRequestGeneration ||
+        familyID !==
+          readText(state.selectedFamily && state.selectedFamily.family_id)
+      ) {
+        return false;
+      }
+      if (isCursorExpired(error)) {
+        clearAttentionFamilyDetailState();
+        await refreshAttentionAfterExpiry();
+        return false;
+      }
+      state.familyMemberStatus = "error";
+      state.familyMemberError =
+        error instanceof Error
+          ? error.message
+          : "Affected retained records could not be loaded.";
+      renderAttentionFamilyDetail();
+      return false;
+    }
+  }
+
+  function requireAttentionFamilyMember(member) {
+    if (
+      !isRecord(member) ||
+      !isRecord(member.issue) ||
+      !readText(member.issue.issue_id) ||
+      !isRecord(member.catalog) ||
+      !readCursor(member.view_cursor)
+    ) {
+      throw new Error("Local API returned an invalid Attention family member.");
+    }
+    return member;
+  }
+
+  function deduplicateFamilyMembers(values) {
+    const seen = new Set();
+    return values.filter((member) => {
+      const issueID = readText(member && member.issue && member.issue.issue_id);
+      if (!issueID || seen.has(issueID)) return false;
+      seen.add(issueID);
+      return true;
+    });
+  }
+
+  function renderAttentionFamilyDetail() {
+    const family = state.selectedFamily;
+    if (!family) return;
+    const catalog = isRecord(family.catalog) ? family.catalog : {};
+    const status = normalizeAnalysisStatus(family.analysis_status);
+    elements.familyDetailHeading.textContent =
+      readText(catalog.display_title) || "Supported Attention signal";
+    elements.familyObservation.textContent =
+      readText(catalog.observation_statement) ||
+      "A supported deterministic signal was reported in retained Local analysis.";
+    elements.familyCaveat.textContent = [
+      readText(catalog.caveat),
+      "Grouped by one known signal type. Members may come from unrelated sessions or projects and do not establish recurrence or one cause.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    elements.familyNextAction.textContent =
+      "Next: choose one affected retained record to inspect its cited evidence.";
+    elements.familyAnalysisQualifier.textContent =
+      analysisQualifiers[status] || "";
+    elements.familyDetailBadges.replaceChildren(
+      createToneBadge(family.severity),
+      createElement("span", "meta-badge", analysisStatusLabel(status)),
+    );
+    elements.familySummary.textContent = attentionFamilyDetailSummary(family);
+    focusRegistry.familyMembers.clear();
+    const fragment = document.createDocumentFragment();
+    state.familyMembers.forEach((member) => {
+      fragment.append(createAttentionFamilyMember(member));
+    });
+    if (state.familyMemberStatus === "error") {
+      fragment.append(
+        createElement(
+          "p",
+          "family-member-error",
+          state.familyMemberError ||
+            "Affected retained records could not be loaded. Other Attention data remains available.",
+        ),
+      );
+    }
+    elements.familyMemberList.replaceChildren(fragment);
+    elements.familyMembersLoading.hidden =
+      state.familyMemberStatus !== "loading";
+    elements.familyMembersEmpty.hidden =
+      state.familyMemberStatus !== "ready" ||
+      state.familyMembers.length !== 0;
+    elements.familyMemberCount.textContent = state.familyMemberHasMore
+      ? `${state.familyMembers.length}+`
+      : String(state.familyMembers.length);
+    elements.familyMembersPagination.hidden = !state.familyMemberHasMore;
+    elements.familyMembersLoadMore.disabled =
+      state.familyMemberStatus === "loading-more";
+    elements.familyMembersPageStatus.textContent = state.familyMemberHasMore
+      ? `Showing ${state.familyMembers.length} affected retained records; more are available.`
+      : `Showing ${state.familyMembers.length} affected retained ${
+          state.familyMembers.length === 1 ? "record" : "records"
+        }.`;
+  }
+
+  function attentionFamilyDetailSummary(family) {
+    const scope = isRecord(family.scope) ? family.scope : {};
+    const scoped =
+      toFiniteNumber(scope.resolved) + toFiniteNumber(scope.lexical);
+    const uncertain =
+      toFiniteNumber(scope.unscoped) + toFiniteNumber(scope.conflict);
+    const parts = [
+      attentionFamilyObservationSummary(family),
+      `${formatNumber(family.supporting_issue_count)} exact retained ${
+        toFiniteNumber(family.supporting_issue_count) === 1
+          ? "record"
+          : "records"
+      }`,
+    ];
+    if (scoped > 0) parts.push(`${formatNumber(scoped)} with usable scope`);
+    if (uncertain > 0) {
+      parts.push(
+        `${formatNumber(uncertain)} with unavailable or conflicting scope`,
+      );
+    }
+    return parts.join(" · ");
+  }
+
+  function createAttentionFamilyMember(member) {
+    const issue = member.issue;
+    const familyID = readText(
+      state.selectedFamily && state.selectedFamily.family_id,
+    );
+    const issueID = readText(issue.issue_id);
+    const key = familyMemberFocusKey(familyID, issueID);
+    const button = createElement("button", "family-member-card");
+    button.type = "button";
+    button.append(
+      createElement(
+        "strong",
+        "",
+        `${issueHarnessLabel(issue.harnesses)} · observed ${formatRelativeTime(
+          issue.last_observed_at,
+        )}`,
+      ),
+      createElement(
+        "span",
+        "",
+        `${formatNumber(issue.occurrence_count)} retained ${
+          toFiniteNumber(issue.occurrence_count) === 1
+            ? "observation"
+            : "observations"
+        } · ${issueRecurrenceLabel(issue)}`,
+      ),
+      createElement(
+        "span",
+        "family-member-state",
+        [
+          analysisStatusLabel(normalizeAnalysisStatus(issue.analysis_status)),
+          evidenceCompletenessLabel(issue.evidence_complete),
+          familyScopeReliability(issue.scope_quality),
+        ].join(" · "),
+      ),
+      createElement("span", "issue-card-action", "Inspect cited evidence"),
+    );
+    button.addEventListener("click", () => {
+      void selectIssue(issue, "issue", true, {
+        viewCursor: readCursor(member.view_cursor),
+        catalog: member.catalog,
+        source: "family",
+        returnFocus: { type: "family-member", key },
+      });
+    });
+    focusRegistry.familyMembers.set(key, button);
+    return button;
+  }
+
+  function familyScopeReliability(value) {
+    switch (readText(value).toLowerCase()) {
+      case "resolved":
+      case "lexical":
+        return "Scope available for this exact record";
+      case "conflict":
+        return "Scope evidence conflicts";
+      case "unscoped":
+        return "Scope unavailable";
+      default:
+        return "Scope reliability unavailable";
+    }
   }
 
   function createIssueCard(issue, kind) {
@@ -2018,19 +2692,22 @@
     return article;
   }
 
-  function selectIssue(issue, kind, moveFocus) {
+  function selectIssue(issue, kind, moveFocus, options = {}) {
     const issueID = readText(issue.issue_id);
     if (!issueID) return Promise.resolve(false);
     if (moveFocus) state.attentionRefreshGeneration += 1;
     state.selectedIssueID = issueID;
     state.selectedIssueKind = kind === "evidence_gap" ? "evidence_gap" : "issue";
-    state.selectedIssueSource = "attention";
+    state.selectedIssueSource =
+      options.source === "family" ? "family" : "attention";
     state.selectedDrivingAnnotationID = "";
     state.selectedIssue = issue;
-    state.selectedIssueCatalog = null;
+    state.selectedIssueCatalog = isRecord(options.catalog)
+      ? options.catalog
+      : null;
     state.selectedGlobalAnalysisCoverage = null;
     state.selectedIssueViewCursor = "";
-    state.issueReturnFocus = {
+    state.issueReturnFocus = options.returnFocus || {
       type: "issue",
       key: issueFocusKey(state.selectedIssueKind, issueID),
     };
@@ -2041,6 +2718,7 @@
     resetIssueEvidencePreview();
     resetFixIssueState();
     elements.attentionWelcome.hidden = true;
+    elements.familyDetail.hidden = true;
     elements.issueDetail.hidden = false;
     document.body.classList.add("is-attention-detail-open");
     renderIssueBucket(state.issues);
@@ -2052,9 +2730,11 @@
       state.selectedIssueKind === "evidence_gap"
         ? state.evidenceGaps
         : state.issues;
-    void loadFixEligibility(issueID, bucket.viewCursor);
+    const viewCursor =
+      readCursor(options.viewCursor) || readCursor(bucket.viewCursor);
+    void loadFixEligibility(issueID, viewCursor);
     void loadFixMonitoringDetail(issueID, false, "", false, "");
-    return loadIssueDetail(false, bucket.viewCursor);
+    return loadIssueDetail(false, viewCursor);
   }
 
   async function loadIssueDetail(append, viewCursor) {
@@ -2317,7 +2997,8 @@
   function renderIssueDetail() {
     const issue = state.selectedIssue || {};
     const catalog =
-      state.selectedIssueSource === "attention"
+      state.selectedIssueSource === "attention" ||
+      state.selectedIssueSource === "family"
         ? issueDetailCatalog(issue, state.selectedIssueCatalog)
         : monitoringSubjectCatalog(issue);
     const historyOnly =
@@ -4621,8 +5302,12 @@
     return row;
   }
 
-  function closeIssueDetail(restoreFocus = true) {
+  function closeIssueDetail(restoreFocus = true, forceList = false) {
     const returnFocus = state.issueReturnFocus;
+    const returnToFamily =
+      !forceList &&
+      state.selectedIssueSource === "family" &&
+      Boolean(state.selectedFamily);
     state.occurrenceRequestGeneration += 1;
     state.fixEligibilityRequestGeneration += 1;
     state.fixHistoryRequestGeneration += 1;
@@ -4643,16 +5328,57 @@
     resetIssueEvidencePreview();
     resetFixIssueState();
     state.issueReturnFocus = null;
-    document.body.classList.remove("is-attention-detail-open");
     elements.issueDetail.hidden = true;
-    elements.attentionWelcome.hidden = false;
+    elements.familyDetail.hidden = !returnToFamily;
+    elements.attentionWelcome.hidden = returnToFamily || Boolean(state.selectedFamily);
+    document.body.classList.toggle(
+      "is-attention-detail-open",
+      returnToFamily || Boolean(state.selectedFamily),
+    );
     renderIssueBucket(state.issues);
     renderIssueBucket(state.evidenceGaps);
     renderFixMonitoring();
+    if (returnToFamily) renderAttentionFamilyDetail();
+    applyPaneAccessibility();
+    if (restoreFocus) {
+      restoreLogicalFocus(
+        returnFocus,
+        returnToFamily ? elements.familyDetailHeading : elements.navAttention,
+      );
+    }
+  }
+
+  function closeFamilyDetail(restoreFocus = true) {
+    const returnFocus = state.familyReturnFocus;
+    if (state.selectedIssueID) closeIssueDetail(false, true);
+    clearAttentionFamilyDetailState();
+    elements.familyDetail.hidden = true;
+    elements.issueDetail.hidden = true;
+    elements.attentionWelcome.hidden = false;
+    document.body.classList.remove("is-attention-detail-open");
+    renderIssueBucket(state.issues);
     applyPaneAccessibility();
     if (restoreFocus) {
       restoreLogicalFocus(returnFocus, elements.navAttention);
     }
+  }
+
+  function clearAttentionFamilyDetailState() {
+    state.familyMemberRequestGeneration += 1;
+    state.selectedFamily = null;
+    state.selectedFamilyViewCursor = "";
+    state.familyMembers = [];
+    state.familyMemberNextCursor = "";
+    state.familyMemberHasMore = false;
+    state.familyMemberStatus = "idle";
+    state.familyMemberError = "";
+    state.familyReturnFocus = null;
+    focusRegistry.familyMembers.clear();
+    elements.familyMemberList.replaceChildren();
+    elements.familyMembersLoading.hidden = true;
+    elements.familyMembersEmpty.hidden = true;
+    elements.familyMembersPagination.hidden = true;
+    elements.familyMembersPageStatus.textContent = "";
   }
 
   async function refreshAttentionAfterExpiry() {
@@ -4687,7 +5413,12 @@
     resetIssueBucket(state.evidenceGaps);
     resetFixMonitoringBucket(false);
     clearExpiredFixDraftState();
-    closeIssueDetail(false);
+    closeIssueDetail(false, true);
+    clearAttentionFamilyDetailState();
+    elements.familyDetail.hidden = true;
+    elements.attentionWelcome.hidden = false;
+    document.body.classList.remove("is-attention-detail-open");
+    applyPaneAccessibility();
   }
 
   function clearExpiredFixDraftState() {

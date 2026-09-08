@@ -121,14 +121,6 @@
                   </select>
                 </label>
                 <label>
-                  <span>Session spread</span>
-                  <select id="issue-filter-recurrence">
-                    <option value="">Single + repeated</option>
-                    <option value="repeated">Exact matches</option>
-                    <option value="single">One session</option>
-                  </select>
-                </label>
-                <label>
                   <span>Harness</span>
                   <input
                     id="issue-filter-harness"
@@ -144,17 +136,6 @@
               <details class="advanced-filters">
                 <summary>Advanced filters</summary>
                 <div class="advanced-filter-grid">
-                  <label>
-                    <span>Category</span>
-                    <input
-                      id="issue-filter-category"
-                      type="text"
-                      maxlength="64"
-                      autocomplete="off"
-                      spellcheck="false"
-                      placeholder="Exact category code"
-                    >
-                  </label>
                   <label>
                     <span>Origin</span>
                     <select id="issue-filter-origin">
@@ -352,7 +333,7 @@
                 <div class="attention-section-heading">
                   <div>
                     <p class="eyebrow">Stable signals</p>
-                    <h2 id="stable-issues-heading">Issues</h2>
+                    <h2 id="stable-issues-heading">Supported signals</h2>
                   </div>
                   <span class="count-pill" id="issue-count">—</span>
                 </div>
@@ -360,16 +341,18 @@
                 <div class="issue-list" id="issue-list" aria-live="polite"></div>
                 <div class="panel-state compact-state" id="issues-loading">
                   <span class="spinner" aria-hidden="true"></span>
-                  <p>Loading stable issues…</p>
+                  <p>Loading supported signals…</p>
                 </div>
                 <div class="panel-state compact-state" id="issues-empty" hidden>
                   <span class="empty-glyph" aria-hidden="true">◇</span>
-                  <p id="issues-empty-title">No issues available</p>
+                  <p id="issues-empty-title">No supported signals available</p>
                   <small id="issues-empty-detail"></small>
                 </div>
                 <div class="pagination-bar" id="issues-pagination" hidden>
                   <p id="issues-page-status"></p>
-                  <button id="issues-load-more" type="button">Load more issues</button>
+                  <button id="issues-load-more" type="button">
+                    Load more signal families
+                  </button>
                 </div>
               </section>
 
@@ -438,10 +421,88 @@
               <p class="eyebrow">Evidence first</p>
               <h2>Select a signal to inspect exact matching sessions</h2>
               <p>
-                Belay groups deterministic fingerprints from retained Local
-                evidence. A match does not establish shared root cause, intent,
-                correctness, or whether a fix worked.
+                Belay groups supported deterministic signals from retained
+                Local evidence. A family may contain unrelated sessions or
+                projects and does not establish recurrence, one cause, or
+                whether a fix worked.
               </p>
+            </div>
+
+            <div class="family-detail" id="family-detail" hidden>
+              <header class="issue-detail-header">
+                <button
+                  class="back-button issue-back-button"
+                  id="family-back-button"
+                  type="button"
+                  aria-label="Back to Attention list"
+                >
+                  ←
+                </button>
+                <div>
+                  <p class="eyebrow">Signal family</p>
+                  <h2 id="family-detail-heading" tabindex="-1">Supported signal</h2>
+                  <div class="issue-detail-badges" id="family-detail-badges"></div>
+                </div>
+              </header>
+
+              <div class="issue-detail-scroll">
+                <section
+                  class="issue-explanation"
+                  aria-labelledby="family-observation-heading"
+                >
+                  <p class="analysis-qualifier" id="family-analysis-qualifier"></p>
+                  <h3 id="family-observation-heading">What Belay observed</h3>
+                  <p id="family-observation"></p>
+                  <p class="section-disclosure" id="family-caveat"></p>
+                  <p class="issue-next-action" id="family-next-action"></p>
+                </section>
+
+                <section
+                  class="matching-section family-members-section"
+                  aria-labelledby="family-members-heading"
+                >
+                  <div class="matching-heading">
+                    <div>
+                      <p class="eyebrow">Affected retained records</p>
+                      <h3 id="family-members-heading">Choose one record to inspect</h3>
+                    </div>
+                    <span class="count-pill" id="family-member-count">—</span>
+                  </div>
+                  <p class="section-disclosure" id="family-summary"></p>
+                  <div
+                    class="family-member-list"
+                    id="family-member-list"
+                    aria-live="polite"
+                  ></div>
+                  <div
+                    class="panel-state compact-state"
+                    id="family-members-loading"
+                    hidden
+                  >
+                    <span class="spinner" aria-hidden="true"></span>
+                    <p>Loading affected retained records…</p>
+                  </div>
+                  <div
+                    class="panel-state compact-state"
+                    id="family-members-empty"
+                    hidden
+                  >
+                    <span class="empty-glyph" aria-hidden="true">◇</span>
+                    <p>No affected retained records were returned</p>
+                    <small>Refresh Attention before relying on this family.</small>
+                  </div>
+                  <div
+                    class="pagination-bar"
+                    id="family-members-pagination"
+                    hidden
+                  >
+                    <p id="family-members-page-status" aria-live="polite"></p>
+                    <button id="family-members-load-more" type="button">
+                      Load more affected records
+                    </button>
+                  </div>
+                </section>
+              </div>
             </div>
 
             <div class="issue-detail" id="issue-detail" hidden>

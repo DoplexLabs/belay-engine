@@ -87,8 +87,13 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`issues: createIssueBucket("issue")`,
+		`issues: createAttentionFamilyBucket()`,
 		`evidenceGaps: createIssueBucket("evidence_gap")`,
+		"`/v1/attention-families?${new URLSearchParams({ cursor }).toString()}`",
+		"`/v1/attention-families/${encodeURIComponent(",
+		`view_cursor: state.selectedFamilyViewCursor`,
+		`readText(family.kind) === "exact_issue"`,
+		`kind === "mapped_upstream"`,
 		`attention_kind: kind`,
 		`experimental: state.issueFilters.experimental ? "include" : "stable"`,
 		`bucket.viewCursor = viewCursor;`,
@@ -109,9 +114,9 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 		`"Analysis status is unavailable; result freshness and completeness are uncertain."`,
 		`return "Analysis status unavailable";`,
 		`return "Session count unavailable";`,
-		`"No issues match these filters"`,
-		`"No issues reported by configured detectors"`,
-		`"No issues are available from completed analysis"`,
+		`"No supported signals match these filters"`,
+		`"No supported signals were reported in completed retained analysis"`,
+		`"No supported signals are available from completed analysis"`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("Attention browser data contract is missing %q", required)
@@ -343,6 +348,65 @@ func TestAttentionBrowserUsesCursorOnlyContinuationAndAdditiveMetadata(t *testin
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("browser metadata/cursor consistency contract is missing %q", required)
+		}
+	}
+}
+
+func TestAttentionFamilyBrowserListDetailAndExactChildContract(t *testing.T) {
+	index := readBrowserAsset(t, "assets/index.html")
+	app := readBrowserAsset(t, "assets/app.js")
+	styles := readBrowserAsset(t, "assets/styles.css")
+
+	for _, forbidden := range []string{
+		`id="issue-filter-recurrence"`,
+		`id="issue-filter-category"`,
+		`Session spread`,
+		`state.issueFilters.recurrence`,
+		`state.issueFilters.category`,
+		`parameters.set("recurrence"`,
+		`parameters.set("category"`,
+	} {
+		if strings.Contains(index, forbidden) || strings.Contains(app, forbidden) {
+			t.Errorf("default Attention retains removed filter contract %q", forbidden)
+		}
+	}
+
+	for _, required := range []string{
+		`function buildAttentionFamilyPath(cursor)`,
+		"return `/v1/attention-families?${new URLSearchParams({ cursor }).toString()}`;",
+		`view_cursor: state.selectedFamilyViewCursor`,
+		`? new URLSearchParams({ cursor })`,
+		`function selectAttentionFamily(family, moveFocus)`,
+		`readText(family.kind) === "exact_issue"`,
+		`kind === "mapped_upstream"`,
+		`source: "family"`,
+		`returnFocus: { type: "family-member", key }`,
+		`Grouped by one known signal type.`,
+		`do not establish recurrence or one cause`,
+		`clearAttentionFamilyDetailState();`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("Attention family browser contract is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`id="family-detail" hidden`,
+		`id="family-detail-heading" tabindex="-1"`,
+		`id="family-member-list"`,
+		`id="family-members-load-more"`,
+	} {
+		if !strings.Contains(index, required) {
+			t.Errorf("Attention family shell is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.family-detail`,
+		`.family-member-card`,
+		`min-height: 44px;`,
+		`overflow-wrap: anywhere;`,
+	} {
+		if !strings.Contains(styles, required) {
+			t.Errorf("Attention family styles are missing %q", required)
 		}
 	}
 }
@@ -599,7 +663,8 @@ func TestAttentionBrowserCursorExpiryClearsEveryDependentState(t *testing.T) {
 		`resetIssueBucket(state.evidenceGaps);`,
 		`resetFixMonitoringBucket(false);`,
 		`clearExpiredFixDraftState();`,
-		`closeIssueDetail(false);`,
+		`closeIssueDetail(false, true);`,
+		`clearAttentionFamilyDetailState();`,
 	} {
 		if !strings.Contains(clearState, required) {
 			t.Errorf("410 state clearing is missing %q", required)

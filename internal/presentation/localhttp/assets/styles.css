@@ -599,7 +599,8 @@ select:focus-visible {
 }
 
 .issue-list,
-.occurrence-list {
+.occurrence-list,
+.family-member-list {
   display: grid;
   gap: 6px;
   padding: 0 7px 8px;
@@ -686,6 +687,66 @@ select:focus-visible {
   color: var(--accent);
   font-size: 10px;
   font-weight: 750;
+}
+
+.family-disclosure {
+  color: var(--subtle);
+}
+
+.family-detail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+}
+
+.family-member-list {
+  margin-top: 12px;
+  padding: 0;
+}
+
+.family-member-card {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.family-member-card:hover,
+.family-member-card:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.family-member-card strong {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.family-member-card > span:not(.issue-card-action) {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.family-member-state {
+  color: var(--subtle) !important;
+}
+
+.family-member-error {
+  margin: 0;
+  padding: 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .issue-code {
@@ -2910,6 +2971,14 @@ h1 {
     padding: 18px;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .family-detail {
+    min-height: 100%;
+  }
+
+  .family-member-card {
+    padding: 14px;
   }
 
   .issue-metadata {
