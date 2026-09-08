@@ -220,6 +220,8 @@
     selectedIssueID: "",
     selectedIssueKind: "",
     selectedIssueSource: "",
+    selectedIssueFamilyID: "",
+    selectedIssueEvidenceContext: "",
     selectedDrivingAnnotationID: "",
     selectedIssue: null,
     selectedIssueCatalog: null,
@@ -1124,7 +1126,15 @@
     const selectedFamilyID =
       preserveSelection && state.selectedFamily
         ? readText(state.selectedFamily.family_id)
-        : "";
+        : preserveSelection
+          ? readText(state.selectedIssueFamilyID)
+          : "";
+    const selectedFamilyMemberPageBudget = Math.max(
+      1,
+      Math.ceil(
+        state.familyMembers.length / pageLimits.familyMembers.page,
+      ),
+    );
     const selectedBucket =
       selectedKind === "evidence_gap" ? state.evidenceGaps : state.issues;
     const selectedPageBudget = Math.max(
@@ -1255,21 +1265,53 @@
     if (readText(summary.kind) === "mapped_upstream") {
       detailReady = await selectAttentionFamily(summary, false);
       if (detailReady && selectedID) {
+        const memberChainReady = await loadFamilyMemberPagesForSelection(
+          selectedID,
+          selectedFamilyMemberPageBudget,
+        );
+        if (!memberChainReady) {
+          closeFamilyDetail(false);
+          detailReady = false;
+        }
         const member = state.familyMembers.find(
           (value) => readText(value.issue && value.issue.issue_id) === selectedID,
         );
-        if (member) {
+        if (memberChainReady && !member) {
+          const moreMembersRemain = state.familyMemberHasMore;
+          closeFamilyDetail(false);
+          showAttentionNotice(
+            moreMembersRemain
+              ? "Attention refreshed, but the selected affected record was not found within the previously loaded bounded pages. Reopen the family and load more to select it again."
+              : "Attention refreshed, but the selected affected record is no longer visible in this family.",
+            "status",
+            8000,
+          );
+          return true;
+        }
+        if (memberChainReady && member) {
+          const returnToFamily =
+            selectedSource === "family" &&
+            toFiniteNumber(summary.supporting_issue_count) > 1;
+          const returnFocus = returnToFamily
+            ? {
+                type: "family-member",
+                key: familyMemberFocusKey(
+                  readText(summary.family_id),
+                  selectedID,
+                ),
+              }
+            : {
+                type: "family",
+                familyID: readText(summary.family_id),
+              };
+          if (!returnToFamily) closeFamilyDetail(false);
           detailReady = await selectIssue(member.issue, "issue", false, {
             viewCursor: readCursor(member.view_cursor),
             catalog: member.catalog,
-            source: "family",
-            returnFocus: {
-              type: "family-member",
-              key: familyMemberFocusKey(
-                readText(summary.family_id),
-                selectedID,
-              ),
-            },
+            source: returnToFamily ? "family" : "attention",
+            familyID: readText(summary.family_id),
+            evidenceContext: attentionFamilyEvidenceContext(summary),
+            returnFocus,
           });
         }
       }
@@ -1281,6 +1323,8 @@
         {
           viewCursor: readCursor(summary.view_cursor),
           catalog: summary.catalog,
+          familyID: readText(summary.family_id),
+          evidenceContext: attentionFamilyEvidenceContext(summary),
           returnFocus: {
             type: "family",
             familyID: readText(summary.family_id),
@@ -1336,6 +1380,23 @@
         break;
       }
       const pageReady = await loadIssueBucket(state.issues, true);
+      if (!pageReady) return false;
+    }
+    return true;
+  }
+
+  async function loadFamilyMemberPagesForSelection(issueID, pageBudget) {
+    for (let page = 1; page < pageBudget; page += 1) {
+      if (
+        state.familyMembers.some(
+          (member) =>
+            readText(member.issue && member.issue.issue_id) === issueID,
+        ) ||
+        !state.familyMemberHasMore
+      ) {
+        break;
+      }
+      const pageReady = await loadAttentionFamilyDetail(true);
       if (!pageReady) return false;
     }
     return true;
@@ -1733,6 +1794,8 @@
     state.selectedIssueID = issueID;
     state.selectedIssueKind = "issue";
     state.selectedIssueSource = "monitoring";
+    state.selectedIssueFamilyID = "";
+    state.selectedIssueEvidenceContext = "";
     state.selectedDrivingAnnotationID = annotationID;
     state.selectedIssue = monitoringSummaryIssue(summary);
     state.issueReturnFocus = {
@@ -1898,8 +1961,8 @@
       bucket.nextCursor = pagination.nextCursor;
       bucket.hasMore = pagination.hasMore;
       bucket.analysis = readGlobalAnalysisCoverage(
-        response.analysis,
-        bucket.analysis,
+        response.global_analysis_coverage,
+        readGlobalAnalysisCoverage(response.analysis, bucket.analysis),
       );
       bucket.selection = selection;
       bucket.status = "ready";
@@ -2141,7 +2204,7 @@
         : "Showing stable signals.";
     elements.clearAttentionFilters.disabled = !active;
     elements.issueFilterDisclosure.textContent = occurrenceFiltersActive()
-      ? "Filter selected each issue through a matching occurrence; totals include all exact occurrences visible in this snapshot."
+      ? "Displayed family and evidence-gap counts match the active filters. Analysis coverage remains global for the frozen retained snapshot."
       : "";
   }
 
@@ -2200,11 +2263,16 @@
         void selectIssue(issue, "issue", true, {
           viewCursor: readCursor(family.view_cursor),
           catalog,
+          familyID,
           returnFocus: {
             type: "family",
             familyID,
           },
         });
+        return;
+      }
+      if (toFiniteNumber(family.supporting_issue_count) === 1) {
+        void selectSingleMemberAttentionFamily(family, true);
         return;
       }
       void selectAttentionFamily(family, true);
@@ -2307,7 +2375,11 @@
     };
   }
 
-  async function selectAttentionFamily(family, moveFocus) {
+  async function selectAttentionFamily(
+    family,
+    moveFocus,
+    revealDetail = true,
+  ) {
     const familyID = readText(family && family.family_id);
     const viewCursor = readCursor(family && family.view_cursor);
     if (
@@ -2327,15 +2399,73 @@
     state.familyMemberError = "";
     state.familyReturnFocus = { type: "family", familyID };
     focusRegistry.familyMembers.clear();
-    elements.attentionWelcome.hidden = true;
+    elements.attentionWelcome.hidden = revealDetail;
     elements.issueDetail.hidden = true;
-    elements.familyDetail.hidden = false;
-    document.body.classList.add("is-attention-detail-open");
+    elements.familyDetail.hidden = !revealDetail;
+    document.body.classList.toggle(
+      "is-attention-detail-open",
+      revealDetail,
+    );
     renderIssueBucket(state.issues);
     renderAttentionFamilyDetail();
     applyPaneAccessibility();
-    if (moveFocus) focusCurrentElement(elements.familyDetailHeading);
+    if (moveFocus && revealDetail) {
+      focusCurrentElement(elements.familyDetailHeading);
+    }
     return loadAttentionFamilyDetail(false);
+  }
+
+  async function selectSingleMemberAttentionFamily(family, moveFocus) {
+    const ready = await selectAttentionFamily(family, false, false);
+    if (!ready) {
+      closeFamilyDetail(false);
+      showAttentionNotice(
+        "The affected retained record could not be opened. Refresh Attention and try again.",
+        "error",
+      );
+      return false;
+    }
+    if (
+      state.familyMembers.length !== 1 ||
+      state.familyMemberHasMore
+    ) {
+      elements.attentionWelcome.hidden = true;
+      elements.familyDetail.hidden = false;
+      document.body.classList.add("is-attention-detail-open");
+      renderAttentionFamilyDetail();
+      applyPaneAccessibility();
+      if (moveFocus) focusCurrentElement(elements.familyDetailHeading);
+      return true;
+    }
+    const member = state.familyMembers[0];
+    const familyID = readText(family && family.family_id);
+    const evidenceContext = attentionFamilyEvidenceContext(family);
+    closeFamilyDetail(false);
+    return selectIssue(member.issue, "issue", moveFocus, {
+      viewCursor: readCursor(member.view_cursor),
+      catalog: member.catalog,
+      familyID,
+      evidenceContext,
+      returnFocus: { type: "family", familyID },
+    });
+  }
+
+  function attentionFamilyEvidenceContext(family) {
+    const catalog = isRecord(family && family.catalog) ? family.catalog : {};
+    return readText(catalog.mapping_key) ===
+      "attention.agent_guardrails_configuration"
+      ? "mapped-guardrail"
+      : "";
+  }
+
+  function issueEvidenceContext(issue, catalog, previous = "") {
+    if (previous === "mapped-guardrail") return previous;
+    const sourceSignalCode =
+      safeSourceSignalCode(catalog && catalog.source_signal_code) ||
+      safeSourceSignalCode(issue && issue.source_signal_code);
+    return sourceSignalCode === "tamper.guardrails_off"
+      ? "mapped-guardrail"
+      : "";
   }
 
   async function loadAttentionFamilyDetail(append) {
@@ -2582,6 +2712,10 @@
         viewCursor: readCursor(member.view_cursor),
         catalog: member.catalog,
         source: "family",
+        familyID,
+        evidenceContext: attentionFamilyEvidenceContext(
+          state.selectedFamily,
+        ),
         returnFocus: { type: "family-member", key },
       });
     });
@@ -2700,6 +2834,8 @@
     state.selectedIssueKind = kind === "evidence_gap" ? "evidence_gap" : "issue";
     state.selectedIssueSource =
       options.source === "family" ? "family" : "attention";
+    state.selectedIssueFamilyID = readText(options.familyID);
+    state.selectedIssueEvidenceContext = readText(options.evidenceContext);
     state.selectedDrivingAnnotationID = "";
     state.selectedIssue = issue;
     state.selectedIssueCatalog = isRecord(options.catalog)
@@ -2796,6 +2932,11 @@
         issue,
         state.selectedIssueCatalog,
       );
+      const evidenceContext = issueEvidenceContext(
+        issue,
+        catalog,
+        state.selectedIssueEvidenceContext,
+      );
       const globalCoverage = readGlobalAnalysisCoverage(
         response.global_analysis_coverage,
         state.selectedGlobalAnalysisCoverage ||
@@ -2803,6 +2944,7 @@
       );
       state.selectedIssue = issue;
       state.selectedIssueCatalog = catalog;
+      state.selectedIssueEvidenceContext = evidenceContext;
       state.selectedGlobalAnalysisCoverage = globalCoverage;
       state.selectedIssueViewCursor = responseViewCursor;
       state.occurrences =
@@ -2963,7 +3105,9 @@
       );
     } else if (preview.status === "ready" && preview.events.length) {
       preview.events.forEach((event) => {
-        fragment.append(createLookupEvent(event));
+        fragment.append(
+          createLookupEvent(event, state.selectedIssueEvidenceContext),
+        );
       });
     } else if (preview.status === "ready") {
       fragment.append(
@@ -5272,7 +5416,11 @@
         `${found} of ${requested} cited events retained; ${missing} missing.`,
       ),
     );
-    events.forEach((event) => fragment.append(createLookupEvent(event)));
+    events.forEach((event) =>
+      fragment.append(
+        createLookupEvent(event, state.selectedIssueEvidenceContext),
+      ),
+    );
     if (!events.length) {
       fragment.append(
         createElement(
@@ -5285,14 +5433,15 @@
     container.replaceChildren(fragment);
   }
 
-  function createLookupEvent(event) {
+  function createLookupEvent(event, evidenceContext = "") {
     const observation = isRecord(event.observation) ? event.observation : {};
+    const descriptor = eventDescriptor(observation, evidenceContext);
     const row = createElement("article", "lookup-event");
     row.append(
       createElement(
         "strong",
         "",
-        eventDescriptor(observation).label,
+        descriptor.label,
       ),
       createElement(
         "time",
@@ -5302,7 +5451,7 @@
       createElement(
         "p",
         "",
-        eventDescriptor(observation).detail ||
+        descriptor.detail ||
           readText(observation.type) ||
           "Retained event",
       ),
@@ -5324,6 +5473,8 @@
     state.selectedIssueID = "";
     state.selectedIssueKind = "";
     state.selectedIssueSource = "";
+    state.selectedIssueFamilyID = "";
+    state.selectedIssueEvidenceContext = "";
     state.selectedDrivingAnnotationID = "";
     state.selectedIssue = null;
     state.selectedIssueCatalog = null;
@@ -7049,7 +7200,7 @@
     list.append(row);
   }
 
-  function eventDescriptor(observation) {
+  function eventDescriptor(observation, evidenceContext = "") {
     const type = readText(observation.type).toLocaleLowerCase();
     const resource = isRecord(observation.resource) ? observation.resource : {};
     const resourceName = readText(resource.name);
@@ -7067,17 +7218,23 @@
       "file.delete": "Deleted file",
       "permission.request": "Requested permission",
       "permission.decision": "Permission decided",
-      "config.agent": "Agent guardrail configuration observed",
+      "config.agent": "Agent configuration observed",
       "network.indicator": "Observed network target",
       "prompt.user": "User input lifecycle",
       "message.assistant": "Assistant lifecycle",
       "reasoning.start": "Reasoning lifecycle started",
       "reasoning.end": "Reasoning lifecycle ended",
     };
-    const label = labels[type] || readableLabel(observation.action, "Activity");
+    const mappedGuardrail =
+      type === "config.agent" && evidenceContext === "mapped-guardrail";
+    const label = mappedGuardrail
+      ? "Agent guardrail configuration observed"
+      : labels[type] || readableLabel(observation.action, "Activity");
     const detail =
-      type === "config.agent"
+      mappedGuardrail
         ? "This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body."
+        : type === "config.agent"
+          ? resourceName || "Configuration metadata was reported by the source."
         : type.startsWith("command.")
           ? summary || resourceName
           : resourceName || summary;

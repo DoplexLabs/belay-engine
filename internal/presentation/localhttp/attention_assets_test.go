@@ -227,10 +227,13 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 		`if (refreshGeneration !== state.attentionRefreshGeneration) return false;`,
 		`if (!issuesReady || !gapsReady) {`,
 		`const chainReady = await loadFamilyPagesForSelection(`,
+		`const memberChainReady = await loadFamilyMemberPagesForSelection(`,
 		`const summary = state.issues.data.find(`,
 		`if (!summary) {`,
 		`detailReady = await selectAttentionFamily(summary, false);`,
 		`detailReady = await selectIssue(`,
+		`the selected affected record was not found within the previously loaded bounded pages`,
+		`the selected affected record is no longer visible in this family`,
 		`if (!detailReady) {`,
 		`selected detail is hidden until current data confirms it.`,
 	} {
@@ -254,6 +257,58 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 	}
 	if missingIndex < 0 || selectIndex < 0 || missingIndex > selectIndex {
 		t.Error("selected detail can be retained without confirming list visibility")
+	}
+}
+
+func TestAttentionFamilyCoverageFiltersAndBoundedChildRestoration(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	loadFamilies := browserSourceBlock(
+		t,
+		app,
+		"  async function loadAttentionFamilies(bucket, append) {",
+		"  function buildAttentionFamilyPath(cursor) {",
+	)
+	filters := browserSourceBlock(
+		t,
+		app,
+		"  function renderAttentionFilters() {",
+		"  function attentionFiltersActive() {",
+	)
+	restore := browserSourceBlock(
+		t,
+		app,
+		"  async function loadFamilyMemberPagesForSelection(issueID, pageBudget) {",
+		"  function resetAndLoadAttention() {",
+	)
+
+	for _, required := range []string{
+		`response.global_analysis_coverage`,
+		`readGlobalAnalysisCoverage(response.analysis, bucket.analysis)`,
+	} {
+		if !strings.Contains(loadFamilies, required) {
+			t.Errorf("family global coverage fallback is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`Displayed family and evidence-gap counts match the active filters.`,
+		`Analysis coverage remains global for the frozen retained snapshot.`,
+	} {
+		if !strings.Contains(filters, required) {
+			t.Errorf("filtered family count disclosure is missing %q", required)
+		}
+	}
+	if strings.Contains(filters, "all exact occurrences visible") {
+		t.Error("filtered family copy still claims unfiltered occurrence totals")
+	}
+	for _, required := range []string{
+		`for (let page = 1; page < pageBudget; page += 1)`,
+		`state.familyMembers.some(`,
+		`!state.familyMemberHasMore`,
+		`await loadAttentionFamilyDetail(true)`,
+	} {
+		if !strings.Contains(restore, required) {
+			t.Errorf("bounded child restoration is missing %q", required)
+		}
 	}
 }
 
@@ -382,9 +437,15 @@ func TestAttentionFamilyBrowserListDetailAndExactChildContract(t *testing.T) {
 		"return `/v1/attention-families?${new URLSearchParams({ cursor }).toString()}`;",
 		`view_cursor: state.selectedFamilyViewCursor`,
 		`? new URLSearchParams({ cursor })`,
-		`function selectAttentionFamily(family, moveFocus)`,
+		`async function selectAttentionFamily(`,
+		`revealDetail = true`,
 		`readText(family.kind) === "exact_issue"`,
 		`kind === "mapped_upstream"`,
+		`toFiniteNumber(family.supporting_issue_count) === 1`,
+		`selectSingleMemberAttentionFamily(family, true)`,
+		`selectAttentionFamily(family, false, false)`,
+		`state.familyMembers.length !== 1`,
+		`state.familyMemberHasMore`,
 		`source: "family"`,
 		`returnFocus: { type: "family-member", key }`,
 		`Grouped by one known signal type.`,
@@ -414,6 +475,46 @@ func TestAttentionFamilyBrowserListDetailAndExactChildContract(t *testing.T) {
 		if !strings.Contains(styles, required) {
 			t.Errorf("Attention family styles are missing %q", required)
 		}
+	}
+}
+
+func TestAttentionConfigAgentCopyIsScopedToMappedCitedEvidence(t *testing.T) {
+	app := readBrowserAsset(t, "assets/app.js")
+	descriptor := browserSourceBlock(
+		t,
+		app,
+		"  function eventDescriptor(observation, evidenceContext = \"\") {",
+		"  function isSignalEvent(event, cited) {",
+	)
+
+	for _, required := range []string{
+		`"config.agent": "Agent configuration observed"`,
+		`evidenceContext === "mapped-guardrail"`,
+		`? "Agent guardrail configuration observed"`,
+		`This configuration event supported the safety-confirmation signal.`,
+		`Configuration metadata was reported by the source.`,
+		`createLookupEvent(event, state.selectedIssueEvidenceContext)`,
+		`attention.agent_guardrails_configuration`,
+		`sourceSignalCode === "tamper.guardrails_off"`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("contextual config.agent presentation is missing %q", required)
+		}
+	}
+	if !strings.Contains(descriptor, `type === "config.agent" && evidenceContext === "mapped-guardrail"`) {
+		t.Error("guardrail copy is not gated by both event type and mapped issue context")
+	}
+	genericTimeline := browserSourceBlock(
+		t,
+		app,
+		"  function createEventRow(event, findings) {",
+		"  function createEvidenceDetails(event) {",
+	)
+	if !strings.Contains(genericTimeline, `eventDescriptor(observation);`) {
+		t.Error("generic session timeline no longer uses the neutral event descriptor")
+	}
+	if strings.Contains(genericTimeline, "mapped-guardrail") {
+		t.Error("generic session timeline opts into mapped guardrail evidence copy")
 	}
 }
 
@@ -534,7 +635,8 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`"config.agent": "Agent guardrail configuration observed"`,
+		`"config.agent": "Agent configuration observed"`,
+		`? "Agent guardrail configuration observed"`,
 		`This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body.`,
 	} {
 		if !strings.Contains(app, required) {
