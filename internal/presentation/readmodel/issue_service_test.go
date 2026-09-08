@@ -321,6 +321,52 @@ func TestIssueDetailUsesViewSnapshotAndIssueBoundOccurrenceCursor(t *testing.T) 
 	}
 }
 
+func TestDecodeIssueViewCursorReturnsNeutralClaims(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	service := New(
+		issueTestCoreRepository{},
+		WithClock(func() time.Time { return now }),
+	)
+	cursor, err := encodeCursor(cursorEnvelope{
+		Version:     cursorVersion,
+		Kind:        "issue_view",
+		Snapshot:    23,
+		Fingerprint: issueViewFingerprint(),
+		IssuedAt:    now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := service.DecodeIssueViewCursor(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Snapshot != 23 || !claims.IssuedAt.Equal(now) {
+		t.Fatalf("claims = %+v", claims)
+	}
+
+	empty, err := encodeCursor(cursorEnvelope{
+		Version:     cursorVersion,
+		Kind:        "issue_view",
+		Snapshot:    0,
+		Fingerprint: issueViewFingerprint(),
+		IssuedAt:    now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DecodeIssueViewCursor(empty); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty snapshot error = %v, want ErrNotFound", err)
+	}
+	if _, err := service.DecodeIssueViewCursor("PRIVATE_CURSOR"); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("malformed cursor error = %v, want ErrInvalidCursor", err)
+	}
+	now = now.Add(issueCursorLifetime + time.Nanosecond)
+	if _, err := service.DecodeIssueViewCursor(cursor); !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("expired cursor error = %v, want ErrCursorExpired", err)
+	}
+}
+
 func TestIssueErrorPrecedenceAndLegacyCursorIsolation(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	issueID := testIssueID("f")

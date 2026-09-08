@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -23,6 +24,11 @@ const (
 	numbatProjectScopeHashKeyDomain  = "belay.local.numbat-project-scope-hash.v1"
 	commandSignatureKeyDomain        = "belay.local.command-signature.v1"
 	issueFingerprintKeyDomain        = "belay.local.issue-fingerprint.v1"
+	fixAnnotationIDKeyDomain         = "belay.local.fix-annotation.v1"
+	fixAnnotationRequestKeyDomain    = "belay.local.fix-annotation-request.v1"
+	fixActionTokenKeyDomain          = "belay.local.fix-action-token.v1"
+	fixRetractionIDKeyDomain         = "belay.local.fix-retraction.v1"
+	fixRetractionRequestKeyDomain    = "belay.local.fix-retraction-request.v1"
 )
 
 var opaqueBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -105,6 +111,70 @@ func (s *Store) DeriveIssueIdentity(
 	digest := opaqueDigest(key, material)
 	encoded := strings.ToLower(opaqueBase32.EncodeToString(digest))
 	return "ifp_" + encoded, "iss_" + encoded, nil
+}
+
+func (s *Store) deriveFixAnnotationID(idempotencyKey string) (string, error) {
+	return s.deriveOpaqueID(
+		fixAnnotationIDKeyDomain,
+		"fxa_",
+		lengthPrefixed([]string{idempotencyKey}),
+	)
+}
+
+func (s *Store) deriveFixAnnotationRequestFingerprint(
+	claims model.FixActionClaims,
+	changeKind model.FixChangeKind,
+	recordedVia string,
+) (string, error) {
+	return s.deriveOpaqueID(
+		fixAnnotationRequestKeyDomain,
+		"fxp_",
+		lengthPrefixed([]string{
+			model.FixSchemaVersion,
+			claims.IssueID,
+			fmt.Sprint(claims.Snapshot),
+			formatProjectionTime(claims.IssuedAt),
+			model.FixChangeCatalogVersion,
+			string(changeKind),
+			recordedVia,
+		}),
+	)
+}
+
+func (s *Store) deriveFixRetractionID(idempotencyKey string) (string, error) {
+	return s.deriveOpaqueID(
+		fixRetractionIDKeyDomain,
+		"fxr_",
+		lengthPrefixed([]string{idempotencyKey}),
+	)
+}
+
+func (s *Store) deriveFixRetractionRequestFingerprint(
+	issueID string,
+	annotationID string,
+	reason model.FixRetractionReason,
+	recordedVia string,
+) (string, error) {
+	return s.deriveOpaqueID(
+		fixRetractionRequestKeyDomain,
+		"frp_",
+		lengthPrefixed([]string{
+			model.FixSchemaVersion,
+			issueID,
+			annotationID,
+			string(reason),
+			recordedVia,
+		}),
+	)
+}
+
+func (s *Store) deriveOpaqueID(domain, prefix string, material []byte) (string, error) {
+	key, err := s.derivedKey(domain)
+	if err != nil {
+		return "", err
+	}
+	defer zeroBytes(key)
+	return opaqueID(prefix, key, material), nil
 }
 
 func (s *Store) derivedKey(domain string) ([]byte, error) {

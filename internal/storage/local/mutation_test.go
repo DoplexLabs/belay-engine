@@ -102,16 +102,30 @@ func TestMutationGuardsAreInstalledOnEveryPooledConnection(t *testing.T) {
 	}()
 
 	for index, connection := range connections {
+		var recursiveTriggers int
+		if err := connection.QueryRowContext(
+			ctx,
+			"PRAGMA recursive_triggers",
+		).Scan(&recursiveTriggers); err != nil {
+			t.Fatalf("connection %d inspect recursive triggers: %v", index, err)
+		}
+		if recursiveTriggers != 1 {
+			t.Fatalf(
+				"connection %d recursive_triggers = %d, want 1",
+				index,
+				recursiveTriggers,
+			)
+		}
 		var triggerCount int
 		if err := connection.QueryRowContext(ctx, `
-			SELECT COUNT(*)
+				SELECT COUNT(*)
 			FROM sqlite_temp_schema
 			WHERE type = 'trigger' AND name LIKE 'belay_guard_%'`,
 		).Scan(&triggerCount); err != nil {
 			t.Fatalf("connection %d inspect guards: %v", index, err)
 		}
-		if triggerCount != 10 {
-			t.Fatalf("connection %d guard count = %d, want 10", index, triggerCount)
+		if triggerCount != 14 {
+			t.Fatalf("connection %d guard count = %d, want 14", index, triggerCount)
 		}
 		if _, err := connection.ExecContext(ctx,
 			"UPDATE events SET action = 'unauthorized' WHERE event_id = ?",

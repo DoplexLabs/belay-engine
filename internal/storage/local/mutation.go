@@ -36,6 +36,9 @@ func initializeMutationConnection(
 	_ string,
 ) error {
 	ctx := context.Background()
+	if _, err := connection.ExecContext(ctx, "PRAGMA recursive_triggers = ON", nil); err != nil {
+		return errors.New("enable recursive local mutation guards")
+	}
 	if _, err := connection.ExecContext(ctx, mutationAuthorizationTableSQL, nil); err != nil {
 		return errors.New("initialize local mutation authorization")
 	}
@@ -48,6 +51,15 @@ func initializeMutationConnection(
 	}
 	if _, err := connection.ExecContext(ctx, mutationTriggerSQL, nil); err != nil {
 		return errors.New("install connection-local mutation guards")
+	}
+	fixReady, err := feature3MutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if fixReady {
+		if _, err := connection.ExecContext(ctx, fixMutationTriggerSQL, nil); err != nil {
+			return errors.New("install connection-local fix mutation guards")
+		}
 	}
 	return nil
 }
@@ -87,6 +99,35 @@ func mutationTablesReady(
 	return count == 5, nil
 }
 
+func feature3MutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name IN (
+				'fix_annotations',
+				'fix_annotation_retractions'
+			)`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect local fix mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect local fix mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect local fix mutation schema")
+	}
+	return count == 2, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -98,6 +139,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, mutationTriggerSQL); err != nil {
 		return errors.New("install connection-local mutation guards")
+	}
+	if _, err := connection.ExecContext(ctx, fixMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local fix mutation guards")
 	}
 	return nil
 }
@@ -246,4 +290,29 @@ const mutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'analysis diagnostic mutation is not authorized');
+	END;`
+
+const fixMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_annotations_update
+	BEFORE UPDATE ON main.fix_annotations
+	BEGIN
+		SELECT RAISE(ABORT, 'fix annotations are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_annotations_delete
+	BEFORE DELETE ON main.fix_annotations
+	BEGIN
+		SELECT RAISE(ABORT, 'fix annotations are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_retractions_update
+	BEFORE UPDATE ON main.fix_annotation_retractions
+	BEGIN
+		SELECT RAISE(ABORT, 'fix annotation retractions are append-only');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_fix_retractions_delete
+	BEFORE DELETE ON main.fix_annotation_retractions
+	BEGIN
+		SELECT RAISE(ABORT, 'fix annotation retractions are append-only');
 	END;`

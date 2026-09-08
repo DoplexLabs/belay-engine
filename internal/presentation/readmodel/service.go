@@ -268,6 +268,27 @@ func New(repository Repository, options ...Option) *Service {
 	return service
 }
 
+// DecodeIssueViewCursor converts the private rowless issue-view cursor into
+// neutral claims for non-presentation services. It preserves the cursor's
+// structural and freshness validation without exposing its envelope.
+func (s *Service) DecodeIssueViewCursor(value string) (model.IssueViewClaims, error) {
+	cursor, err := decodeViewCursor(strings.TrimSpace(value), s.nowUTC())
+	if err != nil {
+		return model.IssueViewClaims{}, err
+	}
+	if cursor.Snapshot == 0 {
+		return model.IssueViewClaims{}, notFound()
+	}
+	issuedAt, err := parseUTCTime(cursor.IssuedAt)
+	if err != nil {
+		return model.IssueViewClaims{}, err
+	}
+	return model.IssueViewClaims{
+		Snapshot: cursor.Snapshot,
+		IssuedAt: issuedAt,
+	}, nil
+}
+
 func (s *Service) ListSessions(ctx context.Context, limit int) (SessionList, error) {
 	return s.ListSessionsPage(ctx, SessionListRequest{Limit: limit})
 }

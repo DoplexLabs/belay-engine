@@ -15,7 +15,7 @@
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell" id="app-shell">
       <header class="topbar">
         <div class="brand" aria-label="Belay Local">
           <span class="brand-mark" aria-hidden="true">
@@ -330,6 +330,84 @@
                 </section>
 
                 <section
+                  class="fix-attempts-section"
+                  aria-labelledby="fix-attempts-heading"
+                >
+                  <div class="fix-attempts-heading">
+                    <div>
+                      <p class="eyebrow">Developer declarations</p>
+                      <h3 id="fix-attempts-heading">Fix attempts</h3>
+                    </div>
+                    <button
+                      class="primary-button"
+                      id="record-fix-attempt"
+                      type="button"
+                      disabled
+                    >
+                      Record fix attempt
+                    </button>
+                  </div>
+                  <p class="fix-recurrence-disclosure">
+                    This version records attempts only; recurrence monitoring is
+                    not yet available.
+                  </p>
+                  <p
+                    class="section-disclosure"
+                    id="fix-eligibility-status"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    Checking whether this issue can anchor a declaration…
+                  </p>
+                  <div
+                    class="fix-action-status"
+                    id="fix-action-status"
+                    role="status"
+                    aria-live="polite"
+                    tabindex="-1"
+                    hidden
+                  ></div>
+                  <div
+                    class="fix-history-list"
+                    id="fix-history-list"
+                    aria-live="polite"
+                  ></div>
+                  <div
+                    class="panel-state compact-state"
+                    id="fix-history-loading"
+                    hidden
+                  >
+                    <span class="spinner" aria-hidden="true"></span>
+                    <p>Loading fix-attempt history…</p>
+                  </div>
+                  <div
+                    class="panel-state compact-state"
+                    id="fix-history-empty"
+                    hidden
+                  >
+                    <span class="empty-glyph" aria-hidden="true">◇</span>
+                    <p>No fix-attempt declarations recorded</p>
+                    <small>
+                      Recording is optional and does not verify an outcome.
+                    </small>
+                  </div>
+                  <p
+                    class="fix-evidence-evaluated"
+                    id="fix-evidence-evaluated"
+                  ></p>
+                  <div
+                    class="pagination-bar"
+                    id="fix-history-pagination"
+                    hidden
+                  >
+                    <p id="fix-history-page-status"></p>
+                    <button id="fix-history-load-more" type="button">
+                      Load more attempts
+                    </button>
+                  </div>
+                </section>
+
+                <section
                   class="matching-section"
                   aria-labelledby="matching-sessions-heading"
                 >
@@ -626,6 +704,165 @@
           <button id="error-retry" type="button">Try again</button>
         </div>
       </main>
+    </div>
+
+    <div class="modal-layer" id="fix-attempt-modal-layer" hidden>
+      <section
+        class="modal-dialog"
+        id="fix-attempt-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fix-attempt-dialog-title"
+        aria-describedby="fix-attempt-dialog-description"
+        tabindex="-1"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Private Local declaration</p>
+            <h2 id="fix-attempt-dialog-title">Record fix attempt</h2>
+          </div>
+          <button
+            class="modal-close"
+            id="fix-attempt-close"
+            type="button"
+            aria-label="Close record fix attempt dialog"
+          >
+            ×
+          </button>
+        </header>
+        <div class="modal-scroll">
+          <p id="fix-attempt-dialog-description">
+            Records your declaration that you attempted an external change.
+            Belay cannot verify the change or its effect.
+          </p>
+          <p class="fix-recurrence-disclosure">
+            This version records attempts only; recurrence monitoring is not
+            yet available.
+          </p>
+          <div
+            class="modal-alert"
+            id="fix-attempt-alert"
+            role="alert"
+            tabindex="-1"
+            hidden
+          ></div>
+          <fieldset class="choice-fieldset" id="fix-category-fieldset">
+            <legend>Primary change category</legend>
+            <p>
+              Select the one category that best describes the external change
+              you attempted. No note, command, path, diff, prompt, or output is
+              recorded.
+            </p>
+            <div class="choice-list" id="fix-category-options"></div>
+          </fieldset>
+          <div class="draft-recovery" id="fix-draft-recovery" hidden>
+            <strong>Unresolved submission retained</strong>
+            <p>
+              Retrying uses the same private idempotency key. Abandon it
+              explicitly before changing category or starting a new attempt.
+            </p>
+            <button
+              class="secondary-button"
+              id="abandon-fix-draft"
+              type="button"
+            >
+              Abandon unresolved submission
+            </button>
+          </div>
+        </div>
+        <footer class="modal-actions">
+          <button
+            class="secondary-button"
+            id="fix-attempt-cancel"
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            class="primary-button"
+            id="fix-attempt-confirm"
+            type="button"
+          >
+            Record declaration
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div class="modal-layer" id="fix-retraction-modal-layer" hidden>
+      <section
+        class="modal-dialog"
+        id="fix-retraction-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fix-retraction-dialog-title"
+        aria-describedby="fix-retraction-dialog-description"
+        tabindex="-1"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Append-only correction</p>
+            <h2 id="fix-retraction-dialog-title">Retract fix attempt</h2>
+          </div>
+          <button
+            class="modal-close"
+            id="fix-retraction-close"
+            type="button"
+            aria-label="Close retract fix attempt dialog"
+          >
+            ×
+          </button>
+        </header>
+        <div class="modal-scroll">
+          <p id="fix-retraction-dialog-description">
+            Retraction preserves the original declaration in history and
+            excludes it from future recurrence monitoring. Recurrence
+            monitoring is not yet available.
+          </p>
+          <div
+            class="modal-alert"
+            id="fix-retraction-alert"
+            role="alert"
+            tabindex="-1"
+            hidden
+          ></div>
+          <fieldset class="choice-fieldset" id="fix-retraction-fieldset">
+            <legend>Retraction reason</legend>
+            <p>Select one listed reason. No free-text explanation is stored.</p>
+            <div class="choice-list" id="fix-retraction-options"></div>
+          </fieldset>
+          <div class="draft-recovery" id="fix-retraction-recovery" hidden>
+            <strong>Unresolved retraction retained</strong>
+            <p>
+              Retrying uses the same private idempotency key. Abandon it
+              explicitly before changing the reason.
+            </p>
+            <button
+              class="secondary-button"
+              id="abandon-fix-retraction"
+              type="button"
+            >
+              Abandon unresolved retraction
+            </button>
+          </div>
+        </div>
+        <footer class="modal-actions">
+          <button
+            class="secondary-button"
+            id="fix-retraction-cancel"
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            class="primary-button"
+            id="fix-retraction-confirm"
+            type="button"
+          >
+            Retract declaration
+          </button>
+        </footer>
+      </section>
     </div>
   </body>
 </html>

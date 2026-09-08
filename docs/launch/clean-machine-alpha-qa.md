@@ -441,6 +441,114 @@ Evidence:
 - Response-header capture:
 - Notes/defect:
 
+## A07f — P0-03 fix-attempt declaration and retraction
+
+Precondition: use a sanitized stable, non-experimental issue whose analysis is
+current and whose scope is `resolved` or `lexical`. Do not use a real secret,
+paste private change details, or treat this declaration as proof that a change
+worked.
+
+Procedure:
+
+1. Open the issue in Attention and inspect the **Fix attempts** section.
+2. Select **Record fix attempt**.
+3. Confirm that no category is preselected and that no free-text control exists.
+4. Select one truthful fixed category and explicitly confirm.
+5. Preserve a redacted browser network record of the eligibility and creation
+   responses.
+6. Confirm the new history row, then choose **Retract**, select one fixed reason,
+   and explicitly confirm.
+7. Preserve the retraction response and resulting history row.
+8. Verify listener-bound rejection without sending a valid action token:
+
+   ```bash
+   ISSUE_ID='paste-the-sanitized-eligible-issue-id'
+   curl -sS -o fix-cross-origin.json -w '%{http_code}\n' \
+     -H "Authorization: Bearer ${TOKEN}" \
+     -H 'Origin: http://127.0.0.1:1' \
+     -H 'Content-Type: application/json' \
+     -H 'Idempotency-Key: 12345678-1234-4234-9234-123456789abc' \
+     -H 'X-Belay-Intent: record-fix-attempt.v1' \
+     --data '{}' \
+     "${BASE_URL}/v1/issues/${ISSUE_ID}/fixes"
+   ```
+
+Pass criteria:
+
+- Issue detail says recurrence monitoring is not yet available.
+- The dialog explains that Belay records a declaration and cannot verify the
+  change or its effect.
+- No category is preselected; no note, command, path, diff, prompt, output,
+  environment value, or URL can be entered.
+- Eligibility returns `schema_version=belay.fix.v1`, a signed action token, and
+  `change_catalog_version=fix-change.v1`.
+- First creation returns `201`, `replayed=false`, the selected fixed category,
+  `recorded_via=local_ui`, `state=active`, and explicit null
+  `retraction_reason`/`retracted_at`.
+- Browser wording says **Fix attempt declaration recorded · Not verified by
+  Belay** and never says fixed, resolved, successful, prevented, or safe.
+- First retraction returns `201`, `replayed=false`, and one fixed reason. History
+  preserves the original declaration with `state=retracted`.
+- The cross-origin request returns `403` with
+  `type=belay.local/write-forbidden`, creates no row, and reflects none of the
+  request values.
+- Browser developer tools show no request to a non-loopback origin.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Sanitized issue ID and eligibility reason:
+- Dialog and history screenshots:
+- Redacted eligibility/create/retraction responses:
+- Cross-origin status/problem response:
+- Browser network-origin recording:
+- Notes/defect:
+
+## A07g — P0-03 restart durability and MCP isolation
+
+Procedure:
+
+1. Before stopping Local, record one additional sanitized fix-attempt
+   declaration and leave it active. Record its annotation ID and category.
+2. Stop every Belay Local process and close browser tabs using the old launch
+   token.
+3. Restart using:
+
+   ```bash
+   ./bin/belay local --no-scan
+   ```
+
+4. Open the newly printed URL, return to the same issue, and inspect complete
+   fix-attempt history.
+5. Disable non-loopback networking as in A11 and reload the issue/history.
+6. Inspect MCP from Codex and Claude Code after restart.
+
+Pass criteria:
+
+- Local reuses the same database and Keychain key without creating replacement
+  state or requesting a password.
+- Both the active and retracted declarations retain their exact annotation IDs,
+  categories, recording times, states, and retraction metadata.
+- History remains readable with non-loopback networking disabled.
+- Evidence status may truthfully change only among `available`, `partial`,
+  `pruned`, and `unknown`; the declarations themselves remain present.
+- No restart converts a declaration into a resolution or recurrence claim.
+- MCP still exposes exactly six read-only tools and no fix-history, record,
+  retract, replay, recurrence, write, or remediation tool.
+- The old tokenized browser URL is not used as the restarted launch credential.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Pre-restart annotation IDs/state:
+- Post-restart annotation IDs/state:
+- Keychain/database reuse evidence:
+- Offline history screenshot:
+- Post-restart MCP tool lists:
+- Notes/defect:
+
 ## A08 — Explicit live hooks: Codex
 
 The A04 `quickstart` command was the explicit hook-install consent. Confirm its
@@ -507,8 +615,8 @@ Pass criteria:
   client.
 - Session, activity, and finding filters match the Local API results.
 - Results contain `untrusted_observations: true`.
-- No prompts, resources, write tools, command execution, remediation, or
-  filesystem access are exposed.
+- No prompts, resources, fix-history/record/retract tools, other write tools,
+  command execution, remediation, or filesystem access are exposed.
 - A filtered `get_stats` request is recorded as an expected alpha limitation;
   unfiltered `get_stats` succeeds.
 
@@ -529,6 +637,8 @@ Pass criteria:
 
 - Existing and historical sessions remain readable in the browser.
 - Browser refresh and timeline reads succeed.
+- Existing fix-attempt history remains readable; an eligible declaration and
+  retraction can be recorded through loopback without hosted access.
 - All six MCP tools remain discoverable and representative session/timeline
   reads succeed.
 - No hosted login or Belay service is requested.
@@ -670,6 +780,8 @@ Evidence:
 | A07c Overview truthfulness | PASS | | |
 | A07d Session-scoped findings >500 | PASS | | |
 | A07e Injection rendering | PASS | | |
+| A07f Fix declaration/retraction | PASS | | |
+| A07g Fix restart/MCP isolation | PASS | | |
 | A08 Codex hooks | PASS | | |
 | A09 Claude hooks | PASS | | |
 | A10 MCP | PASS | | |

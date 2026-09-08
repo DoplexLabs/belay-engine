@@ -11,10 +11,10 @@ MCP is a read adapter over the Belay read contract. It performs no model
 inference, remediation, file write, command execution, fix recording, or
 recurrence registration.
 
-The implemented Attention Inbox, issue HTTP routes, and internal issue
-repository do not automatically expose MCP capabilities. `list_issues` and
-`get_issue` remain unavailable until Feature 5. The current Local Alpha MCP
-server exposes exactly the six tools below.
+The implemented Attention Inbox, issue HTTP routes, browser-only fix-attempt
+routes, and internal issue/fix repositories do not automatically expose MCP
+capabilities. `list_issues` and `get_issue` remain unavailable until Feature 5.
+The current Local Alpha MCP server exposes exactly the six tools below.
 
 ## Implemented Local Alpha tools
 
@@ -233,8 +233,10 @@ described above.
 - Any `write_*`, `execute_*`, `apply_*`, or `remediate_*` tool
 - Arbitrary filesystem or shell access
 
-Fix recording and recurrence measurement remain future features and are not
-implied by the implemented browser Attention workflow.
+P0-03 browser fix-attempt declarations and retractions are implemented only in
+authenticated Local HTTP. MCP receives no corresponding reader or writer and
+cannot list, create, retract, or replay those declarations. Exact recurrence
+measurement remains future P0-04 work.
 
 ## Prompt-injection fixtures
 

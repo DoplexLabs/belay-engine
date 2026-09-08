@@ -26,6 +26,7 @@ var assetFiles embed.FS
 
 type Server struct {
 	read  *readmodel.Service
+	fix   FixService
 	token string
 }
 
@@ -44,14 +45,28 @@ type problem struct {
 	RequestID string `json:"request_id"`
 }
 
-func New(read *readmodel.Service, token string) (*Server, error) {
+type Option func(*Server)
+
+func WithFixService(service FixService) Option {
+	return func(server *Server) {
+		server.fix = service
+	}
+}
+
+func New(read *readmodel.Service, token string, options ...Option) (*Server, error) {
 	if read == nil {
 		return nil, errors.New("local HTTP server requires a read service")
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("local HTTP server requires a launch token")
 	}
-	return &Server{read: read, token: token}, nil
+	server := &Server{read: read, token: token}
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
+	}
+	return server, nil
 }
 
 func NewLaunchToken() (string, error) {
@@ -63,6 +78,10 @@ func NewLaunchToken() (string, error) {
 }
 
 func (s *Server) Handler() http.Handler {
+	return s.handler("")
+}
+
+func (s *Server) handler(trustedListener string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -76,6 +95,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/issues", s.authorize(http.HandlerFunc(s.listIssues)))
 	mux.Handle("GET /v1/issues/{id}/occurrences", s.authorize(http.HandlerFunc(s.getIssue)))
 	mux.Handle("GET /v1/stats", s.authorize(http.HandlerFunc(s.getStats)))
+	if s.fix != nil {
+		s.registerFixRoutes(mux, trustedListener)
+	}
 
 	assets, err := fs.Sub(assetFiles, "assets")
 	if err != nil {
@@ -101,13 +123,18 @@ func (s *Server) Start(ctx context.Context, address string) (*RunningServer, err
 	if err != nil {
 		return nil, fmt.Errorf("listen for Belay Local: %w", err)
 	}
+	trustedListener := listener.Addr().String()
+	if _, ok := trustedOrigin(trustedListener); !ok {
+		_ = listener.Close()
+		return nil, errors.New("Belay Local listener is not numeric loopback")
+	}
 	server := &http.Server{
-		Handler:           s.Handler(),
+		Handler:           s.handler(trustedListener),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
 	running := &RunningServer{
-		URL:   "http://" + listener.Addr().String(),
+		URL:   "http://" + trustedListener,
 		Token: s.token,
 		done:  make(chan error, 1),
 		http:  server,
@@ -409,9 +436,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func requestID(r *http.Request) string {
-	if value := strings.TrimSpace(r.Header.Get("X-Request-ID")); value != "" && len(value) <= 128 {
-		return value
-	}
 	raw := make([]byte, 12)
 	if _, err := rand.Read(raw); err != nil {
 		return "local-request"

@@ -16,6 +16,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/detection"
+	"github.com/DoplexLabs/belay-engine/internal/localaction"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localmcp"
@@ -265,10 +266,7 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	localServer, err := localhttp.New(readmodel.New(
-		store,
-		readmodel.WithIssueRepository(store),
-	), token)
+	localServer, err := newLocalHTTPServer(store, token)
 	if err != nil {
 		return err
 	}
@@ -309,6 +307,18 @@ func runLocalLaunch(
 		attemptBrowserOpen(ctx, browserURL, options.commandName, stderr)
 	}
 	return running.Wait()
+}
+
+func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, error) {
+	actions, err := localaction.New(store, store)
+	if err != nil {
+		return nil, err
+	}
+	return localhttp.New(
+		readmodel.New(store, readmodel.WithIssueRepository(store)),
+		token,
+		localhttp.WithFixService(actions),
+	)
 }
 
 func onboardLocalHooks(

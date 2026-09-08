@@ -3,7 +3,9 @@
 Belay Local is private, endpoint-first observability for an individual developer
 using AI coding agents. It reconstructs minimized local activity into one
 timeline and exposes the same evidence through a loopback browser and read-only
-MCP.
+MCP. The browser may also record a narrowly scoped, fixed-schema declaration
+that the developer attempted an external fix; Belay does not execute, describe,
+or verify that change.
 
 This repository contains the Apache-2.0-licensed Belay edge. Belay Teams is a
 separate product and is not included in this Local alpha.
@@ -24,6 +26,7 @@ Alpha scope:
 - Historical scanning and explicit monitor-only live hooks
 - Loopback-only browser with a random per-launch token
 - Attention Inbox with deterministic issues and exact matching sessions
+- Browser-only, append-only fix-attempt declarations with no free-text field
 - Exactly six read-only MCP tools
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
@@ -151,8 +154,10 @@ queries scan the complete cursor snapshot rather than a fixed candidate window.
 The browser Attention Inbox uses a separate revisioned projection snapshot with
 explicit current, pending, failed, truncated, and unscoped analysis coverage.
 Issue detail shows exact matching sessions and retrieves cited evidence through
-a bounded, session-constrained event lookup. Fix recording and recurrence
-measurement remain future capabilities.
+a bounded, session-constrained event lookup. Eligible current stable issues can
+record an append-only external fix-attempt declaration using one fixed
+`fix-change.v1` category. The declaration is not a resolution claim and does not
+execute remediation. Recurrence measurement remains future P0-04 work.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).
@@ -172,6 +177,10 @@ Exact Codex and Claude Code configuration examples are in
   state.
 - Unknown source outcomes remain unknown. Sessions without observed terminal
   evidence are labeled `Incomplete`, never successful.
+- Fix-attempt declarations store no note, command, path, diff, prompt, output,
+  environment value, or URL. They survive ordinary evidence retention and Local
+  restarts, and remain until the Local database is reset. Mistakes are preserved
+  and corrected through append-only fixed-reason retractions.
 
 See
 [`docs/storage/local-storage-lifecycle.md`](docs/storage/local-storage-lifecycle.md)

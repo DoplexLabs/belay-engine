@@ -1,7 +1,7 @@
 # Belay Read API V1 Contract
 
 - **Status:** Implemented Local Alpha surface, including Feature 2 Attention
-  and issue reads
+  reads and P0-03 browser-only fix-attempt actions
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -14,6 +14,9 @@ must not be represented as available Local Alpha or Teams functionality.
 Feature 2 exposes the internal snapshot-queryable issue repository through the
 loopback HTTP API and browser Attention Inbox. This does not add MCP issue
 tools: MCP remains exactly six tools until Feature 5.
+
+P0-03 adds four Local-only routes for explicit browser fix-attempt declarations.
+They are not future Teams read-contract claims and do not make MCP write-capable.
 
 ## Implemented Local Alpha routes
 
@@ -28,6 +31,10 @@ tools: MCP remains exactly six tools until Feature 5.
 | `GET /v1/findings` | filtered, cursor-paginated local findings |
 | `GET /v1/issues` | filtered, cursor-paginated deterministic issue summaries |
 | `GET /v1/issues/{id}/occurrences` | issue detail and cursor-paginated exact matching sessions |
+| `GET /v1/issues/{id}/fix-eligibility` | snapshot-bound eligibility and signed browser action token |
+| `GET /v1/issues/{id}/fixes` | durable, cursor-paginated fix-attempt history |
+| `POST /v1/issues/{id}/fixes` | append one browser-confirmed external fix-attempt declaration |
+| `POST /v1/issues/{id}/fixes/{annotation_id}/retractions` | append one fixed-reason retraction |
 | `GET /v1/stats` | global Local summary only |
 
 ## Other future candidate routes
@@ -478,9 +485,287 @@ data, not `404`.
 }
 ```
 
+## P0-03 Local browser fix-attempt contract
+
+These routes record only a developer declaration that an external change was
+attempted. Belay does not execute the change, inspect a diff, mark the issue
+resolved, suppress future detections, or verify an outcome. Recurrence
+measurement is deferred to P0-04.
+
+All responses use `schema_version=belay.fix.v1`. Fix actions are available only
+through explicitly configured Local HTTP. They are not part of MCP or the CLI.
+
+### Fixed catalogs
+
+`change_catalog_version` is `fix-change.v1`. `change_kind` must be exactly one
+of:
+
+- `code_change`;
+- `configuration_change`;
+- `dependency_change`;
+- `permission_change`;
+- `environment_change`;
+- `agent_instruction`;
+- `project_rule`;
+- `monitor_hook`;
+- `other`.
+
+Retraction `reason` must be exactly one of:
+
+- `recorded_by_mistake`;
+- `superseded`;
+- `other`.
+
+No route accepts a free-text note, command, path, diff, prompt, output, rule or
+hook body, environment value, URL, client timestamp, client-selected annotation
+ID, occurrence ID, fingerprint, state, or outcome.
+
+### `GET /v1/issues/{id}/fix-eligibility`
+
+Accepts exactly one non-empty `view_cursor` from the current Attention issue
+view. The cursor is structurally decoded and freshness-checked, then the server
+evaluates the complete issue aggregate and latest visible anchor in one read
+transaction.
+
+Eligibility requires:
+
+- a visible stable issue at the supplied snapshot;
+- aggregate analysis status `current`;
+- non-experimental origin data;
+- a category other than `evidence_gap`;
+- `resolved` or `lexical` scope quality.
+
+No visible issue rows return `404`. Aggregate status covers every visible
+occurrence, so any non-current visible occurrence returns
+`analysis_not_current`.
+
+Eligible response:
+
+```json
+{
+  "schema_version": "belay.fix.v1",
+  "data": {
+    "eligible": true,
+    "reason": "eligible",
+    "action_token": "<signed opaque token>",
+    "expires_at": "2026-09-08T18:15:00Z",
+    "change_catalog_version": "fix-change.v1"
+  }
+}
+```
+
+Ineligible current issues return `200` with `eligible=false`,
+`action_token=null`, `expires_at=null`, and one fixed reason:
+
+- `analysis_not_current`;
+- `experimental_signal`;
+- `evidence_gap`;
+- `scope_unavailable`.
+
+The action token authenticates its structure, issue ID, immutable issue
+projection snapshot, issued-at time, and expiry. Invalid cursor syntax returns
+`400`; an expired or compacted issue view returns `410
+belay.local/cursor-expired`.
+
+### `POST /v1/issues/{id}/fixes`
+
+Required headers:
+
+```text
+Authorization: Bearer <per-launch Local token>
+Content-Type: application/json
+Idempotency-Key: <canonical lowercase UUIDv4>
+X-Belay-Intent: record-fix-attempt.v1
+Origin: http://<exact numeric loopback listener address and port>
+```
+
+The request `Host` must equal the actual listener address and port. If
+`Sec-Fetch-Site` is present, it must be `same-origin`. Missing, `null`,
+cross-origin, DNS-name, wrong-port, or duplicate security headers are rejected.
+Forwarded host and protocol headers are ignored. CORS is not enabled.
+
+The body is limited to 1 KiB, must use identity encoding, must contain exactly
+one JSON object, and rejects unknown fields, duplicate fields, or trailing JSON:
+
+```json
+{
+  "action_token": "<signed opaque token>",
+  "change_kind": "code_change"
+}
+```
+
+The server authenticates token structure and MAC and verifies the signed issue
+against the route before durable idempotency lookup. For a new declaration it
+then validates token expiry and snapshot freshness, derives aggregate
+eligibility, chooses the latest visible occurrence, and captures its exact
+revision, generation, timestamps, fingerprint, session, detector provenance,
+and cited event IDs in the same transaction.
+
+First creation returns `201` and `replayed=false`. An identical request using
+the same idempotency key returns the original row with `200` and
+`replayed=true`, including after action-token expiry. Reusing that key with
+different canonical intent returns `409 belay.local/idempotency-conflict`.
+
+Create/replay response:
+
+```json
+{
+  "schema_version": "belay.fix.v1",
+  "data": {
+    "annotation_id": "fxa_...",
+    "issue_id": "iss_...",
+    "anchor_revision_id": "ior_...",
+    "anchor_occurrence_id": "occ_...",
+    "anchor_session_id": "ses_...",
+    "fingerprint_id": "ifp_...",
+    "fingerprint_version": "1",
+    "origin": "belay",
+    "detector_id": "explicit_command_failure",
+    "detector_version": "1",
+    "scope_quality": "resolved",
+    "issue_snapshot_generation": 42,
+    "anchor_analysis_generation": 41,
+    "anchor_first_observed_at": "2026-09-08T17:00:00Z",
+    "anchor_last_observed_at": "2026-09-08T17:02:00Z",
+    "change_kind": "code_change",
+    "change_catalog_version": "fix-change.v1",
+    "recorded_via": "local_ui",
+    "recorded_at": "2026-09-08T18:00:00Z",
+    "monitor_from": "2026-09-08T18:00:00Z",
+    "evidence_currently_retained": "available",
+    "state": "active",
+    "retraction_reason": null,
+    "retracted_at": null
+  },
+  "replayed": false
+}
+```
+
+Active response DTOs encode `retraction_reason` and `retracted_at` explicitly as
+JSON `null`.
+
+### `GET /v1/issues/{id}/fixes`
+
+Accepts only:
+
+- `limit`: default 20, maximum 100;
+- `cursor`: opaque fix-history cursor bound to the issue ID.
+
+A fresh request captures independent annotation and retraction high-water marks.
+Rows are ordered by `recorded_at DESC, annotation_id DESC`. New annotations and
+new retractions after page one are excluded from the existing cursor chain.
+Fix-history cursors do not expire under ordinary retention.
+
+Response:
+
+```json
+{
+  "schema_version": "belay.fix.v1",
+  "data": [],
+  "next_cursor": null,
+  "has_more": false,
+  "returned_count": 0,
+  "limit": 20,
+  "evidence_evaluated_at": "2026-09-08T18:05:00Z"
+}
+```
+
+Each row uses the complete annotation DTO shown above. `state` is `active` or
+`retracted`. Retracted rows contain their fixed `retraction_reason` and
+`retracted_at`; active rows contain explicit nulls.
+
+`evidence_currently_retained` is evaluated at page-read time:
+
+- `available`: every originally cited event remains;
+- `partial`: some cited events remain;
+- `pruned`: no originally cited event remains;
+- `unknown`: the annotation had no baseline citations.
+
+A syntactically valid issue ID with no annotation rows returns an empty `200`
+even if the issue projection no longer contains that issue. History remains
+readable after issue disappearance and Local restart.
+
+### `POST /v1/issues/{id}/fixes/{annotation_id}/retractions`
+
+Uses the same bearer, exact listener `Host`/`Origin`, fetch-site, media type,
+encoding, 1 KiB body, strict JSON, and UUIDv4 idempotency requirements as
+creation, with:
+
+```text
+X-Belay-Intent: retract-fix-attempt.v1
+```
+
+Body:
+
+```json
+{"reason":"recorded_by_mistake"}
+```
+
+The original annotation is never changed or deleted. First append returns `201`;
+an identical retry returns `200` and `replayed=true`. Reusing the key with
+different canonical content returns `409 belay.local/idempotency-conflict`.
+Trying to append another retraction with a different key returns `409
+belay.local/already-retracted`.
+
+Response:
+
+```json
+{
+  "schema_version": "belay.fix.v1",
+  "data": {
+    "retraction_id": "fxr_...",
+    "annotation_id": "fxa_...",
+    "issue_id": "iss_...",
+    "reason": "recorded_by_mistake",
+    "recorded_via": "local_ui",
+    "retracted_at": "2026-09-08T18:10:00Z"
+  },
+  "replayed": false
+}
+```
+
+### Fix error contract
+
+Error responses are `application/problem+json`, contain a server-generated
+`request_id`, and never reflect the bearer token, action token, idempotency key,
+cursor, issue ID, annotation ID, or request body.
+
+| Condition | Status/type |
+|---|---|
+| Missing or invalid bearer | `401 about:blank` |
+| Missing/mismatched listener Origin or Host, bad fetch-site or intent | `403 belay.local/write-forbidden` |
+| Unsupported media type or content encoding | `415 belay.local/unsupported-media-type` |
+| Body over 1 KiB | `413 belay.local/request-too-large` |
+| Malformed query/header/JSON/enum/ID/key/token | `400 about:blank` |
+| Expired/compacted action snapshot for a new declaration | `410 belay.local/cursor-expired` |
+| Issue or annotation not found | `404 about:blank` |
+| Current issue is ineligible | `409 belay.local/ineligible-fix-annotation` |
+| Idempotency key reused for different content | `409 belay.local/idempotency-conflict` |
+| Annotation already retracted through another request | `409 belay.local/already-retracted` |
+| Storage failure | `500 about:blank` |
+
+### Persistence, retention, and privacy
+
+Annotations and retractions are append-only Local state in the Keychain-backed
+store. Their minimized records contain opaque identifiers, fixed catalog
+values, timestamps, and request fingerprints; no free-text or evidence payload
+is accepted. Opaque identities and request fingerprints are derived with
+store-specific, domain-separated keys; raw idempotency keys are never persisted
+or logged.
+
+Ordinary event/finding/issue retention excludes annotation and retraction rows.
+Event pruning cascades only annotation citation sidecars, which may change
+read-time evidence status without deleting the declaration. History, create
+replay, and retraction replay survive Local process restart when the same Local
+database and Keychain key are used. A full Local database reset removes them
+with the rest of Local state.
+
 ## Authentication
 
 - Local browser requests use a random per-launch token.
+- Local fix writes additionally require exact same-origin intent bound to the
+  actual numeric loopback listener, strict JSON, a route-specific intent header,
+  and a canonical UUIDv4 idempotency key.
 - Local MCP uses stdio only. It opens no network listener and has no loopback
   credential. The configured client spawns the process, and access is bounded by
   the logged-in user's process, filesystem, database, and Keychain permissions.
@@ -529,6 +814,12 @@ Errors use `application/problem+json` with:
     shared-root-cause language.
 11. Exact event lookup remains bounded, session-constrained, and rejects
     unrelated query parameters.
+12. Fix writes fail closed without the actual listener-bound Origin/Host and
+    explicit browser intent.
+13. Fix creation/retraction are append-only, idempotent, payload-free, and
+    survive Local restart and ordinary retention.
+14. Fix recording remains browser-only; MCP still exposes exactly six read-only
+    tools, and recurrence remains P0-04.
 
 Teams shape compatibility and cross-workspace authorization remain future
 acceptance requirements, not Local Alpha claims.

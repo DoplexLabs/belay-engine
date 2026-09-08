@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -324,6 +326,35 @@ func TestDoctorAnalysisStatusExposesCatalogAndCoverage(t *testing.T) {
 		!status.Coverage.Complete ||
 		status.Coverage.CurrentSessions != 0 {
 		t.Fatalf("doctor analysis status = %+v", status)
+	}
+}
+
+func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
+	store, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "belay.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server, err := newLocalHTTPServer(store, "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/iss_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/fixes",
+		nil,
+	)
+	request.RemoteAddr = "127.0.0.1:1234"
+	request.Header.Set("Authorization", "Bearer launch-secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("fix history status = %d body=%s", response.Code, response.Body.String())
 	}
 }
 

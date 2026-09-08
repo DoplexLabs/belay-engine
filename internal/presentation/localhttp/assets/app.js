@@ -7,7 +7,9 @@
     findings: { page: 20 },
     issues: { page: 20 },
     occurrences: { page: 20 },
+    fixHistory: { page: 20 },
   });
+  const mutationRequestDeadlineMilliseconds = 15_000;
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
   const issueCatalog = Object.freeze({
     "issue.explicit_command_failure": Object.freeze({
@@ -47,6 +49,77 @@
     unknown:
       "Analysis status is unavailable; result freshness and completeness are uncertain.",
   });
+  const fixChangeCatalog = Object.freeze([
+    Object.freeze({
+      value: "code_change",
+      label: "Code change",
+      description: "Source or test code changed.",
+    }),
+    Object.freeze({
+      value: "configuration_change",
+      label: "Configuration change",
+      description: "Project/application configuration changed.",
+    }),
+    Object.freeze({
+      value: "dependency_change",
+      label: "Dependency change",
+      description: "Dependency version or lock state changed.",
+    }),
+    Object.freeze({
+      value: "permission_change",
+      label: "Permission change",
+      description: "Access or permission configuration changed.",
+    }),
+    Object.freeze({
+      value: "environment_change",
+      label: "Environment change",
+      description: "Local runtime, toolchain, or environment changed.",
+    }),
+    Object.freeze({
+      value: "agent_instruction",
+      label: "Agent instruction",
+      description: "User-level agent instruction changed.",
+    }),
+    Object.freeze({
+      value: "project_rule",
+      label: "Project rule",
+      description: "Repository/project agent rule changed.",
+    }),
+    Object.freeze({
+      value: "monitor_hook",
+      label: "Monitor hook",
+      description: "Agent monitoring hook/configuration changed.",
+    }),
+    Object.freeze({
+      value: "other",
+      label: "Other",
+      description: "A deliberate category outside the fixed catalog.",
+    }),
+  ]);
+  const fixRetractionCatalog = Object.freeze([
+    Object.freeze({
+      value: "recorded_by_mistake",
+      label: "Recorded by mistake",
+    }),
+    Object.freeze({
+      value: "superseded",
+      label: "Superseded by another declaration",
+    }),
+    Object.freeze({
+      value: "other",
+      label: "Other",
+    }),
+  ]);
+  const fixEligibilityMessages = Object.freeze({
+    analysis_not_current:
+      "Recording is unavailable until issue analysis is current.",
+    experimental_signal:
+      "Experimental signals cannot anchor fix-attempt declarations.",
+    evidence_gap:
+      "Evidence gaps cannot anchor fix-attempt declarations.",
+    scope_unavailable:
+      "This issue lacks a compatible private scope for future exact recurrence measurement.",
+  });
   const config = globalThis.BELAY_LOCAL_CONFIG || {};
   const state = {
     token: resolveToken(config),
@@ -71,6 +144,21 @@
     occurrenceHasMore: false,
     occurrenceStatus: "idle",
     occurrenceRequestGeneration: 0,
+    fixEligibility: null,
+    fixEligibilityStatus: "idle",
+    fixEligibilityRequestGeneration: 0,
+    fixHistory: [],
+    fixHistoryNextCursor: "",
+    fixHistoryHasMore: false,
+    fixHistoryStatus: "idle",
+    fixHistoryRequestGeneration: 0,
+    fixEvidenceEvaluatedAt: "",
+    fixActionMessage: "",
+    fixActionTone: "status",
+    activeModal: "",
+    modalSubmitting: false,
+    dialogReturnFocus: null,
+    activeRetractionAnnotationID: "",
     attentionRefreshGeneration: 0,
     directSessionRequestGeneration: 0,
     issueReturnFocus: null,
@@ -105,6 +193,7 @@
   };
 
   const elements = {
+    appShell: document.querySelector("#app-shell"),
     navAttention: document.querySelector("#nav-attention"),
     navSessions: document.querySelector("#nav-sessions"),
     attentionNavCount: document.querySelector("#attention-nav-count"),
@@ -176,6 +265,16 @@
     issueMetadata: document.querySelector("#issue-metadata"),
     issueFingerprint: document.querySelector("#issue-fingerprint"),
     copyIssueFingerprint: document.querySelector("#copy-issue-fingerprint"),
+    recordFixAttempt: document.querySelector("#record-fix-attempt"),
+    fixEligibilityStatus: document.querySelector("#fix-eligibility-status"),
+    fixActionStatus: document.querySelector("#fix-action-status"),
+    fixHistoryList: document.querySelector("#fix-history-list"),
+    fixHistoryLoading: document.querySelector("#fix-history-loading"),
+    fixHistoryEmpty: document.querySelector("#fix-history-empty"),
+    fixEvidenceEvaluated: document.querySelector("#fix-evidence-evaluated"),
+    fixHistoryPagination: document.querySelector("#fix-history-pagination"),
+    fixHistoryPageStatus: document.querySelector("#fix-history-page-status"),
+    fixHistoryLoadMore: document.querySelector("#fix-history-load-more"),
     occurrenceCount: document.querySelector("#occurrence-count"),
     occurrenceList: document.querySelector("#occurrence-list"),
     occurrencesLoading: document.querySelector("#occurrences-loading"),
@@ -238,16 +337,52 @@
     errorTitle: document.querySelector("#error-title"),
     errorDetail: document.querySelector("#error-detail"),
     errorRetry: document.querySelector("#error-retry"),
+    fixAttemptModalLayer: document.querySelector("#fix-attempt-modal-layer"),
+    fixAttemptDialog: document.querySelector("#fix-attempt-dialog"),
+    fixAttemptClose: document.querySelector("#fix-attempt-close"),
+    fixAttemptCancel: document.querySelector("#fix-attempt-cancel"),
+    fixAttemptConfirm: document.querySelector("#fix-attempt-confirm"),
+    fixAttemptAlert: document.querySelector("#fix-attempt-alert"),
+    fixCategoryFieldset: document.querySelector("#fix-category-fieldset"),
+    fixCategoryOptions: document.querySelector("#fix-category-options"),
+    fixDraftRecovery: document.querySelector("#fix-draft-recovery"),
+    abandonFixDraft: document.querySelector("#abandon-fix-draft"),
+    fixRetractionModalLayer: document.querySelector(
+      "#fix-retraction-modal-layer",
+    ),
+    fixRetractionDialog: document.querySelector("#fix-retraction-dialog"),
+    fixRetractionClose: document.querySelector("#fix-retraction-close"),
+    fixRetractionCancel: document.querySelector("#fix-retraction-cancel"),
+    fixRetractionConfirm: document.querySelector("#fix-retraction-confirm"),
+    fixRetractionAlert: document.querySelector("#fix-retraction-alert"),
+    fixRetractionFieldset: document.querySelector(
+      "#fix-retraction-fieldset",
+    ),
+    fixRetractionOptions: document.querySelector(
+      "#fix-retraction-options",
+    ),
+    fixRetractionRecovery: document.querySelector(
+      "#fix-retraction-recovery",
+    ),
+    abandonFixRetraction: document.querySelector(
+      "#abandon-fix-retraction",
+    ),
   };
 
   const focusRegistry = {
     issueCards: new Map(),
     occurrenceActions: new Map(),
     sessionCards: new Map(),
+    fixTriggers: new Map(),
+    fixHistoryRows: new Map(),
+    fixRetractionTriggers: new Map(),
   };
+  const fixDrafts = new Map();
+  const fixRetractionDrafts = new Map();
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
+  renderFixDialogChoices();
   bindEvents();
   setActiveView("attention", false);
   refreshAll(false);
@@ -290,6 +425,8 @@
       loadIssueBucket(state.evidenceGaps, true);
     });
     elements.occurrencesLoadMore.addEventListener("click", loadMoreOccurrences);
+    elements.recordFixAttempt.addEventListener("click", openFixAttemptDialog);
+    elements.fixHistoryLoadMore.addEventListener("click", loadMoreFixHistory);
     elements.issueBackButton.addEventListener("click", closeIssueDetail);
     elements.copyIssueFingerprint.addEventListener("click", () => {
       copyText(
@@ -314,6 +451,43 @@
       elements.allEventsToggle.classList.toggle("is-active", state.showAllEvents);
       renderEvents();
     });
+    elements.fixAttemptClose.addEventListener("click", () => {
+      closeFixAttemptDialog(true);
+    });
+    elements.fixAttemptCancel.addEventListener("click", () => {
+      closeFixAttemptDialog(true);
+    });
+    elements.fixAttemptConfirm.addEventListener("click", () => {
+      void submitFixAttempt();
+    });
+    elements.abandonFixDraft.addEventListener("click", abandonFixDraft);
+    elements.fixCategoryOptions.addEventListener("change", (event) => {
+      updateFixDraftChoice(event.target);
+    });
+    elements.fixRetractionClose.addEventListener("click", () => {
+      closeFixRetractionDialog(true);
+    });
+    elements.fixRetractionCancel.addEventListener("click", () => {
+      closeFixRetractionDialog(true);
+    });
+    elements.fixRetractionConfirm.addEventListener("click", () => {
+      void submitFixRetraction();
+    });
+    elements.abandonFixRetraction.addEventListener(
+      "click",
+      abandonFixRetraction,
+    );
+    elements.fixRetractionOptions.addEventListener("change", (event) => {
+      updateFixRetractionChoice(event.target);
+    });
+    elements.fixAttemptModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
+    elements.fixRetractionModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
 
     [
       [elements.issueFilterSeverity, "severity"],
@@ -407,6 +581,7 @@
 
     globalThis.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
+      if (state.activeModal) return;
       if (state.activeView === "sessions" && state.selectedSessionID) {
         closeTimeline();
       } else if (state.activeView === "attention" && state.selectedIssueID) {
@@ -546,6 +721,17 @@
     }
     if (reference.type === "session") {
       return focusRegistry.sessionCards.get(reference.sessionID) || null;
+    }
+    if (reference.type === "fix-trigger") {
+      return focusRegistry.fixTriggers.get(reference.issueID) || null;
+    }
+    if (reference.type === "fix-history") {
+      return focusRegistry.fixHistoryRows.get(reference.annotationID) || null;
+    }
+    if (reference.type === "fix-retraction") {
+      return (
+        focusRegistry.fixRetractionTriggers.get(reference.annotationID) || null
+      );
     }
     return null;
   }
@@ -1030,6 +1216,7 @@
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
     state.occurrenceStatus = "loading";
+    resetFixIssueState();
     elements.attentionWelcome.hidden = true;
     elements.issueDetail.hidden = false;
     document.body.classList.add("is-attention-detail-open");
@@ -1042,6 +1229,8 @@
       state.selectedIssueKind === "evidence_gap"
         ? state.evidenceGaps
         : state.issues;
+    void loadFixEligibility(issueID, bucket.viewCursor);
+    void loadFixHistory(issueID, false);
     return loadIssueDetail(false, bucket.viewCursor);
   }
 
@@ -1144,6 +1333,7 @@
       readText(issue.fingerprint_id) || "Unavailable";
     elements.copyIssueFingerprint.disabled = !readText(issue.fingerprint_id);
     renderIssueMetadata(issue);
+    renderFixAttempts();
     renderOccurrences();
   }
 
@@ -1166,6 +1356,1056 @@
       fragment.append(row);
     });
     elements.issueMetadata.replaceChildren(fragment);
+  }
+
+  function resetFixIssueState() {
+    state.fixEligibilityRequestGeneration += 1;
+    state.fixHistoryRequestGeneration += 1;
+    state.fixEligibility = null;
+    state.fixEligibilityStatus = "idle";
+    state.fixHistory = [];
+    state.fixHistoryNextCursor = "";
+    state.fixHistoryHasMore = false;
+    state.fixHistoryStatus = "idle";
+    state.fixEvidenceEvaluatedAt = "";
+    state.fixActionMessage = "";
+    state.fixActionTone = "status";
+    focusRegistry.fixTriggers.clear();
+    focusRegistry.fixHistoryRows.clear();
+    focusRegistry.fixRetractionTriggers.clear();
+  }
+
+  async function loadFixEligibility(issueID, viewCursor) {
+    const generation = ++state.fixEligibilityRequestGeneration;
+    state.fixEligibility = null;
+    state.fixEligibilityStatus = "loading";
+    renderFixAttempts();
+    if (!viewCursor) {
+      state.fixEligibilityStatus = "error";
+      renderFixAttempts();
+      return false;
+    }
+    const parameters = new URLSearchParams({ view_cursor: viewCursor });
+    try {
+      const response = await apiGet(
+        `/v1/issues/${encodeURIComponent(issueID)}/fix-eligibility?${parameters.toString()}`,
+      );
+      requireFixSchema(response);
+      if (
+        generation !== state.fixEligibilityRequestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      const eligibility = isRecord(response.data) ? response.data : {};
+      state.fixEligibility = {
+        eligible: eligibility.eligible === true,
+        reason: readText(eligibility.reason),
+        actionToken: readText(eligibility.action_token),
+        expiresAt: readText(eligibility.expires_at),
+        changeCatalogVersion: readText(
+          eligibility.change_catalog_version,
+        ),
+      };
+      state.fixEligibilityStatus = "ready";
+      renderFixAttempts();
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.fixEligibilityRequestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      if (isCursorExpired(error)) {
+        await refreshAttentionAfterExpiry();
+        return false;
+      }
+      state.fixEligibility = null;
+      state.fixEligibilityStatus = "error";
+      renderFixAttempts();
+      return false;
+    }
+  }
+
+  async function loadFixHistory(issueID, append) {
+    const generation = ++state.fixHistoryRequestGeneration;
+    const cursor = append ? state.fixHistoryNextCursor : "";
+    state.fixHistoryStatus = append ? "loading-more" : "loading";
+    renderFixAttempts();
+    const parameters = new URLSearchParams({
+      limit: String(pageLimits.fixHistory.page),
+    });
+    if (cursor) parameters.set("cursor", cursor);
+    try {
+      const response = await apiGet(
+        `/v1/issues/${encodeURIComponent(issueID)}/fixes?${parameters.toString()}`,
+      );
+      requireFixSchema(response);
+      if (
+        generation !== state.fixHistoryRequestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      const evaluatedAt = readText(response.evidence_evaluated_at);
+      const page = Array.isArray(response.data)
+        ? response.data
+            .filter(
+              (annotation) =>
+                isRecord(annotation) &&
+                readText(annotation.annotation_id) &&
+                readText(annotation.issue_id) === issueID,
+            )
+            .map((annotation) => ({
+              ...annotation,
+              browser_evidence_evaluated_at: evaluatedAt,
+            }))
+        : [];
+      state.fixHistory =
+        append && cursor
+          ? deduplicateByID(
+              state.fixHistory.concat(page),
+              "annotation_id",
+            )
+          : deduplicateByID(page, "annotation_id");
+      state.fixHistoryNextCursor = readCursor(response.next_cursor);
+      state.fixHistoryHasMore =
+        response.has_more === true || Boolean(state.fixHistoryNextCursor);
+      state.fixEvidenceEvaluatedAt = evaluatedAt;
+      state.fixHistoryStatus = "ready";
+      renderFixAttempts();
+      return true;
+    } catch {
+      if (
+        generation !== state.fixHistoryRequestGeneration ||
+        issueID !== state.selectedIssueID
+      ) {
+        return false;
+      }
+      state.fixHistoryStatus = "error";
+      renderFixAttempts();
+      return false;
+    }
+  }
+
+  function loadMoreFixHistory() {
+    if (
+      !state.selectedIssueID ||
+      !state.fixHistoryHasMore ||
+      !state.fixHistoryNextCursor
+    ) {
+      return;
+    }
+    void loadFixHistory(state.selectedIssueID, true);
+  }
+
+  function renderFixAttempts() {
+    const issueID = state.selectedIssueID;
+    if (!issueID) return;
+    focusRegistry.fixTriggers.set(issueID, elements.recordFixAttempt);
+    const eligibility = state.fixEligibility || {};
+    const retainedDraft = fixDrafts.get(issueID);
+    const canResume =
+      Boolean(retainedDraft) &&
+      retainedDraft.unresolved === true &&
+      Boolean(retainedDraft.idempotencyKey) &&
+      Boolean(retainedDraft.actionToken);
+    const catalogReady =
+      eligibility.changeCatalogVersion === "fix-change.v1";
+    const canRecord =
+      canResume ||
+      (state.fixEligibilityStatus === "ready" &&
+        eligibility.eligible === true &&
+        Boolean(eligibility.actionToken) &&
+        catalogReady);
+    elements.recordFixAttempt.disabled = !canRecord;
+    elements.recordFixAttempt.textContent = canResume
+      ? "Resume fix attempt"
+      : "Record fix attempt";
+    if (canResume) {
+      elements.fixEligibilityStatus.textContent =
+        "An unresolved submission is retained. Resume it with the same private retry key or explicitly abandon it.";
+    } else if (state.fixEligibilityStatus === "loading") {
+      elements.fixEligibilityStatus.textContent =
+        "Checking whether this current issue can anchor a declaration…";
+    } else if (state.fixEligibilityStatus === "error") {
+      elements.fixEligibilityStatus.textContent =
+        "Eligibility could not be confirmed. Matching-session evidence remains available.";
+    } else if (canRecord) {
+      const expiresAt = parseDate(eligibility.expiresAt);
+      elements.fixEligibilityStatus.textContent = expiresAt
+        ? `Eligible for an optional declaration. Confirmation expires ${formatRelativeTime(expiresAt)}.`
+        : "Eligible for an optional declaration.";
+    } else if (state.fixEligibilityStatus === "ready") {
+      elements.fixEligibilityStatus.textContent = catalogReady
+        ? fixEligibilityMessages[eligibility.reason] ||
+          "This issue is not eligible for a fix-attempt declaration."
+        : "The required change-category catalog is unavailable.";
+    } else {
+      elements.fixEligibilityStatus.textContent =
+        "Eligibility has not been checked.";
+    }
+    renderFixActionStatus();
+    renderFixHistory();
+  }
+
+  function renderFixActionStatus() {
+    const safeTone = ["status", "success", "error", "pending"].includes(
+      state.fixActionTone,
+    )
+      ? state.fixActionTone
+      : "status";
+    elements.fixActionStatus.hidden = !state.fixActionMessage;
+    elements.fixActionStatus.textContent = state.fixActionMessage;
+    elements.fixActionStatus.dataset.tone = safeTone;
+    elements.fixActionStatus.setAttribute(
+      "role",
+      safeTone === "error" ? "alert" : "status",
+    );
+    elements.fixActionStatus.setAttribute(
+      "aria-live",
+      safeTone === "error" ? "assertive" : "polite",
+    );
+  }
+
+  function renderFixHistory() {
+    focusRegistry.fixHistoryRows.clear();
+    focusRegistry.fixRetractionTriggers.clear();
+    const fragment = document.createDocumentFragment();
+    state.fixHistory.forEach((annotation) => {
+      fragment.append(createFixHistoryRow(annotation));
+    });
+    elements.fixHistoryList.replaceChildren(fragment);
+    elements.fixHistoryLoading.hidden =
+      state.fixHistoryStatus !== "loading";
+    elements.fixHistoryEmpty.hidden =
+      state.fixHistoryStatus !== "ready" || state.fixHistory.length !== 0;
+    if (state.fixHistoryStatus === "error" && state.fixHistory.length === 0) {
+      elements.fixHistoryList.append(
+        createElement(
+          "p",
+          "overview-empty",
+          "Fix-attempt history could not be loaded. Matching sessions remain available.",
+        ),
+      );
+    }
+    elements.fixHistoryPagination.hidden = !state.fixHistoryHasMore;
+    elements.fixHistoryLoadMore.disabled =
+      state.fixHistoryStatus === "loading-more";
+    elements.fixHistoryPageStatus.textContent = state.fixHistoryHasMore
+      ? `Showing ${state.fixHistory.length}; more declarations are available.`
+      : `Showing ${state.fixHistory.length} recorded ${
+          state.fixHistory.length === 1 ? "declaration" : "declarations"
+        }.`;
+    const evaluatedAt = parseDate(state.fixEvidenceEvaluatedAt);
+    elements.fixEvidenceEvaluated.textContent = evaluatedAt
+      ? `Anchor evidence retention evaluated ${formatRelativeTime(evaluatedAt)}.`
+      : state.fixHistory.length
+        ? "Anchor evidence retention evaluation time is unavailable."
+        : "";
+  }
+
+  function createFixHistoryRow(annotation) {
+    const annotationID = readText(annotation && annotation.annotation_id);
+    const row = createElement("article", "fix-history-card");
+    row.tabIndex = -1;
+    if (annotationID) {
+      focusRegistry.fixHistoryRows.set(annotationID, row);
+    }
+    const category = fixChangeCatalogEntry(annotation.change_kind);
+    const stateValue = normalizeFixAnnotationState(annotation.state);
+    const header = createElement("div", "fix-history-header");
+    const title = createElement("div");
+    title.append(
+      createElement("strong", "", category.label),
+      createElement(
+        "small",
+        "",
+        annotation.change_catalog_version === "fix-change.v1"
+          ? "Catalog fix-change.v1"
+          : "Catalog version unavailable",
+      ),
+    );
+    const badges = createElement("div", "fix-history-badges");
+    const stateBadge = createElement(
+      "span",
+      "fix-state-badge",
+      stateValue === "retracted"
+        ? "Retracted declaration"
+        : stateValue === "active"
+          ? "Active declaration"
+          : "Declaration state unavailable",
+    );
+    stateBadge.dataset.tone = stateValue;
+    const evidenceStatus = normalizeFixEvidenceStatus(
+      annotation.evidence_currently_retained,
+    );
+    const evidenceBadge = createElement(
+      "span",
+      "fix-evidence-badge",
+      fixEvidenceStatusLabel(evidenceStatus),
+    );
+    evidenceBadge.dataset.tone = evidenceStatus;
+    badges.append(stateBadge, evidenceBadge);
+    header.append(title, badges);
+    const description = createElement(
+      "p",
+      "fix-history-description",
+      category.description,
+    );
+    const metadata = createElement("dl", "fix-history-metadata");
+    appendFixMetadata(
+      metadata,
+      "Recorded",
+      formatFullDate(parseDate(annotation.recorded_at)) || "Time unavailable",
+    );
+    appendFixMetadata(
+      metadata,
+      "Evidence",
+      fixEvidenceHistoryText(annotation, evidenceStatus),
+    );
+    if (stateValue === "retracted") {
+      appendFixMetadata(
+        metadata,
+        "Retraction",
+        `${fixRetractionReasonLabel(annotation.retraction_reason)} · ${
+          formatFullDate(parseDate(annotation.retracted_at)) ||
+          "Time unavailable"
+        }`,
+      );
+    }
+    row.append(header, description, metadata);
+    if (stateValue === "active" && annotationID) {
+      const actions = createElement("div", "fix-history-actions");
+      const retract = createElement(
+        "button",
+        "secondary-button",
+        "Retract",
+      );
+      retract.type = "button";
+      retract.addEventListener("click", () => {
+        openFixRetractionDialog(annotationID);
+      });
+      focusRegistry.fixRetractionTriggers.set(annotationID, retract);
+      actions.append(retract);
+      row.append(actions);
+    } else if (stateValue === "retracted") {
+      row.append(
+        createElement(
+          "p",
+          "fix-retraction-note",
+          "Preserved in history and excluded from future recurrence monitoring. Recurrence monitoring is not yet available.",
+        ),
+      );
+    } else {
+      row.append(
+        createElement(
+          "p",
+          "fix-retraction-note",
+          "Declaration state is unavailable. Retraction is disabled until Local reports an exact active state.",
+        ),
+      );
+    }
+    return row;
+  }
+
+  function appendFixMetadata(list, label, value) {
+    const item = createElement("div");
+    item.append(
+      createElement("dt", "", label),
+      createElement("dd", "", value),
+    );
+    list.append(item);
+  }
+
+  function fixChangeCatalogEntry(value) {
+    return (
+      fixChangeCatalog.find((entry) => entry.value === readText(value)) || {
+        value: "",
+        label: "Category unavailable",
+        description:
+          "The recorded category is outside this browser catalog version.",
+      }
+    );
+  }
+
+  function normalizeFixAnnotationState(value) {
+    const stateValue = readText(value);
+    return ["active", "retracted"].includes(stateValue)
+      ? stateValue
+      : "unknown";
+  }
+
+  function normalizeFixEvidenceStatus(value) {
+    const status = readText(value);
+    return ["available", "partial", "pruned", "unknown"].includes(status)
+      ? status
+      : "unknown";
+  }
+
+  function fixEvidenceStatusLabel(status) {
+    const labels = {
+      available: "Evidence retained",
+      partial: "Evidence partly retained",
+      pruned: "Evidence pruned",
+      unknown: "Evidence status unknown",
+    };
+    return labels[status] || labels.unknown;
+  }
+
+  function fixEvidenceStatusExplanation(status) {
+    const explanations = {
+      available: "All cited anchor events are currently retained.",
+      partial: "Some cited anchor events are currently retained.",
+      pruned: "No cited anchor events are currently retained.",
+      unknown: "Anchor evidence retention could not be determined.",
+    };
+    return explanations[status] || explanations.unknown;
+  }
+
+  function fixEvidenceHistoryText(annotation, status) {
+    const explanation = fixEvidenceStatusExplanation(status);
+    const evaluatedAt = parseDate(
+      annotation && annotation.browser_evidence_evaluated_at,
+    );
+    return evaluatedAt
+      ? `${explanation} Evaluated ${formatFullDate(evaluatedAt)}.`
+      : `${explanation} Evaluation time unavailable.`;
+  }
+
+  function fixRetractionReasonLabel(value) {
+    const entry = fixRetractionCatalog.find(
+      (candidate) => candidate.value === readText(value),
+    );
+    return entry ? entry.label : "Reason unavailable";
+  }
+
+  function renderFixDialogChoices() {
+    const categoryFragment = document.createDocumentFragment();
+    fixChangeCatalog.forEach((entry) => {
+      categoryFragment.append(
+        createDialogChoice(
+          "fix-change-kind",
+          `fix-change-${entry.value}`,
+          entry.value,
+          entry.label,
+          entry.description,
+        ),
+      );
+    });
+    elements.fixCategoryOptions.replaceChildren(categoryFragment);
+    const retractionFragment = document.createDocumentFragment();
+    fixRetractionCatalog.forEach((entry) => {
+      retractionFragment.append(
+        createDialogChoice(
+          "fix-retraction-reason",
+          `fix-retraction-${entry.value}`,
+          entry.value,
+          entry.label,
+          "",
+        ),
+      );
+    });
+    elements.fixRetractionOptions.replaceChildren(retractionFragment);
+  }
+
+  function createDialogChoice(name, id, value, label, description) {
+    const wrapper = createElement("label", "choice-option");
+    const input = createElement("input");
+    input.type = "radio";
+    input.name = name;
+    input.id = id;
+    input.value = value;
+    const copy = createElement("span");
+    copy.append(createElement("strong", "", label));
+    if (description) copy.append(createElement("small", "", description));
+    wrapper.append(input, copy);
+    return wrapper;
+  }
+
+  function openFixAttemptDialog() {
+    const issueID = state.selectedIssueID;
+    const eligibility = state.fixEligibility;
+    const retainedDraft = fixDrafts.get(issueID);
+    const canResume =
+      Boolean(retainedDraft) &&
+      retainedDraft.unresolved === true &&
+      Boolean(retainedDraft.idempotencyKey) &&
+      Boolean(retainedDraft.actionToken);
+    if (
+      !issueID ||
+      (!canResume &&
+        (state.fixEligibilityStatus !== "ready" ||
+          !eligibility ||
+          eligibility.eligible !== true ||
+          !eligibility.actionToken ||
+          eligibility.changeCatalogVersion !== "fix-change.v1"))
+    ) {
+      return;
+    }
+    state.dialogReturnFocus = { type: "fix-trigger", issueID };
+    state.activeModal = "fix-attempt";
+    hideModalAlert(elements.fixAttemptAlert);
+    syncFixDraftDialog();
+    const draft = getFixDraft(issueID);
+    const selected = elements.fixCategoryOptions.querySelector(
+      'input[name="fix-change-kind"]:checked',
+    );
+    const first = elements.fixCategoryOptions.querySelector(
+      'input[name="fix-change-kind"]',
+    );
+    openModalLayer(
+      elements.fixAttemptModalLayer,
+      elements.fixAttemptDialog,
+      draft.attempted ? elements.fixAttemptConfirm : selected || first,
+    );
+  }
+
+  function closeFixAttemptDialog(restoreFocus) {
+    if (
+      restoreFocus &&
+      state.activeModal === "fix-attempt" &&
+      state.modalSubmitting
+    ) {
+      return;
+    }
+    closeModalLayer(
+      "fix-attempt",
+      elements.fixAttemptModalLayer,
+      restoreFocus,
+    );
+    hideModalAlert(elements.fixAttemptAlert);
+  }
+
+  function getFixDraft(issueID) {
+    let draft = fixDrafts.get(issueID);
+    if (!draft) {
+      draft = {
+        changeKind: "",
+        idempotencyKey: "",
+        actionToken: "",
+        attempted: false,
+        unresolved: false,
+        pending: false,
+      };
+      fixDrafts.set(issueID, draft);
+    }
+    return draft;
+  }
+
+  function syncFixDraftDialog() {
+    const draft = getFixDraft(state.selectedIssueID);
+    const locked = draft.attempted || draft.pending;
+    elements.fixCategoryOptions
+      .querySelectorAll('input[name="fix-change-kind"]')
+      .forEach((input) => {
+        input.checked = input.value === draft.changeKind;
+        input.disabled = locked;
+      });
+    elements.fixDraftRecovery.hidden = !draft.unresolved;
+    elements.fixAttemptClose.disabled = draft.pending;
+    elements.fixAttemptCancel.disabled = draft.pending;
+    elements.abandonFixDraft.disabled = draft.pending;
+    elements.fixAttemptConfirm.disabled =
+      draft.pending || !fixChangeCatalogEntry(draft.changeKind).value;
+    elements.fixAttemptConfirm.textContent = draft.pending
+      ? "Recording…"
+      : draft.attempted
+        ? "Retry same declaration"
+        : "Record declaration";
+  }
+
+  function updateFixDraftChoice(target) {
+    if (
+      !(target instanceof HTMLInputElement) ||
+      target.name !== "fix-change-kind"
+    ) {
+      return;
+    }
+    const draft = getFixDraft(state.selectedIssueID);
+    if (draft.attempted || draft.pending) {
+      syncFixDraftDialog();
+      return;
+    }
+    const entry = fixChangeCatalogEntry(target.value);
+    draft.changeKind = entry.value;
+    hideModalAlert(elements.fixAttemptAlert);
+    syncFixDraftDialog();
+  }
+
+  function abandonFixDraft() {
+    const draft = getFixDraft(state.selectedIssueID);
+    if (draft.pending) return;
+    draft.idempotencyKey = "";
+    draft.actionToken = "";
+    draft.attempted = false;
+    draft.unresolved = false;
+    syncFixDraftDialog();
+    showModalAlert(
+      elements.fixAttemptAlert,
+      "Unresolved submission abandoned. Confirming again will create a new private retry key.",
+      false,
+    );
+  }
+
+  async function submitFixAttempt() {
+    const issueID = state.selectedIssueID;
+    const eligibility = state.fixEligibility;
+    const draft = getFixDraft(issueID);
+    if (!fixChangeCatalogEntry(draft.changeKind).value) {
+      showModalAlert(
+        elements.fixAttemptAlert,
+        "Select one primary change category before recording.",
+        false,
+      );
+      focusCurrentElement(
+        elements.fixCategoryOptions.querySelector(
+          'input[name="fix-change-kind"]',
+        ),
+      );
+      return;
+    }
+    if (draft.pending) {
+      return;
+    }
+    if (!draft.idempotencyKey) {
+      if (
+        !eligibility ||
+        eligibility.eligible !== true ||
+        !eligibility.actionToken ||
+        eligibility.changeCatalogVersion !== "fix-change.v1"
+      ) {
+        showModalAlert(
+          elements.fixAttemptAlert,
+          "Current eligibility could not be confirmed. Nothing was recorded.",
+          true,
+        );
+        return;
+      }
+      draft.idempotencyKey = createUUIDv4();
+      if (!draft.idempotencyKey) {
+        showModalAlert(
+          elements.fixAttemptAlert,
+          "A secure UUIDv4 retry key could not be created. Nothing was recorded.",
+          true,
+        );
+        return;
+      }
+      draft.actionToken = eligibility.actionToken;
+    }
+    draft.attempted = true;
+    draft.unresolved = true;
+    draft.pending = true;
+    state.modalSubmitting = true;
+    hideModalAlert(elements.fixAttemptAlert);
+    syncFixDraftDialog();
+    try {
+      const response = await apiMutation(
+        `/v1/issues/${encodeURIComponent(issueID)}/fixes`,
+        {
+          action_token: draft.actionToken,
+          change_kind: draft.changeKind,
+        },
+        draft.idempotencyKey,
+        "record-fix-attempt.v1",
+      );
+      requireFixSchema(response);
+      const annotation = isRecord(response.data) ? response.data : null;
+      const annotationID = readText(
+        annotation && annotation.annotation_id,
+      );
+      if (
+        !annotationID ||
+        readText(annotation.issue_id) !== issueID ||
+        readText(annotation.change_kind) !== draft.changeKind ||
+        readText(annotation.change_catalog_version) !== "fix-change.v1"
+      ) {
+        throw new Error("Local API returned an invalid fix-attempt response.");
+      }
+      const replayed = response.replayed === true;
+      fixDrafts.delete(issueID);
+      state.fixActionMessage = replayed
+        ? "Previously recorded attempt restored; no duplicate created."
+        : "Fix attempt declaration recorded · Not verified by Belay.";
+      state.fixActionTone = "success";
+      draft.pending = false;
+      state.modalSubmitting = false;
+      closeFixAttemptDialog(false);
+      await reloadFixHistoryAndFocus(issueID, annotationID);
+    } catch (error) {
+      draft.pending = false;
+      state.modalSubmitting = false;
+      if (isCursorExpired(error)) {
+        draft.idempotencyKey = "";
+        draft.actionToken = "";
+        draft.attempted = false;
+        draft.unresolved = false;
+        state.fixEligibility = null;
+        state.fixEligibilityStatus = "idle";
+        closeFixAttemptDialog(false);
+        showAttentionNotice(
+          "The fix-attempt confirmation expired. Your category was preserved, but nothing was resubmitted.",
+          "status",
+          7000,
+        );
+        await refreshAttentionAfterExpiry();
+        return;
+      }
+      syncFixDraftDialog();
+      showModalAlert(
+        elements.fixAttemptAlert,
+        fixMutationErrorMessage(error, "record"),
+        true,
+      );
+    }
+  }
+
+  function openFixRetractionDialog(annotationID) {
+    const annotation = state.fixHistory.find(
+      (entry) => readText(entry && entry.annotation_id) === annotationID,
+    );
+    if (
+      !state.selectedIssueID ||
+      !annotationID ||
+      normalizeFixAnnotationState(annotation && annotation.state) !== "active"
+    ) {
+      return;
+    }
+    state.activeRetractionAnnotationID = annotationID;
+    state.dialogReturnFocus = {
+      type: "fix-retraction",
+      annotationID,
+    };
+    state.activeModal = "fix-retraction";
+    hideModalAlert(elements.fixRetractionAlert);
+    syncFixRetractionDialog();
+    const draft = getFixRetractionDraft(
+      state.selectedIssueID,
+      annotationID,
+    );
+    const selected = elements.fixRetractionOptions.querySelector(
+      'input[name="fix-retraction-reason"]:checked',
+    );
+    const first = elements.fixRetractionOptions.querySelector(
+      'input[name="fix-retraction-reason"]',
+    );
+    openModalLayer(
+      elements.fixRetractionModalLayer,
+      elements.fixRetractionDialog,
+      draft.attempted ? elements.fixRetractionConfirm : selected || first,
+    );
+  }
+
+  function closeFixRetractionDialog(restoreFocus) {
+    if (
+      restoreFocus &&
+      state.activeModal === "fix-retraction" &&
+      state.modalSubmitting
+    ) {
+      return;
+    }
+    closeModalLayer(
+      "fix-retraction",
+      elements.fixRetractionModalLayer,
+      restoreFocus,
+    );
+    hideModalAlert(elements.fixRetractionAlert);
+    state.activeRetractionAnnotationID = "";
+  }
+
+  function fixRetractionDraftKey(issueID, annotationID) {
+    return `${issueID}\u0000${annotationID}`;
+  }
+
+  function getFixRetractionDraft(issueID, annotationID) {
+    const key = fixRetractionDraftKey(issueID, annotationID);
+    let draft = fixRetractionDrafts.get(key);
+    if (!draft) {
+      draft = {
+        reason: "",
+        idempotencyKey: "",
+        attempted: false,
+        unresolved: false,
+        pending: false,
+      };
+      fixRetractionDrafts.set(key, draft);
+    }
+    return draft;
+  }
+
+  function syncFixRetractionDialog() {
+    const draft = getFixRetractionDraft(
+      state.selectedIssueID,
+      state.activeRetractionAnnotationID,
+    );
+    const locked = draft.attempted || draft.pending;
+    elements.fixRetractionOptions
+      .querySelectorAll('input[name="fix-retraction-reason"]')
+      .forEach((input) => {
+        input.checked = input.value === draft.reason;
+        input.disabled = locked;
+      });
+    elements.fixRetractionRecovery.hidden = !draft.unresolved;
+    elements.fixRetractionClose.disabled = draft.pending;
+    elements.fixRetractionCancel.disabled = draft.pending;
+    elements.abandonFixRetraction.disabled = draft.pending;
+    elements.fixRetractionConfirm.disabled =
+      draft.pending || !fixRetractionReasonEntry(draft.reason);
+    elements.fixRetractionConfirm.textContent = draft.pending
+      ? "Retracting…"
+      : draft.attempted
+        ? "Retry same retraction"
+        : "Retract declaration";
+  }
+
+  function updateFixRetractionChoice(target) {
+    if (
+      !(target instanceof HTMLInputElement) ||
+      target.name !== "fix-retraction-reason"
+    ) {
+      return;
+    }
+    const draft = getFixRetractionDraft(
+      state.selectedIssueID,
+      state.activeRetractionAnnotationID,
+    );
+    if (draft.attempted || draft.pending) {
+      syncFixRetractionDialog();
+      return;
+    }
+    const entry = fixRetractionReasonEntry(target.value);
+    draft.reason = entry ? entry.value : "";
+    hideModalAlert(elements.fixRetractionAlert);
+    syncFixRetractionDialog();
+  }
+
+  function abandonFixRetraction() {
+    const draft = getFixRetractionDraft(
+      state.selectedIssueID,
+      state.activeRetractionAnnotationID,
+    );
+    if (draft.pending) return;
+    draft.idempotencyKey = "";
+    draft.attempted = false;
+    draft.unresolved = false;
+    syncFixRetractionDialog();
+    showModalAlert(
+      elements.fixRetractionAlert,
+      "Unresolved retraction abandoned. Confirming again will create a new private retry key.",
+      false,
+    );
+  }
+
+  function fixRetractionReasonEntry(value) {
+    return (
+      fixRetractionCatalog.find(
+        (entry) => entry.value === readText(value),
+      ) || null
+    );
+  }
+
+  async function submitFixRetraction() {
+    const issueID = state.selectedIssueID;
+    const annotationID = state.activeRetractionAnnotationID;
+    const draft = getFixRetractionDraft(issueID, annotationID);
+    if (!fixRetractionReasonEntry(draft.reason)) {
+      showModalAlert(
+        elements.fixRetractionAlert,
+        "Select one retraction reason before confirming.",
+        false,
+      );
+      focusCurrentElement(
+        elements.fixRetractionOptions.querySelector(
+          'input[name="fix-retraction-reason"]',
+        ),
+      );
+      return;
+    }
+    if (!issueID || !annotationID || draft.pending) return;
+    if (!draft.idempotencyKey) {
+      draft.idempotencyKey = createUUIDv4();
+      if (!draft.idempotencyKey) {
+        showModalAlert(
+          elements.fixRetractionAlert,
+          "A secure UUIDv4 retry key could not be created. Nothing was retracted.",
+          true,
+        );
+        return;
+      }
+    }
+    draft.attempted = true;
+    draft.unresolved = true;
+    draft.pending = true;
+    state.modalSubmitting = true;
+    hideModalAlert(elements.fixRetractionAlert);
+    syncFixRetractionDialog();
+    try {
+      const response = await apiMutation(
+        `/v1/issues/${encodeURIComponent(issueID)}/fixes/${encodeURIComponent(annotationID)}/retractions`,
+        { reason: draft.reason },
+        draft.idempotencyKey,
+        "retract-fix-attempt.v1",
+      );
+      requireFixSchema(response);
+      if (
+        !isRecord(response.data) ||
+        readText(response.data.annotation_id) !== annotationID ||
+        readText(response.data.issue_id) !== issueID
+      ) {
+        throw new Error("Local API returned an invalid retraction response.");
+      }
+      const replayed = response.replayed === true;
+      fixRetractionDrafts.delete(
+        fixRetractionDraftKey(issueID, annotationID),
+      );
+      state.fixActionMessage = replayed
+        ? "Previously recorded retraction restored; no duplicate created."
+        : "Retraction declaration recorded. The original attempt remains in history.";
+      state.fixActionTone = "success";
+      draft.pending = false;
+      state.modalSubmitting = false;
+      closeFixRetractionDialog(false);
+      await reloadFixHistoryAndFocus(issueID, annotationID);
+    } catch (error) {
+      draft.pending = false;
+      state.modalSubmitting = false;
+      syncFixRetractionDialog();
+      showModalAlert(
+        elements.fixRetractionAlert,
+        fixMutationErrorMessage(error, "retract"),
+        true,
+      );
+    }
+  }
+
+  async function reloadFixHistoryAndFocus(issueID, annotationID) {
+    const loaded = await loadFixHistory(issueID, false);
+    if (
+      !loaded ||
+      issueID !== state.selectedIssueID ||
+      !focusCurrentElement(focusRegistry.fixHistoryRows.get(annotationID))
+    ) {
+      focusCurrentElement(elements.fixActionStatus);
+    }
+  }
+
+  function fixMutationErrorMessage(error, action) {
+    const verb = action === "retract" ? "retraction" : "declaration";
+    if (error instanceof LocalMutationTimeoutError) {
+      return `The ${verb} timed out before Local confirmed it. Retry uses the same private key; do not start another submission.`;
+    }
+    if (!(error instanceof LocalAPIError)) {
+      return `The ${verb} was not confirmed. Retry uses the same private key; do not start another submission.`;
+    }
+    if (error.status === 403) {
+      return "Belay rejected this browser write. Reload Local and retry from the same listener page.";
+    }
+    if (error.status === 409) {
+      if (error.problemType === "belay.local/already-retracted") {
+        return "This declaration was already retracted by another request. Reload history before continuing.";
+      }
+      if (error.problemType === "belay.local/idempotency-conflict") {
+        return `This ${verb} conflicts with its retained retry key. Abandon the unresolved submission before choosing different input.`;
+      }
+      if (error.problemType === "belay.local/ineligible-fix-annotation") {
+        return "The issue is no longer eligible for this declaration. Refresh Attention before continuing.";
+      }
+      return `The ${verb} conflicted with current Local state. Its retry key remains retained.`;
+    }
+    if (error.status === 400) {
+      return `The ${verb} request was rejected. Review the selected category or reason before retrying.`;
+    }
+    if (error.status >= 500) {
+      return `Local could not confirm the ${verb}. Retry uses the same private key.`;
+    }
+    return `The ${verb} was not confirmed. Its retry key remains retained.`;
+  }
+
+  function requireFixSchema(response) {
+    if (!isRecord(response) || response.schema_version !== "belay.fix.v1") {
+      throw new Error("Local API returned an unsupported fix schema.");
+    }
+  }
+
+  function showFixActionStatus(message, tone) {
+    state.fixActionMessage = message;
+    state.fixActionTone = tone;
+    renderFixActionStatus();
+  }
+
+  function showModalAlert(element, message, moveFocus) {
+    element.textContent = message;
+    element.hidden = false;
+    if (moveFocus) focusCurrentElement(element);
+  }
+
+  function hideModalAlert(element) {
+    element.hidden = true;
+    element.textContent = "";
+  }
+
+  function openModalLayer(layer, dialog, initialFocus) {
+    elements.appShell.inert = true;
+    elements.appShell.setAttribute("aria-hidden", "true");
+    layer.hidden = false;
+    document.body.classList.add("is-modal-open");
+    focusCurrentElement(initialFocus) || focusCurrentElement(dialog);
+  }
+
+  function closeModalLayer(kind, layer, restoreFocus) {
+    if (state.activeModal !== kind && layer.hidden) return;
+    const returnFocus = state.dialogReturnFocus;
+    layer.hidden = true;
+    if (state.activeModal === kind) state.activeModal = "";
+    if (!state.activeModal) {
+      elements.appShell.inert = false;
+      elements.appShell.removeAttribute("aria-hidden");
+      document.body.classList.remove("is-modal-open");
+      applyPaneAccessibility();
+    }
+    state.dialogReturnFocus = null;
+    if (restoreFocus) {
+      restoreLogicalFocus(returnFocus, elements.issueDetailHeading);
+    }
+  }
+
+  function handleModalKeydown(event) {
+    if (!state.activeModal) return;
+    if (event.key === "Escape") {
+      if (state.modalSubmitting) return;
+      event.preventDefault();
+      if (state.activeModal === "fix-attempt") {
+        closeFixAttemptDialog(true);
+      } else {
+        closeFixRetractionDialog(true);
+      }
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const dialog =
+      state.activeModal === "fix-attempt"
+        ? elements.fixAttemptDialog
+        : elements.fixRetractionDialog;
+    const focusable = Array.from(
+      dialog.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter(canReceiveFocus);
+    if (!focusable.length) {
+      event.preventDefault();
+      focusCurrentElement(dialog);
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      focusCurrentElement(last);
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      focusCurrentElement(first);
+    }
   }
 
   function renderOccurrences() {
@@ -1365,6 +2605,10 @@
   function closeIssueDetail(restoreFocus = true) {
     const returnFocus = state.issueReturnFocus;
     state.occurrenceRequestGeneration += 1;
+    state.fixEligibilityRequestGeneration += 1;
+    state.fixHistoryRequestGeneration += 1;
+    closeFixAttemptDialog(false);
+    closeFixRetractionDialog(false);
     state.selectedIssueID = "";
     state.selectedIssueKind = "";
     state.selectedIssue = null;
@@ -1372,6 +2616,7 @@
     state.occurrenceNextCursor = "";
     state.occurrenceHasMore = false;
     state.occurrenceStatus = "idle";
+    resetFixIssueState();
     state.issueReturnFocus = null;
     document.body.classList.remove("is-attention-detail-open");
     elements.issueDetail.hidden = true;
@@ -2831,35 +4076,110 @@
     }
   }
 
+  class LocalMutationTimeoutError extends Error {
+    constructor() {
+      super(
+        "The Local mutation deadline elapsed before a response was confirmed.",
+      );
+      this.name = "LocalMutationTimeoutError";
+    }
+  }
+
   async function apiGet(path) {
+    return apiRequest(path, "GET", null, null, null);
+  }
+
+  async function apiMutation(path, body, idempotencyKey, intent) {
+    if (!isCanonicalUUIDv4(idempotencyKey)) {
+      throw new Error("A canonical UUIDv4 retry key is required.");
+    }
+    if (
+      !["record-fix-attempt.v1", "retract-fix-attempt.v1"].includes(intent)
+    ) {
+      throw new Error("The Local write intent is invalid.");
+    }
+    const controller = new AbortController();
+    let deadlineReached = false;
+    const deadline = globalThis.setTimeout(() => {
+      deadlineReached = true;
+      controller.abort();
+    }, mutationRequestDeadlineMilliseconds);
+    try {
+      return await apiRequest(
+        path,
+        "POST",
+        body,
+        idempotencyKey,
+        intent,
+        controller.signal,
+      );
+    } catch (error) {
+      if (deadlineReached || controller.signal.aborted) {
+        throw new LocalMutationTimeoutError();
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(deadline);
+    }
+  }
+
+  async function apiRequest(
+    path,
+    method,
+    body,
+    idempotencyKey,
+    intent,
+    signal,
+  ) {
     if (!state.token) {
       throw new Error(
         "No launch token was provided. Open the URL supplied by Belay Local.",
       );
     }
-    const response = await fetch(`${state.apiBase}${path}`, {
-      method: "GET",
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${state.token}`,
+    };
+    const request = {
+      method,
       cache: "no-store",
       credentials: "omit",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${state.token}`,
-      },
+      headers,
+    };
+    if (method === "POST") {
+      headers["Content-Type"] = "application/json";
+      headers["Idempotency-Key"] = idempotencyKey;
+      headers["X-Belay-Intent"] = intent;
+      request.body = JSON.stringify(body);
+      request.signal = signal;
+    }
+    const response = await fetch(`${state.apiBase}${path}`, {
+      ...request,
     });
-    const body = await readResponseBody(response);
+    throwIfMutationAborted(signal);
+    const responseBody = await readResponseBody(response);
+    throwIfMutationAborted(signal);
     if (!response.ok) {
       const detail =
-        isRecord(body) && readText(body.detail)
-          ? readText(body.detail)
+        isRecord(responseBody) && readText(responseBody.detail)
+          ? readText(responseBody.detail)
           : `Local API returned ${response.status}.`;
       throw new LocalAPIError(
         detail,
         response.status,
-        isRecord(body) ? readText(body.type) : "",
+        isRecord(responseBody) ? readText(responseBody.type) : "",
       );
     }
-    if (!isRecord(body)) throw new Error("Local API returned an invalid response.");
-    return body;
+    if (!isRecord(responseBody)) {
+      throw new Error("Local API returned an invalid response.");
+    }
+    return responseBody;
+  }
+
+  function throwIfMutationAborted(signal) {
+    if (signal && signal.aborted) {
+      throw new LocalMutationTimeoutError();
+    }
   }
 
   async function readResponseBody(response) {
@@ -2964,6 +4284,23 @@
 
   function readCursor(value) {
     return typeof value === "string" && value.trim() ? value : "";
+  }
+
+  function createUUIDv4() {
+    if (
+      !globalThis.crypto ||
+      typeof globalThis.crypto.randomUUID !== "function"
+    ) {
+      return "";
+    }
+    const value = globalThis.crypto.randomUUID();
+    return isCanonicalUUIDv4(value) ? value : "";
+  }
+
+  function isCanonicalUUIDv4(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      readText(value),
+    );
   }
 
   function toFiniteNumber(value) {

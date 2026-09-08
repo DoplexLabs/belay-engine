@@ -1582,6 +1582,8 @@ func (s *Store) Count(ctx context.Context, table string) (int, error) {
 		"dirty_sessions": true, "session_analysis_revisions": true,
 		"issue_occurrences": true, "issue_occurrence_events": true,
 		"issue_projection_metadata": true, "analysis_diagnostics": true,
+		"fix_annotations": true, "fix_annotation_events": true,
+		"fix_annotation_retractions": true,
 	}
 	if !allowed[table] {
 		return 0, errors.New("unsupported count table")
