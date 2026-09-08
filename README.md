@@ -71,7 +71,84 @@ Start with:
 
 The M0 foundation now includes strict Numbat ingestion, encrypted Local
 persistence, explicit Local retention primitives, and the Teams ingest
-contracts. It is not yet a production release.
+contracts. The Local launch branch adds automatic agent inventory/backfill,
+monitor-only live hooks, a loopback browser, and read-only MCP. It remains a
+developer preview until licensing, the production Numbat pin, and signed
+macOS packaging are resolved.
+
+## Belay Local developer preview
+
+Current launch validation covers Codex and Claude Code. Stock Numbat may report
+additional parser-backed agents, but Belay labels those as upstream-supported
+until they have Belay end-to-end fixtures.
+
+Prerequisites:
+
+- macOS
+- Go 1.27
+- A stock Numbat binary built from the recorded research commit
+  `f0778c09dc48281aa93a3887d05096c0a1f3f9f7`
+
+Build Belay:
+
+```bash
+CGO_ENABLED=0 go build -trimpath -o ./bin/belay ./cmd/belay
+```
+
+Build the currently approved research Numbat dependency from its unmodified
+checkout:
+
+```bash
+git clone https://github.com/perplexityai/numbat.git
+git -C numbat checkout f0778c09dc48281aa93a3887d05096c0a1f3f9f7
+CGO_ENABLED=0 go -C numbat build -trimpath -o ../bin/numbat ./cmd/numbat
+NUMBAT_SHA256="$(shasum -a 256 ./bin/numbat | awk '{print $1}')"
+```
+
+Start the offline Local browser and scan discovered Codex/Claude history:
+
+```bash
+./bin/belay local \
+  --numbat ./bin/numbat \
+  --numbat-sha256 "$NUMBAT_SHA256" \
+  --numbat-version-marker "f0778c09dc48"
+```
+
+The command prints a loopback URL containing an ephemeral launch token. Belay
+stores no browser token in the database or logs.
+
+Live monitoring is explicit and monitor-only:
+
+```bash
+./bin/belay hooks install
+./bin/belay hooks status
+```
+
+Belay never passes Numbat enforcement, HTTP delivery, full-content, or reasoning
+capture options. Hook installation changes supported agent configuration and
+therefore never happens unless the user asks for it.
+
+Configure an agent to run the Local MCP server over stdio:
+
+```bash
+./bin/belay mcp
+```
+
+The MCP server exposes exactly six read-only tools: `list_sessions`,
+`get_session`, `get_session_timeline`, `query_activity`, `list_findings`, and
+`get_stats`.
+
+Additional commands:
+
+```bash
+./bin/belay agents
+./bin/belay scan
+./bin/belay doctor
+./bin/belay hooks uninstall
+```
+
+See [`docs/launch/local-v0-requirements.md`](docs/launch/local-v0-requirements.md)
+for the launch contract and known blockers.
 
 ## Non-negotiable implementation rules
 
