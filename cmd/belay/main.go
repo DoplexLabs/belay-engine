@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
@@ -17,7 +19,9 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "belay:", err)
 		os.Exit(1)
 	}
@@ -29,6 +33,18 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return errors.New("missing command")
 	}
 	switch args[0] {
+	case "local":
+		return runLocal(ctx, args[1:], stdout, stderr)
+	case "scan":
+		return runScan(ctx, args[1:], stdout, stderr)
+	case "agents":
+		return runAgents(ctx, args[1:], stdout, stderr)
+	case "hooks":
+		return runHooks(ctx, args[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(ctx, args[1:], stderr)
+	case "doctor":
+		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "import":
 		return runImport(ctx, args[1:], stdin, stdout, stderr)
 	case "sessions":
@@ -204,6 +220,12 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `usage: belay COMMAND
 
 Commands:
+  local           scan agents and run the offline Local browser
+  scan            discover and backfill supported local agent history
+  agents          show Numbat's local agent inventory
+  hooks           install, inspect, or remove monitor-only live hooks
+  mcp             run the read-only Local MCP server over stdio
+  doctor          verify Local configuration, storage, and Numbat discovery
   import          import strict Numbat 0.3.0 NDJSON into Belay Local
   sessions        list Local session summaries
   timeline        get one Local session timeline

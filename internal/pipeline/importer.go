@@ -28,6 +28,7 @@ type Importer struct {
 	engineVersion  string
 	now            func() time.Time
 	random         io.Reader
+	sequenceBase   int64
 }
 
 type Report struct {
@@ -62,6 +63,15 @@ func (i *Importer) WithClock(now func() time.Time) *Importer {
 
 func (i *Importer) WithRandom(random io.Reader) *Importer {
 	i.random = random
+	return i
+}
+
+// WithSequenceBase makes source sequence stable across incremental imports.
+// A live-file tailer should use the byte offset preceding its batch.
+func (i *Importer) WithSequenceBase(sequenceBase int64) *Importer {
+	if sequenceBase > 0 {
+		i.sequenceBase = sequenceBase
+	}
 	return i
 }
 
@@ -148,7 +158,7 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 			InstallationID: i.installationID,
 			EngineVersion:  i.engineVersion,
 			ObservedAt:     i.now(),
-			Sequence:       line,
+			Sequence:       i.sequenceBase + line,
 			Random:         i.random,
 		})
 		if err != nil {

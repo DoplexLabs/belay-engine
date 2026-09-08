@@ -460,6 +460,46 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]model.SessionSum
 	return sessions, dataThrough, err
 }
 
+func (s *Store) GetSession(ctx context.Context, sessionID string) (model.SessionSummary, time.Time, error) {
+	var summary model.SessionSummary
+	var startedAt, endedAt string
+	var historical int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			session_key,
+			MIN(source_agent),
+			MIN(occurred_at),
+			MAX(occurred_at),
+			COUNT(*),
+			CASE
+				WHEN SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) > 0 THEN 'failed'
+				WHEN SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) > 0 THEN 'succeeded'
+				ELSE 'unknown'
+			END,
+			MAX(historical)
+		FROM events
+		WHERE session_key = ?
+		GROUP BY session_key`,
+		sessionID,
+	).Scan(
+		&summary.SessionID,
+		&summary.Harness,
+		&startedAt,
+		&endedAt,
+		&summary.EventCount,
+		&summary.Outcome,
+		&historical,
+	)
+	if err != nil {
+		return model.SessionSummary{}, time.Time{}, err
+	}
+	summary.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+	summary.EndedAt, _ = time.Parse(time.RFC3339Nano, endedAt)
+	summary.Historical = historical == 1
+	dataThrough, err := s.dataThrough(ctx)
+	return summary, dataThrough, err
+}
+
 func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit int) ([]model.Event, time.Time, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -500,6 +540,207 @@ func (s *Store) GetSessionTimeline(ctx context.Context, sessionID string, limit 
 	}
 	dataThrough, err := s.dataThrough(ctx)
 	return events, dataThrough, err
+}
+
+func (s *Store) QueryActivity(ctx context.Context, filter model.ActivityFilter) ([]model.Event, time.Time, error) {
+	if filter.Limit <= 0 || filter.Limit > 200 {
+		filter.Limit = 50
+	}
+	var clauses []string
+	var args []any
+	if filter.OccurredAfter != nil {
+		clauses = append(clauses, "occurred_at >= ?")
+		args = append(args, filter.OccurredAfter.UTC().Format(time.RFC3339Nano))
+	}
+	if filter.OccurredBefore != nil {
+		clauses = append(clauses, "occurred_at <= ?")
+		args = append(args, filter.OccurredBefore.UTC().Format(time.RFC3339Nano))
+	}
+	if filter.Harness != "" {
+		clauses = append(clauses, "source_agent = ?")
+		args = append(args, filter.Harness)
+	}
+	if filter.Outcome != "" {
+		clauses = append(clauses, "outcome = ?")
+		args = append(args, filter.Outcome)
+	}
+	query := `
+		SELECT event_id, canonical_json, canonical_encoding
+		FROM events`
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	// Resource kind lives only in the encrypted payload. Read a bounded
+	// candidate window and apply that optional filter after decryption.
+	candidateLimit := filter.Limit
+	if filter.ResourceKind != "" {
+		candidateLimit *= 5
+		if candidateLimit > 1000 {
+			candidateLimit = 1000
+		}
+	}
+	query += " ORDER BY occurred_at DESC, source_sequence DESC, event_id DESC LIMIT ?"
+	args = append(args, candidateLimit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("query local activity: %w", err)
+	}
+	defer rows.Close()
+	events := make([]model.Event, 0, filter.Limit)
+	for rows.Next() {
+		var eventID, encoding string
+		var body []byte
+		if err := rows.Scan(&eventID, &body, &encoding); err != nil {
+			return nil, time.Time{}, err
+		}
+		body, err = s.cipher.open("event", eventID, "canonical_json", encoding, body)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		var event model.Event
+		if err := json.Unmarshal(body, &event); err != nil {
+			return nil, time.Time{}, fmt.Errorf("decode stored canonical event: %w", err)
+		}
+		if filter.ResourceKind != "" &&
+			(event.Observation.Resource == nil || event.Observation.Resource.Kind != filter.ResourceKind) {
+			continue
+		}
+		events = append(events, event)
+		if len(events) == filter.Limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, time.Time{}, err
+	}
+	dataThrough, err := s.dataThrough(ctx)
+	return events, dataThrough, err
+}
+
+func (s *Store) ListFindings(ctx context.Context, limit int) ([]model.FindingSummary, time.Time, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT finding_id, COALESCE(session_key, ''), detected_at, rule_id,
+			rule_version, severity, source_agent, confidence,
+			cited_event_ids_json, cited_event_ids_encoding
+		FROM findings
+		ORDER BY detected_at DESC, finding_id DESC
+		LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("list local findings: %w", err)
+	}
+	defer rows.Close()
+	findings := make([]model.FindingSummary, 0, limit)
+	for rows.Next() {
+		var finding model.FindingSummary
+		var detectedAt, encoding string
+		var cited []byte
+		if err := rows.Scan(
+			&finding.FindingID,
+			&finding.SessionID,
+			&detectedAt,
+			&finding.RuleID,
+			&finding.RuleVersion,
+			&finding.Severity,
+			&finding.Harness,
+			&finding.Confidence,
+			&cited,
+			&encoding,
+		); err != nil {
+			return nil, time.Time{}, err
+		}
+		finding.DetectedAt, err = time.Parse(time.RFC3339Nano, detectedAt)
+		if err != nil {
+			return nil, time.Time{}, errors.New("decode stored finding timestamp")
+		}
+		cited, err = s.cipher.open(
+			"finding",
+			finding.FindingID,
+			"cited_event_ids_json",
+			encoding,
+			cited,
+		)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if err := json.Unmarshal(cited, &finding.CitedEventIDs); err != nil {
+			return nil, time.Time{}, errors.New("decode stored finding payload")
+		}
+		findings = append(findings, finding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, time.Time{}, err
+	}
+	dataThrough, err := s.dataThrough(ctx)
+	return findings, dataThrough, err
+}
+
+func (s *Store) GetStats(ctx context.Context) (model.LocalStats, time.Time, error) {
+	stats := model.LocalStats{
+		HarnessCounts: make(map[string]int),
+		OutcomeCounts: make(map[string]int),
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*),
+			COUNT(DISTINCT session_key),
+			(SELECT COUNT(*) FROM findings),
+			COUNT(DISTINCT CASE WHEN historical = 1 THEN session_key END)
+		FROM events`,
+	).Scan(
+		&stats.EventCount,
+		&stats.SessionCount,
+		&stats.FindingCount,
+		&stats.HistoricalRuns,
+	); err != nil {
+		return model.LocalStats{}, time.Time{}, fmt.Errorf("read local stats: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT source_agent, COUNT(*)
+		FROM events
+		GROUP BY source_agent
+		ORDER BY source_agent`)
+	if err != nil {
+		return model.LocalStats{}, time.Time{}, fmt.Errorf("read local harness stats: %w", err)
+	}
+	for rows.Next() {
+		var key string
+		var count int
+		if err := rows.Scan(&key, &count); err != nil {
+			rows.Close()
+			return model.LocalStats{}, time.Time{}, err
+		}
+		stats.HarnessCounts[key] = count
+	}
+	if err := rows.Close(); err != nil {
+		return model.LocalStats{}, time.Time{}, err
+	}
+	rows, err = s.db.QueryContext(ctx, `
+		SELECT outcome, COUNT(*)
+		FROM events
+		GROUP BY outcome
+		ORDER BY outcome`)
+	if err != nil {
+		return model.LocalStats{}, time.Time{}, fmt.Errorf("read local outcome stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var count int
+		if err := rows.Scan(&key, &count); err != nil {
+			return model.LocalStats{}, time.Time{}, err
+		}
+		stats.OutcomeCounts[key] = count
+	}
+	if err := rows.Err(); err != nil {
+		return model.LocalStats{}, time.Time{}, err
+	}
+	dataThrough, err := s.dataThrough(ctx)
+	return stats, dataThrough, err
 }
 
 func (s *Store) GetFinding(ctx context.Context, findingID string) (Finding, error) {

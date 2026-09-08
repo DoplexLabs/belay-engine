@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0b0d10">
+    <meta
+      name="description"
+      content="Belay Local session browser for private, on-device agent activity."
+    >
+    <title>Belay Local</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./bootstrap.js"></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="Belay Local">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span>
+            <span></span>
+          </span>
+          <span>
+            <strong>Belay</strong>
+            <small>Local</small>
+          </span>
+        </div>
+
+        <div class="privacy-note" title="Belay Local keeps this view on your machine">
+          <span class="privacy-dot" aria-hidden="true"></span>
+          On-device
+        </div>
+
+        <button class="icon-button" id="refresh-button" type="button">
+          <span aria-hidden="true">↻</span>
+          <span>Refresh</span>
+        </button>
+      </header>
+
+      <main class="workspace">
+        <aside class="session-panel" aria-label="Agent sessions">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Activity</p>
+              <h1>Sessions</h1>
+            </div>
+            <span class="count-pill" id="session-count">—</span>
+          </div>
+
+          <label class="search-field">
+            <span class="search-icon" aria-hidden="true">⌕</span>
+            <span class="sr-only">Search sessions</span>
+            <input
+              id="session-search"
+              type="search"
+              placeholder="Search harness or outcome"
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </label>
+
+          <div class="filter-row" aria-label="Filter sessions">
+            <button class="filter-chip is-active" type="button" data-filter="all">
+              All
+            </button>
+            <button class="filter-chip" type="button" data-filter="failed">
+              Failed
+            </button>
+            <button class="filter-chip" type="button" data-filter="historical">
+              Historical
+            </button>
+          </div>
+
+          <div class="session-list" id="session-list" aria-live="polite"></div>
+
+          <div class="panel-state" id="sessions-loading">
+            <span class="spinner" aria-hidden="true"></span>
+            <p>Loading local sessions…</p>
+          </div>
+
+          <div class="panel-state" id="sessions-empty" hidden>
+            <span class="empty-glyph" aria-hidden="true">◇</span>
+            <p>No sessions found</p>
+            <small>Agent activity will appear here after it is collected.</small>
+          </div>
+        </aside>
+
+        <section class="timeline-panel" aria-label="Session timeline">
+          <div class="welcome-state" id="welcome-state">
+            <div class="welcome-mark" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <p class="eyebrow">Your agents, one timeline</p>
+            <h2>Select a session to inspect its activity</h2>
+            <p>
+              Belay reconstructs minimized events from your local development
+              harnesses without showing prompts, completions, or file contents.
+            </p>
+          </div>
+
+          <div class="timeline-view" id="timeline-view" hidden>
+            <header class="timeline-header">
+              <button
+                class="back-button"
+                id="back-button"
+                type="button"
+                aria-label="Back to sessions"
+              >
+                ←
+              </button>
+              <div class="session-identity">
+                <span class="harness-avatar" id="selected-avatar" aria-hidden="true"></span>
+                <div>
+                  <div class="title-line">
+                    <h2 id="selected-harness">Session</h2>
+                    <span class="status-badge" id="selected-outcome"></span>
+                    <span class="meta-badge" id="selected-historical" hidden>
+                      Historical
+                    </span>
+                  </div>
+                  <p id="selected-session-id"></p>
+                </div>
+              </div>
+
+              <dl class="session-stats">
+                <div>
+                  <dt>Events</dt>
+                  <dd id="selected-event-count">—</dd>
+                </div>
+                <div>
+                  <dt>Duration</dt>
+                  <dd id="selected-duration">—</dd>
+                </div>
+                <div>
+                  <dt>Last seen</dt>
+                  <dd id="selected-ended-at">—</dd>
+                </div>
+              </dl>
+            </header>
+
+            <div class="timeline-meta">
+              <div>
+                <p class="eyebrow">Event timeline</p>
+                <p id="timeline-freshness"></p>
+              </div>
+              <span class="privacy-label">Minimized metadata</span>
+            </div>
+
+            <div class="event-list" id="event-list" aria-live="polite"></div>
+
+            <div class="panel-state timeline-loading" id="timeline-loading" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              <p>Reconstructing timeline…</p>
+            </div>
+
+            <div class="panel-state" id="events-empty" hidden>
+              <span class="empty-glyph" aria-hidden="true">◇</span>
+              <p>No events in this session</p>
+            </div>
+          </div>
+
+          <div class="error-banner" id="error-banner" role="alert" hidden>
+            <div>
+              <strong id="error-title">Unable to load Belay Local</strong>
+              <p id="error-detail"></p>
+            </div>
+            <button id="error-retry" type="button">Try again</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

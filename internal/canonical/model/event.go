@@ -99,3 +99,33 @@ type SessionSummary struct {
 	Outcome    string    `json:"outcome"`
 	Historical bool      `json:"historical"`
 }
+
+type FindingSummary struct {
+	FindingID     string    `json:"finding_id"`
+	SessionID     string    `json:"session_id"`
+	DetectedAt    time.Time `json:"detected_at"`
+	RuleID        string    `json:"rule_id"`
+	RuleVersion   string    `json:"rule_version"`
+	Severity      string    `json:"severity"`
+	Harness       string    `json:"harness"`
+	Confidence    string    `json:"confidence"`
+	CitedEventIDs []string  `json:"cited_event_ids"`
+}
+
+type ActivityFilter struct {
+	OccurredAfter  *time.Time
+	OccurredBefore *time.Time
+	Harness        string
+	ResourceKind   string
+	Outcome        string
+	Limit          int
+}
+
+type LocalStats struct {
+	EventCount     int            `json:"event_count"`
+	SessionCount   int            `json:"session_count"`
+	FindingCount   int            `json:"finding_count"`
+	HarnessCounts  map[string]int `json:"harness_counts"`
+	OutcomeCounts  map[string]int `json:"outcome_counts"`
+	HistoricalRuns int            `json:"historical_sessions"`
+}
