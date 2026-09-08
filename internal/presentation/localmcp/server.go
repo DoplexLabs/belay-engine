@@ -17,7 +17,7 @@ import (
 
 const (
 	serverName    = "belay-local"
-	serverVersion = "1.1.0"
+	serverVersion = "1.2.0"
 )
 
 type Server struct {

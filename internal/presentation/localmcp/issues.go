@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -64,6 +65,7 @@ type issueSummaryOutput struct {
 	DetectorVersion     string    `json:"detector_version"`
 	Category            string    `json:"category"`
 	TitleCode           string    `json:"title_code"`
+	SourceSignalCode    *string   `json:"source_signal_code"`
 	Severity            string    `json:"severity"`
 	Confidence          string    `json:"confidence"`
 	ScopeQuality        string    `json:"scope_quality"`
@@ -100,6 +102,7 @@ type issueOccurrenceOutput struct {
 	Provenance          detectorProvenanceOutput `json:"provenance"`
 	Category            string                   `json:"category"`
 	TitleCode           string                   `json:"title_code"`
+	SourceSignalCode    *string                  `json:"source_signal_code"`
 	Severity            string                   `json:"severity"`
 	Confidence          string                   `json:"confidence"`
 	ScopeQuality        string                   `json:"scope_quality"`
@@ -113,12 +116,16 @@ type issueOccurrenceOutput struct {
 }
 
 type issueCatalogOutput struct {
-	CatalogVersion       string `json:"catalog_version"`
-	CatalogStatus        string `json:"catalog_status"`
-	TitleCode            string `json:"title_code"`
-	ObservationStatement string `json:"observation_statement"`
-	Caveat               string `json:"caveat"`
-	NextEvidenceAction   string `json:"next_evidence_action"`
+	CatalogVersion             string  `json:"catalog_version"`
+	CatalogStatus              string  `json:"catalog_status"`
+	TitleCode                  string  `json:"title_code"`
+	DisplayTitle               string  `json:"display_title"`
+	ObservationStatement       string  `json:"observation_statement"`
+	Caveat                     string  `json:"caveat"`
+	NextEvidenceAction         string  `json:"next_evidence_action"`
+	SourceSignalCode           *string `json:"source_signal_code"`
+	SourceSignalCatalogVersion string  `json:"source_signal_catalog_version"`
+	SourceSignalCatalogStatus  string  `json:"source_signal_catalog_status"`
 }
 
 type listIssuesOutput struct {
@@ -319,6 +326,7 @@ func (s *Server) listIssues(ctx context.Context, input listIssuesInput) (listIss
 	if err := projectStrictReadmodel(response, &output); err != nil {
 		return listIssuesOutput{}, newStrictToolFailure(strictReadFailed)
 	}
+	normalizeIssueListOutput(&output)
 	return output, nil
 }
 
@@ -354,6 +362,7 @@ func (s *Server) getIssue(ctx context.Context, input getIssueInput) (getIssueOut
 	if err := projectStrictReadmodel(response, &output); err != nil {
 		return getIssueOutput{}, newStrictToolFailure(strictReadFailed)
 	}
+	normalizeIssueDetailOutput(&output)
 	return output, nil
 }
 
@@ -384,6 +393,55 @@ func projectStrictReadmodel(source, target any) error {
 		return err
 	}
 	return json.Unmarshal(body, target)
+}
+
+func normalizeIssueListOutput(output *listIssuesOutput) {
+	if output == nil {
+		return
+	}
+	for index := range output.Data {
+		normalizeIssueSummarySourceSignal(&output.Data[index])
+	}
+}
+
+func normalizeIssueDetailOutput(output *getIssueOutput) {
+	if output == nil {
+		return
+	}
+	normalizeIssueSummarySourceSignal(&output.Data.Issue)
+	for index := range output.Data.Occurrences {
+		normalizeIssueOccurrenceSourceSignal(&output.Data.Occurrences[index])
+	}
+	// Catalog is authoritative fixed readmodel presentation data. The strict
+	// output schema validates it without deriving or rewriting any field.
+}
+
+func normalizeIssueSummarySourceSignal(summary *issueSummaryOutput) {
+	if summary == nil {
+		return
+	}
+	summary.SourceSignalCode = safeNumbatSourceSignal(
+		summary.Origin,
+		summary.SourceSignalCode,
+	)
+}
+
+func normalizeIssueOccurrenceSourceSignal(occurrence *issueOccurrenceOutput) {
+	if occurrence == nil {
+		return
+	}
+	occurrence.SourceSignalCode = safeNumbatSourceSignal(
+		occurrence.Origin,
+		occurrence.SourceSignalCode,
+	)
+}
+
+func safeNumbatSourceSignal(origin string, value *string) *string {
+	if origin != "numbat" || value == nil || !model.IsSafeSourceSignalCode(*value) {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func strictIssueReadError(err error) error {

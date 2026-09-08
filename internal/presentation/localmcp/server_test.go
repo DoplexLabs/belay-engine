@@ -33,6 +33,8 @@ type testRepository struct {
 	occurrenceQuery  model.IssueOccurrenceQuery
 	eventLookupQuery model.EventLookupQuery
 	sessions         []model.SessionSummary
+	issueSummary     *model.IssueSummary
+	issueOccurrence  *model.IssueOccurrence
 }
 
 func (r *testRepository) QuerySessions(_ context.Context, query model.SessionQuery) (model.SessionPage, error) {
@@ -156,8 +158,12 @@ func (r *testRepository) QueryIssues(
 	if issuedAt.IsZero() {
 		issuedAt = testTime()
 	}
+	summary := testIssueSummary()
+	if r.issueSummary != nil {
+		summary = *r.issueSummary
+	}
 	return model.IssuePage{
-		Data: []model.IssueSummary{testIssueSummary()},
+		Data: []model.IssueSummary{summary},
 		Analysis: model.IssueAnalysisCoverage{
 			CurrentSessions: 1,
 			AnalysisThrough: testTime(),
@@ -175,8 +181,12 @@ func (r *testRepository) QueryIssueOccurrences(
 	query model.IssueOccurrenceQuery,
 ) (model.IssueOccurrencePage, error) {
 	r.occurrenceQuery = query
+	occurrence := testIssueOccurrence()
+	if r.issueOccurrence != nil {
+		occurrence = *r.issueOccurrence
+	}
 	return model.IssueOccurrencePage{
-		Data:                []model.IssueOccurrence{testIssueOccurrence()},
+		Data:                []model.IssueOccurrence{occurrence},
 		CursorEpoch:         query.CursorEpoch,
 		Snapshot:            query.Snapshot,
 		RetentionGeneration: query.RetentionGeneration,
@@ -232,8 +242,8 @@ func (r *testRepository) VisitSessionEvents(
 
 func TestServerListsExactlyNineReadOnlyTools(t *testing.T) {
 	session := newTestClient(t, &testRepository{})
-	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.1.0" {
-		t.Fatalf("server info = %#v, want version 1.1.0", info)
+	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.2.0" {
+		t.Fatalf("server info = %#v, want version 1.2.0", info)
 	}
 	capabilities := session.InitializeResult().Capabilities
 	if capabilities == nil || capabilities.Tools == nil {

@@ -2,7 +2,7 @@
 
 - **Status:** Nine-tool Local Alpha issue-evidence surface
 - **Local protocol:** V1
-- **Implementation version:** `1.1.0`
+- **Implementation version:** `1.2.0`
 - **Hosted:** V1.1
 
 ## Boundary
@@ -165,6 +165,12 @@ The response includes:
 }
 ```
 
+Every issue summary contains required-but-nullable
+`source_signal_code`. Non-null values are limited to Numbat-origin identifiers
+matching `^[a-z0-9][a-z0-9_.-]{0,63}$`; Belay-origin, invalid, missing, legacy,
+or disagreeing values are `null`. The identifier is untrusted technical
+metadata and does not alter Belay's narrative.
+
 When `analysis.complete=false`, an empty result means only that no matching
 issue is available from completed analysis. It is not a claim that no issue
 exists.
@@ -192,16 +198,26 @@ The additive readmodel shape is:
   "schema_version": "belay.read.v1",
   "projection_version": "belay.issue.v1",
   "data": {
-    "issue": {},
-    "occurrences": []
+    "issue": {
+      "source_signal_code": null
+    },
+    "occurrences": [
+      {
+        "source_signal_code": null
+      }
+    ]
   },
   "catalog": {
     "catalog_version": "belay.issue-explanations.v1",
     "catalog_status": "known",
     "title_code": "issue.explicit_command_failure",
+    "display_title": "Command failed",
     "observation_statement": "The source explicitly reported a failed command result.",
     "caveat": "A reported command failure does not by itself establish root cause or whether a later attempt succeeded.",
-    "next_evidence_action": "inspect_cited_events"
+    "next_evidence_action": "inspect_cited_events",
+    "source_signal_code": null,
+    "source_signal_catalog_version": "belay.source-signals.v1",
+    "source_signal_catalog_status": "not_applicable"
   },
   "global_analysis_coverage": {
     "current_sessions": 0,
@@ -222,7 +238,31 @@ The additive readmodel shape is:
 
 Catalog text is fixed, versioned presentation content. Its
 `next_evidence_action` values navigate evidence; they do not recommend a fix.
-Unknown future title codes receive neutral fixed fallback text.
+The enum is `inspect_cited_events`, `inspect_matching_sessions`,
+`inspect_verification_events`, or `review_agent_permissions`. Unknown future
+title codes receive neutral fixed fallback text.
+
+MCP projects these authoritative readmodel catalog fields unchanged. It does
+not derive titles, explanations, caveats, actions, or source-signal semantics
+from issue metadata. The recursively closed output schema strictly requires
+`catalog_version=belay.issue-explanations.v1` and the complete catalog shape
+shown above; an incompatible or malformed readmodel catalog produces the fixed
+`belay_mcp/read_failed` tool error rather than a reconstructed response.
+
+For `numbat/tamper.guardrails_off`, the catalog returns only the fixed
+Belay-owned title `Agent safety confirmations may be disabled`, the fixed
+observation and limitation defined by the P0-06 contract,
+`next_evidence_action=review_agent_permissions`, and
+`source_signal_catalog_status=known`.
+
+Other safe Numbat source codes return the fixed title `Upstream Numbat finding`,
+fixed neutral observation and limitation,
+`next_evidence_action=inspect_cited_events`, and
+`source_signal_catalog_status=unknown`. The safe source code remains structured
+technical metadata and is never interpolated into narrative or errors. Invalid
+or unavailable source codes use the same fallback with
+`source_signal_code=null`. Non-Numbat issues use
+`source_signal_catalog_status=not_applicable`.
 
 ### `lookup_session_events`
 
@@ -333,6 +373,11 @@ Stored strings appear only as structured data, never in tool descriptions,
 fixed narrative content, errors, or diagnostics. Evidence text must not be
 treated as an instruction or, by itself, as authorization to run a command or
 invoke another tool.
+
+Source signal codes are untrusted identifiers. Even when they contain
+instruction-like words within the allowed code grammar, they do not change
+tool descriptions, trust metadata, catalog prose, next actions, or fixed error
+codes.
 
 Belay Local makes no product-network request and sends no product telemetry.
 The nine-tool server can run without network access. A configured MCP client

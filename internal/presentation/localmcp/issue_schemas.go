@@ -190,6 +190,7 @@ func issueSummarySchema() *jsonschema.Schema {
 			"detector_version":      boundedTextSchema(1, 128),
 			"category":              patternStringSchema(`^[a-z0-9_]{1,64}$`, 1, 64),
 			"title_code":            boundedTextSchema(1, 128),
+			"source_signal_code":    nullablePatternStringSchema(`^[a-z0-9][a-z0-9_.-]{0,63}$`, 64),
 			"severity":              enumStringSchema("info", "low", "medium", "high", "critical"),
 			"confidence":            enumStringSchema("low", "medium", "high"),
 			"scope_quality":         enumStringSchema("resolved", "lexical", "unscoped", "conflict"),
@@ -211,6 +212,7 @@ func issueSummarySchema() *jsonschema.Schema {
 		"detector_version",
 		"category",
 		"title_code",
+		"source_signal_code",
 		"severity",
 		"confidence",
 		"scope_quality",
@@ -239,6 +241,7 @@ func issueOccurrenceSchema() *jsonschema.Schema {
 			"provenance":            detectorProvenanceSchema(),
 			"category":              patternStringSchema(`^[a-z0-9_]{1,64}$`, 1, 64),
 			"title_code":            boundedTextSchema(1, 128),
+			"source_signal_code":    nullablePatternStringSchema(`^[a-z0-9][a-z0-9_.-]{0,63}$`, 64),
 			"severity":              enumStringSchema("info", "low", "medium", "high", "critical"),
 			"confidence":            enumStringSchema("low", "medium", "high"),
 			"scope_quality":         enumStringSchema("resolved", "lexical", "unscoped", "conflict"),
@@ -269,6 +272,7 @@ func issueOccurrenceSchema() *jsonschema.Schema {
 		"provenance",
 		"category",
 		"title_code",
+		"source_signal_code",
 		"severity",
 		"confidence",
 		"scope_quality",
@@ -303,20 +307,39 @@ func issueCatalogSchema() *jsonschema.Schema {
 			"catalog_version":       constSchema("string", "belay.issue-explanations.v1"),
 			"catalog_status":        enumStringSchema("known", "unknown"),
 			"title_code":            boundedTextSchema(1, 128),
+			"display_title":         boundedTextSchema(1, 256),
 			"observation_statement": boundedTextSchema(1, 1024),
 			"caveat":                boundedTextSchema(1, 1024),
 			"next_evidence_action": enumStringSchema(
 				"inspect_cited_events",
 				"inspect_matching_sessions",
 				"inspect_verification_events",
+				"review_agent_permissions",
+			),
+			"source_signal_code": nullablePatternStringSchema(
+				`^[a-z0-9][a-z0-9_.-]{0,63}$`,
+				64,
+			),
+			"source_signal_catalog_version": constSchema(
+				"string",
+				"belay.source-signals.v1",
+			),
+			"source_signal_catalog_status": enumStringSchema(
+				"known",
+				"unknown",
+				"not_applicable",
 			),
 		},
 		"catalog_version",
 		"catalog_status",
 		"title_code",
+		"display_title",
 		"observation_statement",
 		"caveat",
 		"next_evidence_action",
+		"source_signal_code",
+		"source_signal_catalog_version",
+		"source_signal_catalog_status",
 	)
 }
 
@@ -477,6 +500,12 @@ func nullableBoundedTextSchema(maximum int) *jsonschema.Schema {
 		MinLength: intPointer(1),
 		MaxLength: intPointer(maximum),
 	}
+}
+
+func nullablePatternStringSchema(pattern string, maximum int) *jsonschema.Schema {
+	schema := nullableBoundedTextSchema(maximum)
+	schema.Pattern = pattern
+	return schema
 }
 
 func patternStringSchema(pattern string, minimum, maximum int) *jsonschema.Schema {
