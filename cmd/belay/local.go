@@ -332,11 +332,23 @@ func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, er
 		readmodel.New(
 			store,
 			readmodel.WithIssueRepository(store),
+			readmodel.WithIssueCursorCodec(store),
 			readmodel.WithFixMonitoringRepository(store),
 		),
 		token,
 		localhttp.WithFixService(actions),
 	)
+}
+
+func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
+	if store == nil {
+		return nil, errors.New("local MCP server requires a store")
+	}
+	return localmcp.New(readmodel.New(
+		store,
+		readmodel.WithIssueRepository(store),
+		readmodel.WithIssueCursorCodec(store),
+	))
 }
 
 func onboardLocalHooks(
@@ -462,7 +474,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	server, err := localmcp.New(readmodel.New(store))
+	server, err := newLocalMCPServer(store)
 	if err != nil {
 		return err
 	}
