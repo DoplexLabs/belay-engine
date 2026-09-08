@@ -354,19 +354,19 @@ func (s *Store) validateFixEpochTx(
 	if claimedEpoch == "" || claimedRetentionGeneration < 1 {
 		return "", 0, model.ErrIssueSnapshotInvalid
 	}
-	epoch, err := s.currentIssueCursorEpoch()
-	if err != nil {
-		return "", 0, err
-	}
 	var retentionGeneration int64
+	var epoch, readiness string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT retention_generation
-		FROM issue_projection_metadata
-		WHERE singleton = 1`,
-	).Scan(&retentionGeneration); err != nil {
+		SELECT ism.cursor_epoch, ism.readiness, ipm.retention_generation
+		FROM issue_summary_metadata ism
+		JOIN issue_projection_metadata ipm ON ipm.singleton = ism.singleton
+		WHERE ism.singleton = 1`,
+	).Scan(&epoch, &readiness, &retentionGeneration); err != nil {
 		return "", 0, errors.New("read fix action epoch")
 	}
-	if claimedEpoch != epoch || claimedRetentionGeneration != retentionGeneration {
+	if readiness != "ready" ||
+		claimedEpoch != epoch ||
+		claimedRetentionGeneration != retentionGeneration {
 		return "", 0, model.ErrIssueSnapshotExpired
 	}
 	return epoch, retentionGeneration, nil

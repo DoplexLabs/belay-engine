@@ -1653,6 +1653,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}
+		if version == issueSummaryMigrationVersion {
+			epoch, err := newIssueCursorEpoch(s.random)
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE issue_summary_metadata
+				SET cursor_epoch = ?, updated_at = ?
+				WHERE singleton = 1 AND cursor_epoch IS NULL`,
+				epoch,
+				formatProjectionTime(s.nowUTC()),
+			); err != nil {
+				_ = tx.Rollback()
+				return errors.New("initialize issue cursor epoch")
+			}
+		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
 			version, time.Now().UTC().Format(time.RFC3339Nano),
@@ -1664,7 +1681,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.resumeFixRecurrenceMigration(ctx)
+	if err := s.resumeFixRecurrenceMigration(ctx); err != nil {
+		return err
+	}
+	return s.resumeIssueSummaryMigration(ctx)
 }
 
 func boolInt(value bool) int {

@@ -71,6 +71,15 @@ func initializeMutationConnection(
 			return errors.New("install connection-local recurrence mutation guards")
 		}
 	}
+	summaryReady, err := issueSummaryMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if summaryReady {
+		if _, err := connection.ExecContext(ctx, issueSummaryMutationTriggerSQL, nil); err != nil {
+			return errors.New("install connection-local issue summary mutation guards")
+		}
+	}
 	return nil
 }
 
@@ -172,6 +181,39 @@ func recurrenceMutationTablesReady(
 	return count == 7, nil
 }
 
+func issueSummaryMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name IN (
+				'issue_summary_metadata',
+				'issue_projection_generation_times',
+				'issue_summary_revisions',
+				'issue_summary_harnesses',
+				'issue_summary_sessions',
+				'issue_analysis_coverage_revisions'
+			)`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect local issue summary mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect local issue summary mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect local issue summary mutation schema")
+	}
+	return count == 6, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -189,6 +231,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, recurrenceMutationTriggerSQL); err != nil {
 		return errors.New("install connection-local recurrence mutation guards")
+	}
+	if _, err := connection.ExecContext(ctx, issueSummaryMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local issue summary mutation guards")
 	}
 	return nil
 }
@@ -466,4 +511,109 @@ const recurrenceMutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'fix monitoring metadata mutation is not authorized');
+	END;`
+
+const issueSummaryMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_revisions_update
+	BEFORE UPDATE ON main.issue_summary_revisions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'projection_rebuild'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_revisions_delete
+	BEFORE DELETE ON main.issue_summary_revisions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_harnesses_update
+	BEFORE UPDATE ON main.issue_summary_harnesses
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary harnesses are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_harnesses_delete
+	BEFORE DELETE ON main.issue_summary_harnesses
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary harness deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_sessions_update
+	BEFORE UPDATE ON main.issue_summary_sessions
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary sessions are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_sessions_delete
+	BEFORE DELETE ON main.issue_summary_sessions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary session deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_coverage_update
+	BEFORE UPDATE ON main.issue_analysis_coverage_revisions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'projection_rebuild'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue coverage mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_coverage_delete
+	BEFORE DELETE ON main.issue_analysis_coverage_revisions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue coverage deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_generation_times_update
+	BEFORE UPDATE ON main.issue_projection_generation_times
+	BEGIN
+		SELECT RAISE(ABORT, 'issue generation timestamps are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_generation_times_delete
+	BEFORE DELETE ON main.issue_projection_generation_times
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue generation timestamp deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_metadata_update
+	BEFORE UPDATE ON main.issue_summary_metadata
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('projection_rebuild', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary metadata mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_issue_summary_metadata_delete
+	BEFORE DELETE ON main.issue_summary_metadata
+	BEGIN
+		SELECT RAISE(ABORT, 'issue summary metadata cannot be deleted');
 	END;`

@@ -25,7 +25,6 @@ const (
 	commandSignatureKeyDomain        = "belay.local.command-signature.v1"
 	issueFingerprintKeyDomain        = "belay.local.issue-fingerprint.v1"
 	issueCursorKeyDomain             = "belay.local.issue-cursor.v2"
-	issueCursorEpochKeyDomain        = "belay.local.issue-cursor-epoch.v2"
 	fixAnnotationIDKeyDomain         = "belay.local.fix-annotation.v1"
 	fixAnnotationRequestKeyDomain    = "belay.local.fix-annotation-request.v1"
 	fixActionTokenKeyDomain          = "belay.local.fix-action-token.v1"
@@ -127,11 +126,18 @@ func (s *Store) deriveFixAnnotationID(idempotencyKey string) (string, error) {
 }
 
 func (s *Store) currentIssueCursorEpoch() (string, error) {
-	return s.deriveOpaqueID(
-		issueCursorEpochKeyDomain,
-		"ice_",
-		lengthPrefixed([]string{s.storeID}),
-	)
+	var epoch, readiness string
+	if err := s.db.QueryRow(`
+		SELECT cursor_epoch, readiness
+		FROM issue_summary_metadata
+		WHERE singleton = 1`,
+	).Scan(&epoch, &readiness); err != nil {
+		return "", errors.New("read issue cursor epoch")
+	}
+	if epoch == "" || readiness != "ready" {
+		return "", model.ErrIssueSnapshotExpired
+	}
+	return epoch, nil
 }
 
 func (s *Store) deriveFixAnnotationRequestFingerprint(
