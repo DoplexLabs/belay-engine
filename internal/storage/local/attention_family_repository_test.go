@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,6 +175,168 @@ func TestAttentionFamilyFiltersRecomputeVisibleCountsAndUseMappedSeverity(t *tes
 	}
 	if len(page.Data) != 0 {
 		t.Fatalf("source severity admitted mapped family: %+v", page.Data)
+	}
+}
+
+func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	observedAt := formatProjectionTime(
+		time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
+	)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = withMutationTx(ctx, tx, mutationProjectionRebuild, func() error {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE issue_projection_metadata
+			SET current_generation = 1
+			WHERE singleton = 1;
+			UPDATE issue_summary_metadata
+			SET readiness = 'ready', build_generation = 1,
+				materialized_generation = 1
+			WHERE singleton = 1;
+			WITH RECURSIVE seq(n) AS (
+				VALUES(1)
+				UNION ALL SELECT n + 1 FROM seq WHERE n < 25000
+			)
+			INSERT INTO issue_summary_revisions (
+				summary_revision_id, issue_id, fingerprint_id,
+				fingerprint_version, origin, detector_id, detector_version,
+				category, title_code, severity, severity_rank, confidence,
+				scope_quality, first_observed_at, last_observed_at,
+				occurrence_count, session_count, repeated, analysis_status,
+				evidence_complete, retained_history_only, experimental,
+				visible_from_generation, created_at
+			)
+			SELECT
+				printf('family-scale-revision-%05d', n),
+				printf('family-scale-issue-%05d', n),
+				printf('family-scale-fingerprint-%05d', n),
+				'1', 'belay', 'explicit_command_failure', '1',
+				'command_failure', 'issue.explicit_command_failure',
+				'medium', 3, 'high', 'resolved', ?, ?,
+				1, 1, 0, 'current', 1, 0, 0, 1, ?
+			FROM seq;
+			WITH RECURSIVE seq(n) AS (
+				VALUES(1)
+				UNION ALL SELECT n + 1 FROM seq WHERE n < 25000
+			)
+			INSERT INTO issue_occurrences (
+				revision_id, occurrence_id, issue_id, fingerprint_id,
+				fingerprint_version, origin, session_key, harness,
+				detector_id, detector_version, projection_version, category,
+				title_code, severity, confidence, scope_quality,
+				first_observed_at, last_observed_at, evidence_complete,
+				retained_history_only, experimental, analysis_status,
+				analysis_generation, evidence_payload, evidence_encoding,
+				visible_from_generation, created_at, updated_at
+			)
+			SELECT
+				printf('family-scale-occ-revision-%05d', n),
+				printf('family-scale-occurrence-%05d', n),
+				printf('family-scale-issue-%05d', n),
+				printf('family-scale-fingerprint-%05d', n),
+				'1', 'belay', printf('family-scale-session-%05d', n), 'codex',
+				'explicit_command_failure', '1', '1', 'command_failure',
+				'issue.explicit_command_failure', 'medium', 'high', 'resolved',
+				?, ?, 1, 0, 0, 'current', 1, X'00', 'test', 1, ?, ?
+			FROM seq`,
+			observedAt, observedAt, observedAt,
+			observedAt, observedAt, observedAt, observedAt,
+		); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	page, err := store.QueryAttentionFamilies(ctx, model.AttentionFamilyQuery{
+		Filter: model.AttentionFamilyFilter{
+			AttentionKind: model.AttentionKindIssue,
+			Experimental:  model.ExperimentalStable,
+		},
+		Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("bounded 25k family page took %s", elapsed)
+	}
+	if len(page.Data) != 20 || !page.HasMore {
+		t.Fatalf("scale family page = returned %d has_more=%v", len(page.Data), page.HasMore)
+	}
+	position := page.Data[len(page.Data)-1]
+	next, err := store.QueryAttentionFamilies(ctx, model.AttentionFamilyQuery{
+		Filter: model.AttentionFamilyFilter{
+			AttentionKind: model.AttentionKindIssue,
+			Experimental:  model.ExperimentalStable,
+		},
+		Limit:               20,
+		CursorEpoch:         page.CursorEpoch,
+		Snapshot:            page.Snapshot,
+		RetentionGeneration: page.RetentionGeneration,
+		IssuedAt:            page.IssuedAt,
+		Cursor: &model.AttentionFamilyPosition{
+			SeverityRank:         familySeverityRank(position.Severity),
+			SupportingIssueCount: position.SupportingIssueCount,
+			LastObserved:         position.LastObservedAt,
+			GroupKey:             position.GroupKey,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Data) != 20 || next.Data[0].FamilyID == position.FamilyID {
+		t.Fatalf("scale continuation = %+v", next)
+	}
+
+	cte, args, err := attentionFamilyCTE(1, model.AttentionFamilyFilter{
+		AttentionKind: model.AttentionKindIssue,
+		Experimental:  model.ExperimentalStable,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args = append(args, 21)
+	rows, err := store.db.QueryContext(ctx, `EXPLAIN QUERY PLAN `+cte+`
+		SELECT `+attentionFamilySummaryColumns("fr", "representative")+`
+		FROM family_rollup fr
+		JOIN ranked_members representative
+			ON representative.group_key = fr.group_key
+			AND representative.family_member_rank = 1
+		ORDER BY fr.severity_rank DESC, fr.supporting_issue_count DESC,
+			fr.last_observed_at DESC, fr.group_key ASC
+		LIMIT ?`, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "issue_summary") ||
+		!strings.Contains(plan.String(), "issue_occurrences") {
+		t.Fatalf("family query plan does not use projection tables:\n%s", plan.String())
 	}
 }
 

@@ -2,6 +2,7 @@ package readmodel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -151,8 +152,17 @@ func TestAttentionFamilyListAndDetailPreserveSnapshotAndExactChildCursor(t *test
 		list.NextCursor == nil ||
 		list.Data[0].ViewCursor == "" ||
 		list.Data[0].Catalog.DisplayTitle != "Agent safety confirmations may be disabled" ||
-		list.Data[0].Catalog.CatalogVersion != sourcecatalog.CatalogVersion {
+		list.Data[0].Catalog.CatalogVersion != sourcecatalog.CatalogVersion ||
+		list.GlobalAnalysisCoverage.CurrentSessions != 3 {
 		t.Fatalf("list = %+v", list)
+	}
+	encodedList, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encodedList), `"global_analysis_coverage"`) ||
+		strings.Contains(string(encodedList), `"analysis":`) {
+		t.Fatalf("family list coverage contract = %s", encodedList)
 	}
 	firstQuery := repository.familyQueries[0]
 	if firstQuery.Filter.Severity != "low" ||

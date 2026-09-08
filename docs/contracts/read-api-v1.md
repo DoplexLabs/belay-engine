@@ -427,7 +427,7 @@ key ascending. Grouping happens before `LIMIT`.
     },
     "view_cursor": "opaque-family-view-cursor"
   }],
-  "analysis": {
+  "global_analysis_coverage": {
     "current_sessions": 120,
     "pending_sessions": 0,
     "failed_sessions": 0,
@@ -546,7 +546,7 @@ Response:
 ```json
 {
   "schema_version": "belay.read.v1",
-  "projection_version": "belay.issue.v2",
+  "projection_version": "belay.issue.v1",
   "data": [],
   "analysis": {
     "current_sessions": 120,
@@ -612,7 +612,7 @@ cursor without first locating the issue in a paginated issue list.
 ```json
 {
   "schema_version": "belay.read.v1",
-  "projection_version": "belay.issue.v1",
+  "projection_version": "belay.issue.v2",
   "data": {
     "issue": {},
     "occurrences": []

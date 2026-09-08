@@ -75,15 +75,15 @@ type AttentionFamilySummary struct {
 }
 
 type AttentionFamilyList struct {
-	SchemaVersion     string                      `json:"schema_version"`
-	ProjectionVersion string                      `json:"projection_version"`
-	Data              []AttentionFamilySummary    `json:"data"`
-	Analysis          model.IssueAnalysisCoverage `json:"analysis"`
-	Selection         AttentionFamilySelection    `json:"selection"`
-	NextCursor        *string                     `json:"next_cursor"`
-	HasMore           bool                        `json:"has_more"`
-	ReturnedCount     int                         `json:"returned_count"`
-	Limit             int                         `json:"limit"`
+	SchemaVersion          string                      `json:"schema_version"`
+	ProjectionVersion      string                      `json:"projection_version"`
+	Data                   []AttentionFamilySummary    `json:"data"`
+	GlobalAnalysisCoverage model.IssueAnalysisCoverage `json:"global_analysis_coverage"`
+	Selection              AttentionFamilySelection    `json:"selection"`
+	NextCursor             *string                     `json:"next_cursor"`
+	HasMore                bool                        `json:"has_more"`
+	ReturnedCount          int                         `json:"returned_count"`
+	Limit                  int                         `json:"limit"`
 }
 
 type AttentionFamilyMember struct {
@@ -238,15 +238,15 @@ func (s *Service) ListAttentionFamilies(
 		return AttentionFamilyList{}, err
 	}
 	return AttentionFamilyList{
-		SchemaVersion:     SchemaVersion,
-		ProjectionVersion: AttentionFamilyProjectionVersion,
-		Data:              nonNil(presented),
-		Analysis:          page.Analysis,
-		Selection:         normalizedAttentionFamilySelection(request),
-		NextCursor:        nextCursor,
-		HasMore:           hasMore,
-		ReturnedCount:     len(presented),
-		Limit:             request.Limit,
+		SchemaVersion:          SchemaVersion,
+		ProjectionVersion:      AttentionFamilyProjectionVersion,
+		Data:                   nonNil(presented),
+		GlobalAnalysisCoverage: page.Analysis,
+		Selection:              normalizedAttentionFamilySelection(request),
+		NextCursor:             nextCursor,
+		HasMore:                hasMore,
+		ReturnedCount:          len(presented),
+		Limit:                  request.Limit,
 	}, nil
 }
 

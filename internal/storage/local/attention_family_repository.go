@@ -7,45 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/sourcecatalog"
 )
-
-type attentionFamilyAggregate struct {
-	summary   model.AttentionFamilySummary
-	members   []model.IssueSummary
-	sessions  map[string]struct{}
-	harnesses map[string]struct{}
-}
-
-type attentionFamilyIssue struct {
-	summary          model.IssueSummary
-	severityRank     int
-	mapping          sourcecatalog.Mapping
-	mapped           bool
-	rawFindingValid  bool
-	matchedCount     int
-	matchedSessions  map[string]struct{}
-	matchedHarnesses map[string]struct{}
-	firstObservedAt  time.Time
-	lastObservedAt   time.Time
-}
-
-type attentionFamilyRow struct {
-	summary            model.IssueSummary
-	severityRank       int
-	sessionID          string
-	harness            string
-	firstObservedAt    time.Time
-	lastObservedAt     time.Time
-	originRecordID     string
-	findingID          string
-	findingSessionID   string
-	findingRuleID      string
-	findingRuleVersion string
-}
 
 func (s *Store) QueryAttentionFamilies(
 	ctx context.Context,
@@ -74,28 +39,11 @@ func (s *Store) QueryAttentionFamilies(
 	if err != nil {
 		return model.AttentionFamilyPage{}, err
 	}
-	aggregates, err := s.loadAttentionFamiliesTx(
-		ctx,
-		tx,
-		state.snapshot,
-		query.Filter,
+	summaries, err := s.queryAttentionFamilyPageTx(
+		ctx, tx, state.snapshot, query.Filter, query.Cursor, query.Limit+1,
 	)
 	if err != nil {
 		return model.AttentionFamilyPage{}, err
-	}
-	sort.Slice(aggregates, func(i, j int) bool {
-		return attentionFamilyLess(aggregates[i].summary, aggregates[j].summary)
-	})
-	summaries := make([]model.AttentionFamilySummary, 0, query.Limit+1)
-	for _, aggregate := range aggregates {
-		if query.Cursor != nil &&
-			!attentionFamilyAfterPosition(aggregate.summary, *query.Cursor) {
-			continue
-		}
-		summaries = append(summaries, aggregate.summary)
-		if len(summaries) == query.Limit+1 {
-			break
-		}
 	}
 	hasMore := len(summaries) > query.Limit
 	if hasMore {
@@ -149,30 +97,23 @@ func (s *Store) QueryAttentionFamilyMembers(
 	if err != nil {
 		return model.AttentionFamilyMemberPage{}, err
 	}
-	aggregates, err := s.loadAttentionFamiliesTx(
-		ctx,
-		tx,
-		state.snapshot,
-		query.Filter,
+	mapping, ok := sourcecatalog.MappingByKey(
+		sourcecatalog.GuardrailsConfigurationMappingKey, "1", "1",
+	)
+	if !ok {
+		return model.AttentionFamilyMemberPage{}, errors.New("attention family catalog is unavailable")
+	}
+	expectedFamilyID, err := s.DeriveAttentionFamilyID(
+		query.GroupKey, sourcecatalog.CatalogVersion, mapping.GroupingVersion,
 	)
 	if err != nil {
 		return model.AttentionFamilyMemberPage{}, err
-	}
-	var selected *attentionFamilyAggregate
-	for index := range aggregates {
-		aggregate := &aggregates[index]
-		if aggregate.summary.GroupKey == query.GroupKey &&
-			aggregate.summary.FamilyID == query.FamilyID &&
-			aggregate.summary.Kind == model.AttentionFamilyKindMappedUpstream {
-			selected = aggregate
-			break
-		}
 	}
 	coverage, err := materializedIssueAnalysisCoverage(ctx, tx, state.snapshot)
 	if err != nil {
 		return model.AttentionFamilyMemberPage{}, err
 	}
-	if selected == nil {
+	if expectedFamilyID != query.FamilyID {
 		if err := tx.Commit(); err != nil {
 			return model.AttentionFamilyMemberPage{}, errors.New("complete absent attention family read")
 		}
@@ -184,19 +125,30 @@ func (s *Store) QueryAttentionFamilyMembers(
 			IssuedAt:            state.issuedAt,
 		}, nil
 	}
-	sort.Slice(selected.members, func(i, j int) bool {
-		return attentionFamilyMemberLess(selected.members[i], selected.members[j])
-	})
-	members := make([]model.IssueSummary, 0, query.Limit+1)
-	for _, member := range selected.members {
-		if query.Cursor != nil &&
-			!attentionFamilyMemberAfterPosition(member, *query.Cursor) {
-			continue
+	family, found, err := s.queryAttentionFamilySummaryTx(
+		ctx, tx, state.snapshot, query.Filter, query.GroupKey,
+	)
+	if err != nil {
+		return model.AttentionFamilyMemberPage{}, err
+	}
+	if !found || family.Kind != model.AttentionFamilyKindMappedUpstream {
+		if err := tx.Commit(); err != nil {
+			return model.AttentionFamilyMemberPage{}, errors.New("complete absent attention family read")
 		}
-		members = append(members, member)
-		if len(members) == query.Limit+1 {
-			break
-		}
+		return model.AttentionFamilyMemberPage{
+			Analysis:            coverage,
+			CursorEpoch:         state.epoch,
+			Snapshot:            state.snapshot,
+			RetentionGeneration: state.retentionGeneration,
+			IssuedAt:            state.issuedAt,
+		}, nil
+	}
+	members, err := s.queryAttentionFamilyMemberPageTx(
+		ctx, tx, state.snapshot, query.Filter, query.GroupKey,
+		query.Cursor, query.Limit+1,
+	)
+	if err != nil {
+		return model.AttentionFamilyMemberPage{}, err
 	}
 	hasMore := len(members) > query.Limit
 	if hasMore {
@@ -206,7 +158,7 @@ func (s *Store) QueryAttentionFamilyMembers(
 		return model.AttentionFamilyMemberPage{}, errors.New("complete attention family member read")
 	}
 	return model.AttentionFamilyMemberPage{
-		Family:              selected.summary,
+		Family:              family,
 		Data:                members,
 		Analysis:            coverage,
 		CursorEpoch:         state.epoch,
@@ -218,291 +170,631 @@ func (s *Store) QueryAttentionFamilyMembers(
 	}, nil
 }
 
-func (s *Store) loadAttentionFamiliesTx(
+func (s *Store) queryAttentionFamilyPageTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	snapshot int64,
 	filter model.AttentionFamilyFilter,
-) ([]attentionFamilyAggregate, error) {
-	clauses := []string{
-		"sr.visible_from_generation <= ?",
-		"(sr.visible_until_generation IS NULL OR sr.visible_until_generation > ?)",
-		"io.visible_from_generation <= ?",
-		"(io.visible_until_generation IS NULL OR io.visible_until_generation > ?)",
-	}
-	args := []any{snapshot, snapshot, snapshot, snapshot}
-	switch filter.AttentionKind {
-	case model.AttentionKindIssue:
-		clauses = append(clauses, "sr.category <> 'evidence_gap'")
-	case model.AttentionKindEvidenceGap:
-		clauses = append(clauses, "sr.category = 'evidence_gap'")
-	default:
-		return nil, errors.New("unsupported attention family kind")
-	}
-	if filter.Experimental == model.ExperimentalStable {
-		clauses = append(clauses, "sr.experimental = 0")
-	}
-	if filter.Origin != "" {
-		clauses = append(clauses, "sr.origin = ?")
-		args = append(args, filter.Origin)
-	}
-	if filter.AnalysisStatus != "" {
-		clauses = append(clauses, "sr.analysis_status = ?")
-		args = append(args, filter.AnalysisStatus)
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT
-			sr.issue_id, sr.fingerprint_id, sr.fingerprint_version, sr.origin,
-			sr.detector_id, sr.detector_version, sr.category, sr.title_code,
-			sr.source_signal_code, sr.severity, sr.severity_rank,
-			sr.confidence, sr.scope_quality, sr.analysis_status,
-			sr.evidence_complete, sr.retained_history_only, sr.experimental,
-			io.session_key, io.harness, io.first_observed_at, io.last_observed_at,
-			COALESCE(io.origin_record_id, ''),
-			COALESCE(f.finding_id, ''), COALESCE(f.session_key, ''),
-			COALESCE(f.rule_id, ''), COALESCE(f.rule_version, '')
-		FROM issue_summary_revisions sr
-		JOIN issue_occurrences io ON io.issue_id = sr.issue_id
-		LEFT JOIN findings f
-			ON io.origin = 'numbat' AND f.finding_id = io.origin_record_id
-		WHERE `+strings.Join(clauses, " AND ")+`
-		ORDER BY sr.issue_id, io.revision_id`,
-		args...,
-	)
+	cursor *model.AttentionFamilyPosition,
+	limit int,
+) ([]model.AttentionFamilySummary, error) {
+	cte, args, err := attentionFamilyCTE(snapshot, filter, "")
 	if err != nil {
-		return nil, fmt.Errorf("query attention family candidates: %w", err)
+		return nil, err
+	}
+	where := []string{"1 = 1"}
+	if cursor != nil {
+		where = append(where, `(
+			fr.severity_rank < ? OR
+			(fr.severity_rank = ? AND fr.supporting_issue_count < ?) OR
+			(fr.severity_rank = ? AND fr.supporting_issue_count = ? AND fr.last_observed_at < ?) OR
+			(fr.severity_rank = ? AND fr.supporting_issue_count = ? AND fr.last_observed_at = ? AND fr.group_key > ?)
+		)`)
+		positionTime := formatProjectionTime(cursor.LastObserved)
+		args = append(args,
+			cursor.SeverityRank,
+			cursor.SeverityRank, cursor.SupportingIssueCount,
+			cursor.SeverityRank, cursor.SupportingIssueCount, positionTime,
+			cursor.SeverityRank, cursor.SupportingIssueCount, positionTime, cursor.GroupKey,
+		)
+	}
+	args = append(args, limit)
+	rows, err := tx.QueryContext(ctx, cte+`
+		SELECT `+attentionFamilySummaryColumns("fr", "representative")+`
+		FROM family_rollup fr
+		JOIN ranked_members representative
+			ON representative.group_key = fr.group_key
+			AND representative.family_member_rank = 1
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY fr.severity_rank DESC, fr.supporting_issue_count DESC,
+			fr.last_observed_at DESC, fr.group_key ASC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query attention family page: %w", err)
 	}
 	defer rows.Close()
-	issues := make(map[string]*attentionFamilyIssue)
+	result := make([]model.AttentionFamilySummary, 0, limit)
 	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		row, err := scanAttentionFamilyRow(rows)
+		family, err := s.scanAttentionFamilySummary(rows, filter.AttentionKind)
 		if err != nil {
 			return nil, err
 		}
-		issue := issues[row.summary.IssueID]
-		if issue == nil {
-			mapping, mapped := sourcecatalog.MatchSummary(row.summary)
-			issue = &attentionFamilyIssue{
-				summary:          row.summary,
-				severityRank:     row.severityRank,
-				mapping:          mapping,
-				mapped:           mapped,
-				rawFindingValid:  true,
-				matchedSessions:  make(map[string]struct{}),
-				matchedHarnesses: make(map[string]struct{}),
-			}
-			issues[row.summary.IssueID] = issue
-		}
-		if issue.summary.Origin == "numbat" && issue.mapped {
-			if row.originRecordID == "" ||
-				row.findingID != row.originRecordID ||
-				row.findingSessionID != row.sessionID ||
-				row.findingRuleID != issue.mapping.SourceSignalCode ||
-				!issue.mapping.AcceptsRawRuleVersion(row.findingRuleVersion) {
-				issue.rawFindingValid = false
-			}
-		}
-		if filter.Harness != "" && !strings.EqualFold(row.harness, filter.Harness) {
-			continue
-		}
-		if filter.ObservedAfter != nil && row.lastObservedAt.Before(*filter.ObservedAfter) {
-			continue
-		}
-		issue.matchedCount++
-		issue.matchedSessions[row.sessionID] = struct{}{}
-		issue.matchedHarnesses[strings.ToLower(row.harness)] = struct{}{}
-		if issue.firstObservedAt.IsZero() || row.firstObservedAt.Before(issue.firstObservedAt) {
-			issue.firstObservedAt = row.firstObservedAt
-		}
-		if issue.lastObservedAt.IsZero() || row.lastObservedAt.After(issue.lastObservedAt) {
-			issue.lastObservedAt = row.lastObservedAt
-		}
+		result = append(result, family)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("read attention family candidates")
-	}
-
-	grouped := make(map[string]*attentionFamilyAggregate)
-	issueIDs := make([]string, 0, len(issues))
-	for issueID := range issues {
-		issueIDs = append(issueIDs, issueID)
-	}
-	sort.Strings(issueIDs)
-	for _, issueID := range issueIDs {
-		issue := issues[issueID]
-		if issue.matchedCount == 0 {
-			continue
-		}
-		var (
-			groupKey        string
-			kind            string
-			mappingKey      string
-			mappingVersion  string
-			groupingVersion = "1"
-			severity        = issue.summary.Severity
-		)
-		switch issue.summary.Origin {
-		case "belay":
-			kind = model.AttentionFamilyKindExactIssue
-			groupKey = "exact:" + issue.summary.IssueID
-		case "numbat":
-			if !issue.mapped || !issue.rawFindingValid {
-				continue
-			}
-			kind = model.AttentionFamilyKindMappedUpstream
-			mappingKey = issue.mapping.Key
-			mappingVersion = issue.mapping.Version
-			groupingVersion = issue.mapping.GroupingVersion
-			severity = issue.mapping.AttentionSeverity
-			groupKey = strings.Join([]string{
-				"mapped",
-				mappingKey,
-				mappingVersion,
-				groupingVersion,
-				issue.summary.FingerprintVersion,
-			}, ":")
-		default:
-			continue
-		}
-		if filter.Severity != "" && severity != filter.Severity {
-			continue
-		}
-		member := issue.summary
-		member.FirstObservedAt = issue.firstObservedAt
-		member.LastObservedAt = issue.lastObservedAt
-		member.OccurrenceCount = issue.matchedCount
-		member.SessionCount = len(issue.matchedSessions)
-		member.Harnesses = sortedSet(issue.matchedHarnesses)
-
-		aggregate := grouped[groupKey]
-		if aggregate == nil {
-			familyID, err := s.DeriveAttentionFamilyID(
-				groupKey,
-				sourcecatalog.CatalogVersion,
-				groupingVersion,
-			)
-			if err != nil {
-				return nil, err
-			}
-			aggregate = &attentionFamilyAggregate{
-				summary: model.AttentionFamilySummary{
-					FamilyID:            familyID,
-					GroupKey:            groupKey,
-					Kind:                kind,
-					MappingKey:          mappingKey,
-					MappingVersion:      mappingVersion,
-					GroupingVersion:     groupingVersion,
-					AttentionKind:       filter.AttentionKind,
-					Severity:            severity,
-					Confidence:          member.Confidence,
-					EvidenceComplete:    true,
-					RetainedHistoryOnly: true,
-					AnalysisStatus:      model.AnalysisCurrent,
-				},
-				sessions:  make(map[string]struct{}),
-				harnesses: make(map[string]struct{}),
-			}
-			grouped[groupKey] = aggregate
-		}
-		aggregate.members = append(aggregate.members, member)
-		aggregate.summary.SupportingIssueCount++
-		aggregate.summary.OccurrenceCount += member.OccurrenceCount
-		aggregate.summary.Experimental = aggregate.summary.Experimental || member.Experimental
-		for sessionID := range issue.matchedSessions {
-			aggregate.sessions[sessionID] = struct{}{}
-		}
-		for harness := range issue.matchedHarnesses {
-			aggregate.harnesses[harness] = struct{}{}
-		}
-		incrementScopeCount(&aggregate.summary.Scope, member.ScopeQuality)
-		if aggregate.summary.FirstObservedAt.IsZero() ||
-			member.FirstObservedAt.Before(aggregate.summary.FirstObservedAt) {
-			aggregate.summary.FirstObservedAt = member.FirstObservedAt
-		}
-		if aggregate.summary.LastObservedAt.IsZero() ||
-			member.LastObservedAt.After(aggregate.summary.LastObservedAt) {
-			aggregate.summary.LastObservedAt = member.LastObservedAt
-		}
-		if confidenceRank(member.Confidence) < confidenceRank(aggregate.summary.Confidence) {
-			aggregate.summary.Confidence = member.Confidence
-		}
-		if analysisStatusRank(member.AnalysisStatus) >
-			analysisStatusRank(aggregate.summary.AnalysisStatus) {
-			aggregate.summary.AnalysisStatus = member.AnalysisStatus
-		}
-		aggregate.summary.EvidenceComplete =
-			aggregate.summary.EvidenceComplete && member.EvidenceComplete
-		aggregate.summary.RetainedHistoryOnly =
-			aggregate.summary.RetainedHistoryOnly && member.RetainedHistoryOnly
-		if aggregate.summary.RepresentativeIssueID == "" ||
-			attentionFamilyMemberLess(member, aggregate.summary.Representative) {
-			aggregate.summary.RepresentativeIssueID = member.IssueID
-			aggregate.summary.Representative = member
-		}
-	}
-	result := make([]attentionFamilyAggregate, 0, len(grouped))
-	for _, aggregate := range grouped {
-		aggregate.summary.SessionCount = len(aggregate.sessions)
-		aggregate.summary.Harnesses = sortedSet(aggregate.harnesses)
-		result = append(result, *aggregate)
+		return nil, errors.New("read attention family page")
 	}
 	return result, nil
 }
 
-func scanAttentionFamilyRow(row rowScanner) (attentionFamilyRow, error) {
-	var result attentionFamilyRow
-	var sourceSignalCode sql.NullString
-	var firstObserved, lastObserved string
+func (s *Store) queryAttentionFamilySummaryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	snapshot int64,
+	filter model.AttentionFamilyFilter,
+	groupKey string,
+) (model.AttentionFamilySummary, bool, error) {
+	cte, args, err := attentionFamilyCTE(snapshot, filter, groupKey)
+	if err != nil {
+		return model.AttentionFamilySummary{}, false, err
+	}
+	args = append(args, groupKey)
+	row := tx.QueryRowContext(ctx, cte+`
+		SELECT `+attentionFamilySummaryColumns("fr", "representative")+`
+		FROM family_rollup fr
+		JOIN ranked_members representative
+			ON representative.group_key = fr.group_key
+			AND representative.family_member_rank = 1
+		WHERE fr.group_key = ?
+		LIMIT 1`, args...)
+	family, err := s.scanAttentionFamilySummary(row, filter.AttentionKind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AttentionFamilySummary{}, false, nil
+	}
+	if err != nil {
+		return model.AttentionFamilySummary{}, false, err
+	}
+	return family, true, nil
+}
+
+func (s *Store) queryAttentionFamilyMemberPageTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	snapshot int64,
+	filter model.AttentionFamilyFilter,
+	groupKey string,
+	cursor *model.AttentionFamilyMemberPosition,
+	limit int,
+) ([]model.IssueSummary, error) {
+	cte, args, err := attentionFamilyCTE(snapshot, filter, groupKey)
+	if err != nil {
+		return nil, err
+	}
+	where := []string{"im.group_key = ?"}
+	args = append(args, groupKey)
+	if cursor != nil {
+		where = append(where, `(
+			im.analysis_status_rank < ? OR
+			(im.analysis_status_rank = ? AND im.last_observed_at < ?) OR
+			(im.analysis_status_rank = ? AND im.last_observed_at = ? AND im.issue_id > ?)
+		)`)
+		positionTime := formatProjectionTime(cursor.LastObserved)
+		args = append(args,
+			cursor.AnalysisStatusRank,
+			cursor.AnalysisStatusRank, positionTime,
+			cursor.AnalysisStatusRank, positionTime, cursor.IssueID,
+		)
+	}
+	args = append(args, limit)
+	rows, err := tx.QueryContext(ctx, cte+`
+		SELECT `+attentionFamilyMemberColumns("im")+`
+		FROM issue_members im
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY im.analysis_status_rank DESC, im.last_observed_at DESC, im.issue_id ASC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query attention family members: %w", err)
+	}
+	defer rows.Close()
+	result := make([]model.IssueSummary, 0, limit)
+	for rows.Next() {
+		member, err := scanAttentionFamilyMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("read attention family members")
+	}
+	return result, nil
+}
+
+func attentionFamilyCTE(
+	snapshot int64,
+	filter model.AttentionFamilyFilter,
+	requiredGroupKey string,
+) (string, []any, error) {
+	mapping, ok := sourcecatalog.MappingByKey(
+		sourcecatalog.GuardrailsConfigurationMappingKey, "1", "1",
+	)
+	if !ok || len(mapping.RawRuleVersions) != 1 ||
+		len(mapping.FingerprintVersions) != 1 {
+		return "", nil, errors.New("attention family catalog is unavailable")
+	}
+	summaryClauses := []string{
+		"sr.visible_from_generation <= ?",
+		"(sr.visible_until_generation IS NULL OR sr.visible_until_generation > ?)",
+	}
+	args := []any{
+		mapping.Key,
+		mapping.Version,
+		mapping.GroupingVersion,
+		mapping.Origin,
+		mapping.TitleCode,
+		mapping.Category,
+		mapping.SourceSignalCode,
+		mapping.RawRuleVersions[0],
+		mapping.FingerprintVersions[0],
+		mapping.AttentionSeverity,
+		familySeverityRank(mapping.AttentionSeverity),
+		snapshot,
+		snapshot,
+	}
+	switch filter.AttentionKind {
+	case model.AttentionKindIssue:
+		summaryClauses = append(summaryClauses, "sr.category <> 'evidence_gap'")
+	case model.AttentionKindEvidenceGap:
+		summaryClauses = append(summaryClauses, "sr.category = 'evidence_gap'")
+	default:
+		return "", nil, errors.New("unsupported attention family kind")
+	}
+	if filter.Experimental == model.ExperimentalStable {
+		summaryClauses = append(summaryClauses, "sr.experimental = 0")
+	}
+	if filter.Origin != "" {
+		summaryClauses = append(summaryClauses, "sr.origin = ?")
+		args = append(args, filter.Origin)
+	}
+	if filter.AnalysisStatus != "" {
+		summaryClauses = append(summaryClauses, "sr.analysis_status = ?")
+		args = append(args, filter.AnalysisStatus)
+	}
+	args = append(args, snapshot, snapshot)
+
+	occurrenceClauses := []string{
+		"io.visible_from_generation <= ?",
+		"(io.visible_until_generation IS NULL OR io.visible_until_generation > ?)",
+	}
+	occurrenceArgs := []any{snapshot, snapshot}
+	if filter.Harness != "" {
+		occurrenceClauses = append(occurrenceClauses, "LOWER(io.harness) = LOWER(?)")
+		occurrenceArgs = append(occurrenceArgs, filter.Harness)
+	}
+	if filter.ObservedAfter != nil {
+		occurrenceClauses = append(occurrenceClauses, "io.last_observed_at >= ?")
+		occurrenceArgs = append(occurrenceArgs, formatProjectionTime(*filter.ObservedAfter))
+	}
+
+	selectedClauses := make([]string, 0, 2)
+	if filter.Severity != "" {
+		selectedClauses = append(selectedClauses, "classified.effective_severity = ?")
+		args = append(args, filter.Severity)
+	}
+	if requiredGroupKey != "" {
+		selectedClauses = append(selectedClauses, "classified.group_key = ?")
+		args = append(args, requiredGroupKey)
+	}
+	args = append(args, occurrenceArgs...)
+	selectedWhere := ""
+	if len(selectedClauses) > 0 {
+		selectedWhere = "WHERE " + strings.Join(selectedClauses, " AND ")
+	}
+
+	return `
+		WITH
+		mapping AS (
+			SELECT
+				? AS mapping_key,
+				? AS mapping_version,
+				? AS grouping_version,
+				? AS origin,
+				? AS title_code,
+				? AS category,
+				? AS source_signal_code,
+				? AS raw_rule_version,
+				? AS fingerprint_version,
+				? AS attention_severity,
+				? AS attention_severity_rank
+		),
+		classified AS (
+			SELECT
+				sr.*,
+				CASE
+					WHEN sr.origin = 'belay' THEN 'exact_issue'
+					ELSE 'mapped_upstream'
+				END AS family_kind,
+				CASE
+					WHEN sr.origin = 'belay' THEN 'exact:' || sr.issue_id
+					ELSE 'mapped:' || m.mapping_key || ':' || m.mapping_version ||
+						':' || m.grouping_version || ':' || sr.fingerprint_version
+				END AS group_key,
+				CASE WHEN sr.origin = 'belay' THEN '' ELSE m.mapping_key END AS mapping_key,
+				CASE WHEN sr.origin = 'belay' THEN '' ELSE m.mapping_version END AS mapping_version,
+				CASE WHEN sr.origin = 'belay' THEN '1' ELSE m.grouping_version END AS grouping_version,
+				CASE WHEN sr.origin = 'belay' THEN sr.severity ELSE m.attention_severity END
+					AS effective_severity,
+				CASE WHEN sr.origin = 'belay' THEN sr.severity_rank
+					ELSE m.attention_severity_rank END AS effective_severity_rank,
+				CASE sr.confidence WHEN 'low' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+					AS confidence_rank,
+				CASE sr.analysis_status
+					WHEN 'failed' THEN 4
+					WHEN 'pending' THEN 3
+					WHEN 'truncated' THEN 2
+					ELSE 1
+				END AS analysis_status_rank
+			FROM issue_summary_revisions sr
+			CROSS JOIN mapping m
+			WHERE ` + strings.Join(summaryClauses, " AND ") + `
+				AND (
+					sr.origin = 'belay' OR (
+						sr.origin = m.origin
+						AND sr.title_code = m.title_code
+						AND sr.category = m.category
+						AND sr.source_signal_code = m.source_signal_code
+						AND sr.fingerprint_version = m.fingerprint_version
+						AND NOT EXISTS (
+							SELECT 1
+							FROM issue_occurrences io_check
+							LEFT JOIN findings f_check
+								ON f_check.finding_id = io_check.origin_record_id
+							WHERE io_check.issue_id = sr.issue_id
+								AND io_check.visible_from_generation <= ?
+								AND (
+									io_check.visible_until_generation IS NULL OR
+									io_check.visible_until_generation > ?
+								)
+								AND (
+									io_check.origin <> m.origin OR
+									COALESCE(io_check.origin_record_id, '') = '' OR
+									COALESCE(f_check.finding_id, '') <> io_check.origin_record_id OR
+									COALESCE(f_check.session_key, '') <> io_check.session_key OR
+									COALESCE(f_check.rule_id, '') <> m.source_signal_code OR
+									COALESCE(f_check.rule_version, '') <> m.raw_rule_version
+								)
+						)
+					)
+				)
+		),
+		selected_summaries AS (
+			SELECT classified.*
+			FROM classified
+			` + selectedWhere + `
+		),
+		matched_occurrences AS (
+			SELECT
+				ss.*,
+				io.session_key AS matched_session_key,
+				LOWER(io.harness) AS matched_harness,
+				io.first_observed_at AS matched_first_observed_at,
+				io.last_observed_at AS matched_last_observed_at
+			FROM selected_summaries ss
+			JOIN issue_occurrences io ON io.issue_id = ss.issue_id
+			WHERE ` + strings.Join(occurrenceClauses, " AND ") + `
+		),
+		issue_members AS (
+			SELECT
+				mo.summary_revision_id,
+				mo.issue_id,
+				mo.fingerprint_id,
+				mo.fingerprint_version,
+				mo.origin,
+				mo.detector_id,
+				mo.detector_version,
+				mo.category,
+				mo.title_code,
+				mo.source_signal_code,
+				mo.severity,
+				mo.confidence,
+				mo.confidence_rank,
+				mo.scope_quality,
+				mo.analysis_status,
+				mo.analysis_status_rank,
+				mo.evidence_complete,
+				mo.retained_history_only,
+				mo.experimental,
+				mo.family_kind,
+				mo.group_key,
+				mo.mapping_key,
+				mo.mapping_version,
+				mo.grouping_version,
+				mo.effective_severity,
+				mo.effective_severity_rank,
+				MIN(mo.matched_first_observed_at) AS first_observed_at,
+				MAX(mo.matched_last_observed_at) AS last_observed_at,
+				COUNT(*) AS occurrence_count,
+				COUNT(DISTINCT mo.matched_session_key) AS session_count,
+				GROUP_CONCAT(DISTINCT mo.matched_harness) AS harnesses
+			FROM matched_occurrences mo
+			GROUP BY mo.summary_revision_id
+		),
+		family_occurrences AS (
+			SELECT
+				mo.group_key,
+				COUNT(DISTINCT mo.matched_session_key) AS session_count,
+				GROUP_CONCAT(DISTINCT mo.matched_harness) AS harnesses
+			FROM matched_occurrences mo
+			GROUP BY mo.group_key
+		),
+		family_rollup AS (
+			SELECT
+				im.group_key,
+				MIN(im.family_kind) AS family_kind,
+				MIN(im.mapping_key) AS mapping_key,
+				MIN(im.mapping_version) AS mapping_version,
+				MIN(im.grouping_version) AS grouping_version,
+				MIN(im.effective_severity) AS severity,
+				MIN(im.effective_severity_rank) AS severity_rank,
+				MIN(im.confidence_rank) AS confidence_rank,
+				MIN(im.first_observed_at) AS first_observed_at,
+				MAX(im.last_observed_at) AS last_observed_at,
+				COUNT(*) AS supporting_issue_count,
+				SUM(im.occurrence_count) AS occurrence_count,
+				fo.session_count,
+				fo.harnesses,
+				SUM(CASE WHEN im.scope_quality = 'resolved' THEN 1 ELSE 0 END)
+					AS scope_resolved,
+				SUM(CASE WHEN im.scope_quality = 'lexical' THEN 1 ELSE 0 END)
+					AS scope_lexical,
+				SUM(CASE WHEN im.scope_quality = 'unscoped' THEN 1 ELSE 0 END)
+					AS scope_unscoped,
+				SUM(CASE WHEN im.scope_quality = 'conflict' THEN 1 ELSE 0 END)
+					AS scope_conflict,
+				MAX(im.analysis_status_rank) AS analysis_status_rank,
+				MIN(im.evidence_complete) AS evidence_complete,
+				MIN(im.retained_history_only) AS retained_history_only,
+				MAX(im.experimental) AS experimental
+			FROM issue_members im
+			JOIN family_occurrences fo ON fo.group_key = im.group_key
+			GROUP BY im.group_key
+		),
+		ranked_members AS (
+			SELECT
+				im.*,
+				ROW_NUMBER() OVER (
+					PARTITION BY im.group_key
+					ORDER BY im.analysis_status_rank DESC,
+						im.last_observed_at DESC, im.issue_id ASC
+				) AS family_member_rank
+			FROM issue_members im
+		)
+	`, args, nil
+}
+
+func attentionFamilySummaryColumns(familyAlias, representativeAlias string) string {
+	return strings.Join([]string{
+		familyAlias + ".group_key",
+		familyAlias + ".family_kind",
+		familyAlias + ".mapping_key",
+		familyAlias + ".mapping_version",
+		familyAlias + ".grouping_version",
+		familyAlias + ".severity",
+		familyAlias + ".confidence_rank",
+		familyAlias + ".first_observed_at",
+		familyAlias + ".last_observed_at",
+		familyAlias + ".supporting_issue_count",
+		familyAlias + ".occurrence_count",
+		familyAlias + ".session_count",
+		"COALESCE(" + familyAlias + ".harnesses, '')",
+		familyAlias + ".scope_resolved",
+		familyAlias + ".scope_lexical",
+		familyAlias + ".scope_unscoped",
+		familyAlias + ".scope_conflict",
+		familyAlias + ".analysis_status_rank",
+		familyAlias + ".evidence_complete",
+		familyAlias + ".retained_history_only",
+		familyAlias + ".experimental",
+		attentionFamilyMemberColumns(representativeAlias),
+	}, ", ")
+}
+
+func attentionFamilyMemberColumns(alias string) string {
+	return strings.Join([]string{
+		alias + ".issue_id",
+		alias + ".fingerprint_id",
+		alias + ".fingerprint_version",
+		alias + ".origin",
+		alias + ".detector_id",
+		alias + ".detector_version",
+		alias + ".category",
+		alias + ".title_code",
+		alias + ".source_signal_code",
+		alias + ".severity",
+		alias + ".confidence",
+		alias + ".scope_quality",
+		alias + ".first_observed_at",
+		alias + ".last_observed_at",
+		alias + ".occurrence_count",
+		alias + ".session_count",
+		"COALESCE(" + alias + ".harnesses, '')",
+		alias + ".analysis_status",
+		alias + ".evidence_complete",
+		alias + ".retained_history_only",
+		alias + ".experimental",
+	}, ", ")
+}
+
+func (s *Store) scanAttentionFamilySummary(
+	row rowScanner,
+	attentionKind string,
+) (model.AttentionFamilySummary, error) {
+	var result model.AttentionFamilySummary
+	representativeScan := attentionFamilyMemberScan{
+		summary: &result.Representative,
+	}
+	var confidenceRankValue, analysisRank int
+	var firstObserved, lastObserved, harnesses string
 	var evidenceComplete, retainedHistoryOnly, experimental int
-	if err := row.Scan(
-		&result.summary.IssueID,
-		&result.summary.FingerprintID,
-		&result.summary.FingerprintVersion,
-		&result.summary.Origin,
-		&result.summary.DetectorID,
-		&result.summary.DetectorVersion,
-		&result.summary.Category,
-		&result.summary.TitleCode,
-		&sourceSignalCode,
-		&result.summary.Severity,
-		&result.severityRank,
-		&result.summary.Confidence,
-		&result.summary.ScopeQuality,
-		&result.summary.AnalysisStatus,
+	targets := []any{
+		&result.GroupKey,
+		&result.Kind,
+		&result.MappingKey,
+		&result.MappingVersion,
+		&result.GroupingVersion,
+		&result.Severity,
+		&confidenceRankValue,
+		&firstObserved,
+		&lastObserved,
+		&result.SupportingIssueCount,
+		&result.OccurrenceCount,
+		&result.SessionCount,
+		&harnesses,
+		&result.Scope.Resolved,
+		&result.Scope.Lexical,
+		&result.Scope.Unscoped,
+		&result.Scope.Conflict,
+		&analysisRank,
 		&evidenceComplete,
 		&retainedHistoryOnly,
 		&experimental,
-		&result.sessionID,
-		&result.harness,
-		&firstObserved,
-		&lastObserved,
-		&result.originRecordID,
-		&result.findingID,
-		&result.findingSessionID,
-		&result.findingRuleID,
-		&result.findingRuleVersion,
-	); err != nil {
-		return attentionFamilyRow{}, errors.New("decode attention family candidate")
 	}
-	if sourceSignalCode.Valid {
-		result.summary.SourceSignalCode = &sourceSignalCode.String
+	targets = append(targets, representativeScan.targets()...)
+	if err := row.Scan(targets...); err != nil {
+		return model.AttentionFamilySummary{}, err
 	}
-	result.summary.EvidenceComplete = evidenceComplete == 1
-	result.summary.RetainedHistoryOnly = retainedHistoryOnly == 1
-	result.summary.Experimental = experimental == 1
+	if err := representativeScan.finish(); err != nil {
+		return model.AttentionFamilySummary{}, err
+	}
+	result.RepresentativeIssueID = result.Representative.IssueID
+	result.AttentionKind = attentionKind
+	result.Confidence = confidenceFromRank(confidenceRankValue)
+	result.AnalysisStatus = analysisStatusFromRank(analysisRank)
+	result.EvidenceComplete = evidenceComplete == 1
+	result.RetainedHistoryOnly = retainedHistoryOnly == 1
+	result.Experimental = experimental == 1
+	result.Harnesses = splitSortedValues(harnesses)
 	var err error
-	result.firstObservedAt, err = parseProjectionTime(firstObserved)
+	result.FirstObservedAt, err = parseProjectionTime(firstObserved)
 	if err != nil {
-		return attentionFamilyRow{}, errors.New("decode attention family first-observed timestamp")
+		return model.AttentionFamilySummary{}, errors.New("decode attention family first-observed timestamp")
 	}
-	result.lastObservedAt, err = parseProjectionTime(lastObserved)
+	result.LastObservedAt, err = parseProjectionTime(lastObserved)
 	if err != nil {
-		return attentionFamilyRow{}, errors.New("decode attention family last-observed timestamp")
+		return model.AttentionFamilySummary{}, errors.New("decode attention family last-observed timestamp")
+	}
+	familyID, err := s.DeriveAttentionFamilyID(
+		result.GroupKey, sourcecatalog.CatalogVersion, result.GroupingVersion,
+	)
+	if err != nil {
+		return model.AttentionFamilySummary{}, err
+	}
+	result.FamilyID = familyID
+	return result, nil
+}
+
+type attentionFamilyMemberScan struct {
+	summary                                *model.IssueSummary
+	sourceSignalCode                       sql.NullString
+	firstObserved, lastObserved, harnesses string
+	evidenceComplete, retainedHistoryOnly  int
+	experimental                           int
+}
+
+func (scan *attentionFamilyMemberScan) targets() []any {
+	summary := scan.summary
+	return []any{
+		&summary.IssueID,
+		&summary.FingerprintID,
+		&summary.FingerprintVersion,
+		&summary.Origin,
+		&summary.DetectorID,
+		&summary.DetectorVersion,
+		&summary.Category,
+		&summary.TitleCode,
+		&scan.sourceSignalCode,
+		&summary.Severity,
+		&summary.Confidence,
+		&summary.ScopeQuality,
+		&scan.firstObserved,
+		&scan.lastObserved,
+		&summary.OccurrenceCount,
+		&summary.SessionCount,
+		&scan.harnesses,
+		&summary.AnalysisStatus,
+		&scan.evidenceComplete,
+		&scan.retainedHistoryOnly,
+		&scan.experimental,
+	}
+}
+
+func (scan *attentionFamilyMemberScan) finish() error {
+	if scan == nil || scan.summary == nil {
+		return errors.New("missing attention family member scan state")
+	}
+	summary := scan.summary
+	if scan.sourceSignalCode.Valid {
+		summary.SourceSignalCode = &scan.sourceSignalCode.String
+	}
+	var err error
+	summary.FirstObservedAt, err = parseProjectionTime(scan.firstObserved)
+	if err != nil {
+		return errors.New("decode attention family member first-observed timestamp")
+	}
+	summary.LastObservedAt, err = parseProjectionTime(scan.lastObserved)
+	if err != nil {
+		return errors.New("decode attention family member last-observed timestamp")
+	}
+	summary.Harnesses = splitSortedValues(scan.harnesses)
+	summary.EvidenceComplete = scan.evidenceComplete == 1
+	summary.RetainedHistoryOnly = scan.retainedHistoryOnly == 1
+	summary.Experimental = scan.experimental == 1
+	return nil
+}
+
+func scanAttentionFamilyMember(row rowScanner) (model.IssueSummary, error) {
+	var result model.IssueSummary
+	scan := attentionFamilyMemberScan{summary: &result}
+	if err := row.Scan(scan.targets()...); err != nil {
+		return model.IssueSummary{}, err
+	}
+	if err := scan.finish(); err != nil {
+		return model.IssueSummary{}, err
 	}
 	return result, nil
+}
+
+func splitSortedValues(value string) []string {
+	if value == "" {
+		return nil
+	}
+	result := strings.Split(value, ",")
+	sort.Strings(result)
+	return result
+}
+
+func confidenceFromRank(rank int) string {
+	switch rank {
+	case 1:
+		return "low"
+	case 2:
+		return "medium"
+	default:
+		return "high"
+	}
+}
+
+func analysisStatusFromRank(rank int) model.AnalysisStatus {
+	switch rank {
+	case 4:
+		return model.AnalysisFailed
+	case 3:
+		return model.AnalysisPending
+	case 2:
+		return model.AnalysisTruncated
+	default:
+		return model.AnalysisCurrent
+	}
 }
 
 func normalizeAttentionFamilyFilter(filter *model.AttentionFamilyFilter) error {
