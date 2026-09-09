@@ -275,6 +275,12 @@
     briefError: "",
     briefRequestGeneration: 0,
     briefSelectionID: "",
+    missionPackRequestGeneration: 0,
+    missionPackCacheGeneration: 0,
+    missionPackRequestController: null,
+    missionPackIssue: null,
+    missionPack: null,
+    reportEvidenceIssueID: "",
     attentionMode: "issues",
     costIssues: [],
     costIssueStatus: "idle",
@@ -444,6 +450,27 @@
     briefSources: document.querySelector("#brief-sources"),
     briefOpenAttention: document.querySelector("#brief-open-attention"),
     briefOpenSessions: document.querySelector("#brief-open-sessions"),
+    missionPackModalLayer: document.querySelector(
+      "#mission-pack-modal-layer",
+    ),
+    missionPackDialog: document.querySelector("#mission-pack-dialog"),
+    missionPackTitle: document.querySelector("#mission-pack-dialog-title"),
+    missionPackClose: document.querySelector("#mission-pack-close"),
+    missionPackDone: document.querySelector("#mission-pack-done"),
+    missionPackLoading: document.querySelector("#mission-pack-loading"),
+    missionPackError: document.querySelector("#mission-pack-error"),
+    missionPackErrorDetail: document.querySelector(
+      "#mission-pack-error-detail",
+    ),
+    missionPackRetry: document.querySelector("#mission-pack-retry"),
+    missionPackContent: document.querySelector("#mission-pack-content"),
+    missionPackMetadata: document.querySelector("#mission-pack-metadata"),
+    missionPackSections: document.querySelector("#mission-pack-sections"),
+    missionPackSize: document.querySelector("#mission-pack-size"),
+    missionPackCopy: document.querySelector("#mission-pack-copy"),
+    missionPackShowEvidence: document.querySelector(
+      "#mission-pack-show-evidence",
+    ),
     reportEvidenceModalLayer: document.querySelector(
       "#report-evidence-modal-layer",
     ),
@@ -453,6 +480,9 @@
     ),
     reportEvidenceClose: document.querySelector("#report-evidence-close"),
     reportEvidenceDone: document.querySelector("#report-evidence-done"),
+    reportEvidenceFixCommand: document.querySelector(
+      "#report-evidence-fix-command",
+    ),
     reportEvidenceExcerpts: document.querySelector(
       "#report-evidence-excerpts",
     ),
@@ -770,6 +800,7 @@
 
   const focusRegistry = {
     briefActions: new Map(),
+    missionPackTriggers: new Map(),
     reportEvidenceTriggers: new Map(),
     briefSessions: new Map(),
     diagnosisActions: new Map(),
@@ -787,6 +818,8 @@
   const fixDrafts = new Map();
   const fixRetractionDrafts = new Map();
   const fixObservationPages = new Map();
+  const missionPackCacheByID = new Map();
+  const missionPackIDByIssue = new Map();
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
@@ -1202,6 +1235,7 @@
   }
 
   async function loadDeveloperBrief(preserveCurrent = false) {
+    clearMissionPackCache();
     const generation = ++state.briefRequestGeneration;
     const priorBrief = state.developerBrief;
     const priorStatus = state.briefStatus;
@@ -1326,6 +1360,7 @@
   }
 
   function renderReportIssues(issues) {
+    focusRegistry.missionPackTriggers.clear();
     focusRegistry.reportEvidenceTriggers.clear();
     const fragment = document.createDocumentFragment();
     issues.forEach((issue) => {
@@ -1372,14 +1407,16 @@
     );
     card.append(fix);
     const actions = createElement("div", "report-card-actions");
-    const fixButton = createElement(
+    const prepareButton = createElement(
       "button",
       "primary-button",
-      "Fix with Claude Code",
+      "Prepare next session",
     );
-    fixButton.type = "button";
-    fixButton.addEventListener("click", () => {
-      void copyText(`/belay ${readText(issue.issue_id)}`, fixButton);
+    prepareButton.type = "button";
+    prepareButton.setAttribute("aria-haspopup", "dialog");
+    prepareButton.setAttribute("aria-controls", "mission-pack-dialog");
+    prepareButton.addEventListener("click", () => {
+      openMissionPackDrawer(issue);
     });
     const evidenceButton = createElement(
       "button",
@@ -1394,9 +1431,10 @@
     });
     const issueID = readText(issue.issue_id);
     if (issueID) {
+      focusRegistry.missionPackTriggers.set(issueID, prepareButton);
       focusRegistry.reportEvidenceTriggers.set(issueID, evidenceButton);
     }
-    actions.append(fixButton, evidenceButton);
+    actions.append(prepareButton, evidenceButton);
     card.append(actions);
     return card;
   }
@@ -1438,8 +1476,319 @@
     return `${clipped.trimEnd()}…`;
   }
 
+  function clearMissionPackCache() {
+    state.missionPackCacheGeneration += 1;
+    missionPackCacheByID.clear();
+    missionPackIDByIssue.clear();
+  }
+
+  function openMissionPackDrawer(issue) {
+    const issueID = readText(issue && issue.issue_id);
+    if (!issueID) return;
+    state.dialogReturnFocus = { type: "mission-pack", issueID };
+    state.activeModal = "mission-pack";
+    state.missionPackIssue = issue;
+    state.missionPack = null;
+    elements.missionPackTitle.textContent = "Mission Pack";
+    resetMissionPackDrawer();
+    openModalLayer(
+      elements.missionPackModalLayer,
+      elements.missionPackDialog,
+      elements.missionPackClose,
+    );
+    void loadMissionPack(issueID);
+  }
+
+  function resetMissionPackDrawer() {
+    elements.missionPackLoading.hidden = false;
+    elements.missionPackError.hidden = true;
+    elements.missionPackErrorDetail.textContent = "";
+    elements.missionPackContent.hidden = true;
+    elements.missionPackMetadata.replaceChildren();
+    elements.missionPackSections.replaceChildren();
+    elements.missionPackSize.textContent = "";
+    elements.missionPackCopy.disabled = true;
+    elements.missionPackShowEvidence.disabled = !readText(
+      state.missionPackIssue && state.missionPackIssue.issue_id,
+    );
+  }
+
+  async function loadMissionPack(issueID) {
+    const cachedPackID = missionPackIDByIssue.get(issueID);
+    const cachedPack = cachedPackID
+      ? missionPackCacheByID.get(cachedPackID)
+      : null;
+    if (cachedPack) {
+      state.missionPack = cachedPack;
+      renderMissionPack(cachedPack);
+      return;
+    }
+    if (
+      state.missionPackRequestController &&
+      typeof state.missionPackRequestController.abort === "function"
+    ) {
+      state.missionPackRequestController.abort();
+    }
+    const controller =
+      typeof globalThis.AbortController === "function"
+        ? new globalThis.AbortController()
+        : null;
+    state.missionPackRequestController = controller;
+    const requestGeneration = ++state.missionPackRequestGeneration;
+    const cacheGeneration = state.missionPackCacheGeneration;
+    try {
+      const response = await apiGet(
+        `/v1/mission-pack?issue_id=${encodeURIComponent(issueID)}&intent=general`,
+        controller ? controller.signal : undefined,
+      );
+      if (
+        requestGeneration !== state.missionPackRequestGeneration ||
+        state.activeModal !== "mission-pack" ||
+        readText(state.missionPackIssue && state.missionPackIssue.issue_id) !==
+          issueID
+      ) {
+        return;
+      }
+      const pack = requireMissionPack(response);
+      state.missionPack = pack;
+      if (cacheGeneration === state.missionPackCacheGeneration) {
+        missionPackCacheByID.set(pack.pack_id, pack);
+        missionPackIDByIssue.set(issueID, pack.pack_id);
+      }
+      renderMissionPack(pack);
+    } catch (error) {
+      const aborted = Boolean(controller && controller.signal.aborted);
+      if (
+        aborted ||
+        requestGeneration !== state.missionPackRequestGeneration ||
+        state.activeModal !== "mission-pack"
+      ) {
+        return;
+      }
+      elements.missionPackLoading.hidden = true;
+      elements.missionPackContent.hidden = true;
+      elements.missionPackError.hidden = false;
+      elements.missionPackErrorDetail.textContent = customerErrorMessage(
+        error,
+        "Belay could not prepare this Mission Pack.",
+      );
+    } finally {
+      if (state.missionPackRequestController === controller) {
+        state.missionPackRequestController = null;
+      }
+    }
+  }
+
+  function requireMissionPack(response) {
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== "belay.mission-pack.v1" ||
+      !readText(response.pack_id) ||
+      !isRecord(response.project) ||
+      !isRecord(response.source_state) ||
+      !Array.isArray(response.known_traps) ||
+      !Array.isArray(response.operating_rules) ||
+      !Array.isArray(response.verification) ||
+      !Array.isArray(response.completion_checklist) ||
+      !Array.isArray(response.warnings)
+    ) {
+      throw new Error("Local API returned an invalid Mission Pack.");
+    }
+    return response;
+  }
+
+  function renderMissionPack(pack) {
+    const isEmpty = readText(pack.status).toLowerCase() === "empty";
+    elements.missionPackLoading.hidden = true;
+    elements.missionPackError.hidden = true;
+    elements.missionPackContent.hidden = false;
+    elements.missionPackCopy.disabled = isEmpty;
+    const fragment = document.createDocumentFragment();
+    if (isEmpty) {
+      elements.missionPackTitle.textContent = "Mission Pack";
+      elements.missionPackMetadata.replaceChildren();
+      fragment.append(
+        createElement(
+          "p",
+          "mission-pack-empty",
+          "Belay found no useful guidance for this session.",
+        ),
+      );
+    } else {
+      elements.missionPackTitle.textContent =
+        readText(pack.project.label) || "Mission Pack";
+      renderMissionPackMetadata(pack);
+      if (pack.known_traps.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Known traps",
+          pack.known_traps,
+          createMissionPackTrap,
+          "",
+        );
+      }
+      if (pack.operating_rules.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Operating rules",
+          pack.operating_rules,
+          createMissionPackRule,
+          "",
+        );
+      }
+      if (pack.verification.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Verification",
+          pack.verification,
+          createMissionPackCommand,
+          "",
+        );
+      }
+      if (pack.completion_checklist.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Completion checklist",
+          pack.completion_checklist,
+          createMissionPackChecklistItem,
+          "",
+        );
+      }
+    }
+    elements.missionPackSections.replaceChildren(fragment);
+    elements.missionPackSize.textContent = "";
+  }
+
+  function renderMissionPackMetadata(pack) {
+    const rows = [];
+    const branch = readText(pack.project.branch);
+    const intent = readText(pack.intent);
+    if (branch) rows.push(["Branch", branch]);
+    if (intent) rows.push(["Intent", readableLabel(intent, "General")]);
+    const fragment = document.createDocumentFragment();
+    rows.forEach(([label, value]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", value),
+      );
+      fragment.append(row);
+    });
+    elements.missionPackMetadata.replaceChildren(fragment);
+  }
+
+  function appendMissionPackGuidanceSection(
+    parent,
+    title,
+    values,
+    itemBuilder,
+    emptyMessage,
+  ) {
+    const section = createElement("section", "mission-pack-section");
+    section.append(createElement("h3", "", title));
+    const list = createElement("div", "mission-pack-list");
+    if (Array.isArray(values) && values.length) {
+      values.forEach((value) => list.append(itemBuilder(value)));
+    } else {
+      list.append(createElement("p", "mission-pack-empty", emptyMessage));
+    }
+    section.append(list);
+    parent.append(section);
+  }
+
+  function createMissionPackTrap(value) {
+    const item = createElement("article", "mission-pack-item");
+    const cost = missionPackCost(value);
+    item.append(
+      createElement("h4", "mission-pack-clamp", readText(value.title)),
+    );
+    if (cost) {
+      item.append(createElement("p", "mission-pack-item-meta", cost));
+    }
+    return item;
+  }
+
+  function missionPackCost(value) {
+    if (typeof value.wasted_usd === "number") {
+      const amount = formatReportDollars(value.wasted_usd);
+      return value.cost_lower_bound === true ? `At least ${amount}` : amount;
+    }
+    if (toFiniteNumber(value.wasted_tokens) > 0) {
+      return `${formatNumber(value.wasted_tokens)} attributed tokens`;
+    }
+    return "";
+  }
+
+  function createMissionPackRule(value) {
+    const item = createElement("article", "mission-pack-item");
+    item.append(createMissionPackExpandableText(readText(value.guidance)));
+    const badges = createElement("div", "mission-pack-badges");
+    if (readText(value.target_file)) {
+      badges.append(
+        createElement(
+          "span",
+          "mission-pack-badge",
+          `Target: ${readText(value.target_file)}`,
+        ),
+      );
+    }
+    if (badges.childNodes.length) item.append(badges);
+    return item;
+  }
+
+  function createMissionPackExpandableText(value) {
+    const text = value || "Rule text unavailable";
+    if (Array.from(text).length <= 220) {
+      return createElement("p", "mission-pack-guidance", text);
+    }
+    const details = createElement("details", "mission-pack-expandable");
+    details.append(
+      createElement("summary", "mission-pack-clamp", text),
+      createElement("p", "mission-pack-guidance", text),
+    );
+    return details;
+  }
+
+  function createMissionPackCommand(value) {
+    const item = createElement("article", "mission-pack-item");
+    item.append(
+      createElement("code", "mission-pack-command", readText(value.command)),
+    );
+    return item;
+  }
+
+  function createMissionPackChecklistItem(value) {
+    const item = createElement("p", "mission-pack-checklist");
+    item.append(
+      createElement("span", "mission-pack-checkbox", "□"),
+      document.createTextNode(readText(value.text) || "Checklist item unavailable"),
+    );
+    return item;
+  }
+
+  function closeMissionPackDrawer(restoreFocus) {
+    if (
+      state.missionPackRequestController &&
+      typeof state.missionPackRequestController.abort === "function"
+    ) {
+      state.missionPackRequestController.abort();
+    }
+    state.missionPackRequestController = null;
+    state.missionPackRequestGeneration += 1;
+    closeModalLayer(
+      "mission-pack",
+      elements.missionPackModalLayer,
+      restoreFocus,
+    );
+    state.missionPackIssue = null;
+    state.missionPack = null;
+    elements.missionPackMetadata.replaceChildren();
+    elements.missionPackSections.replaceChildren();
+  }
+
   function openReportEvidenceDrawer(issue) {
     const issueID = readText(issue && issue.issue_id);
+    state.reportEvidenceIssueID = issueID;
     state.dialogReturnFocus = { type: "report-evidence", issueID };
     state.activeModal = "report-evidence";
     elements.reportEvidenceTitle.textContent =
@@ -1458,6 +1807,7 @@
     }
     elements.reportEvidenceExcerpts.replaceChildren(excerptFragment);
     renderReportEvidenceFix(issue && issue.suggested_fix);
+    elements.reportEvidenceFixCommand.disabled = !issueID;
     openModalLayer(
       elements.reportEvidenceModalLayer,
       elements.reportEvidenceDialog,
@@ -1529,6 +1879,7 @@
     );
     elements.reportEvidenceExcerpts.replaceChildren();
     elements.reportEvidenceFix.replaceChildren();
+    state.reportEvidenceIssueID = "";
   }
 
   function reportTrendSummary(trend) {
@@ -2198,11 +2549,52 @@
       setActiveView("sessions", true);
       if (!state.sessions.length) void refreshSessions(false);
     });
+    elements.missionPackClose.addEventListener("click", () => {
+      closeMissionPackDrawer(true);
+    });
+    elements.missionPackDone.addEventListener("click", () => {
+      closeMissionPackDrawer(true);
+    });
+    elements.missionPackRetry.addEventListener("click", () => {
+      const issueID = readText(
+        state.missionPackIssue && state.missionPackIssue.issue_id,
+      );
+      if (!issueID) return;
+      resetMissionPackDrawer();
+      void loadMissionPack(issueID);
+    });
+    elements.missionPackCopy.addEventListener("click", () => {
+      const issueID = readText(
+        state.missionPackIssue && state.missionPackIssue.issue_id,
+      );
+      void copyText(
+        issueID ? `/belay start --issue ${issueID}` : "",
+        elements.missionPackCopy,
+      );
+    });
+    elements.missionPackShowEvidence.addEventListener("click", () => {
+      const issue = state.missionPackIssue;
+      if (!issue) return;
+      closeMissionPackDrawer(false);
+      openReportEvidenceDrawer(issue);
+    });
+    elements.missionPackModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
     elements.reportEvidenceClose.addEventListener("click", () => {
       closeReportEvidenceDrawer(true);
     });
     elements.reportEvidenceDone.addEventListener("click", () => {
       closeReportEvidenceDrawer(true);
+    });
+    elements.reportEvidenceFixCommand.addEventListener("click", () => {
+      void copyText(
+        state.reportEvidenceIssueID
+          ? `/belay ${state.reportEvidenceIssueID}`
+          : "",
+        elements.reportEvidenceFixCommand,
+      );
     });
     elements.reportEvidenceModalLayer.addEventListener(
       "keydown",
@@ -2914,6 +3306,9 @@
 
   function resolveFocusReference(reference) {
     if (!reference) return null;
+    if (reference.type === "mission-pack") {
+      return focusRegistry.missionPackTriggers.get(reference.issueID) || null;
+    }
     if (reference.type === "report-evidence") {
       return (
         focusRegistry.reportEvidenceTriggers.get(reference.issueID) || null
@@ -7178,7 +7573,9 @@
     if (event.key === "Escape") {
       if (state.modalSubmitting) return;
       event.preventDefault();
-      if (state.activeModal === "report-evidence") {
+      if (state.activeModal === "mission-pack") {
+        closeMissionPackDrawer(true);
+      } else if (state.activeModal === "report-evidence") {
         closeReportEvidenceDrawer(true);
       } else if (state.activeModal === "fix-attempt") {
         closeFixAttemptDialog(true);
@@ -7189,7 +7586,9 @@
     }
     if (event.key !== "Tab") return;
     const dialog =
-      state.activeModal === "report-evidence"
+      state.activeModal === "mission-pack"
+        ? elements.missionPackDialog
+        : state.activeModal === "report-evidence"
         ? elements.reportEvidenceDialog
         : state.activeModal === "fix-attempt"
           ? elements.fixAttemptDialog

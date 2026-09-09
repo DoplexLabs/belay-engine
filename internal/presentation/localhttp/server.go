@@ -26,11 +26,12 @@ import (
 var assetFiles embed.FS
 
 type Server struct {
-	read       *readmodel.Service
-	fix        FixService
-	costFix    CostIssueFixService
-	token      string
-	experience Experience
+	read         *readmodel.Service
+	fix          FixService
+	costFix      CostIssueFixService
+	missionPacks MissionPackService
+	token        string
+	experience   Experience
 }
 
 type RunningServer struct {
@@ -129,6 +130,12 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/transcript-status", s.authorize(http.HandlerFunc(s.getTranscriptStatus)))
 	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
 	mux.Handle("GET /v1/report", s.authorize(http.HandlerFunc(s.getReport)))
+	if s.missionPacks != nil {
+		mux.Handle(
+			"GET /v1/mission-pack",
+			s.authorize(http.HandlerFunc(s.getMissionPack)),
+		)
+	}
 	mux.Handle("GET /v1/cost-issues", s.authorize(http.HandlerFunc(s.listCostIssues)))
 	mux.Handle("GET /v1/cost-issues/{id}", s.authorize(http.HandlerFunc(s.getCostIssue)))
 	if s.costFix != nil {

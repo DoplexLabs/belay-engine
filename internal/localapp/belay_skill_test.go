@@ -31,8 +31,90 @@ func TestInstallBelaySkillsUsesHarnessConfigRootsAndIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(body) != belaySkillBody ||
-			!strings.Contains(string(body), "explicit user approval") ||
-			!strings.Contains(string(body), "verification are deferred") {
+			!strings.Contains(string(body), "Only after explicit approval") ||
+			!strings.Contains(string(body), "verification are deferred") ||
+			!strings.Contains(string(body), "/belay start --issue <issue_id>") ||
+			!strings.Contains(
+				string(body),
+				"Use this Mission Pack for this session?",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Mission Pack mode must not edit any file",
+			) ||
+			!strings.Contains(
+				string(body),
+				"`readmodel.rendered_markdown` as the canonical preview",
+			) ||
+			!strings.Contains(
+				string(body),
+				"`verification[].command` exactly as returned",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Whenever the conversation contains a concrete",
+			) ||
+			!strings.Contains(
+				string(body),
+				"active user task, pass a",
+			) ||
+			!strings.Contains(
+				string(body),
+				"concise `task_hint` that describes that task "+
+					"in at most 280 characters",
+			) ||
+			!strings.Contains(
+				string(body),
+				"`/belay start` itself is not a task hint",
+			) ||
+			!strings.Contains(
+				string(body),
+				"When no concrete active task",
+			) ||
+			!strings.Contains(
+				string(body),
+				"exists, omit `task_hint`; do not invent one",
+			) ||
+			!strings.Contains(
+				string(body),
+				"use `harness: claude` in",
+			) ||
+			!strings.Contains(
+				string(body),
+				"`harness: codex` in Codex",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Never infer or guess another",
+			) ||
+			!strings.Contains(
+				string(body),
+				"If `readmodel.status` is `empty`",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Do not show project metadata or ask",
+			) ||
+			!strings.Contains(
+				string(body),
+				"command in its own fenced code block",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Do not invent an operating rule",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Never display warnings, coverage, freshness",
+			) ||
+			!strings.Contains(
+				string(body),
+				"Belay found no useful",
+			) ||
+			!strings.Contains(
+				string(body),
+				"guidance for this session.",
+			) {
 			t.Fatalf("skill body at %s = %q", path, body)
 		}
 	}

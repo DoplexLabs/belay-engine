@@ -341,8 +341,8 @@ func (r *testRepository) VisitSessionEvents(
 
 func TestServerListsExistingAndCostIssueReadOnlyTools(t *testing.T) {
 	session := newTestClient(t, &testRepository{})
-	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.3.0" {
-		t.Fatalf("server info = %#v, want version 1.3.0", info)
+	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.6.0" {
+		t.Fatalf("server info = %#v, want version 1.6.0", info)
 	}
 	capabilities := session.InitializeResult().Capabilities
 	if capabilities == nil || capabilities.Tools == nil {

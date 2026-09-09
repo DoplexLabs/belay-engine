@@ -2,6 +2,8 @@ package localapp
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -10,7 +12,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/DoplexLabs/belay-engine/internal/detection/transcriptissues"
 	"github.com/DoplexLabs/belay-engine/internal/issueintel"
+	"github.com/DoplexLabs/belay-engine/internal/missionpack"
 )
 
 const maxProjectConfigBytes = 1 << 20
@@ -34,19 +38,128 @@ func loadProjectConfig(projectPath string) issueintel.ProjectConfig {
 			filepath.Join(projectPath, "AGENTS.md"),
 		),
 	}
-	commands := make(map[string]bool)
-	loadPackageScripts(filepath.Join(projectPath, "package.json"), commands)
-	loadMakeTargets(filepath.Join(projectPath, "Makefile"), commands)
-	loadMakeTargets(filepath.Join(projectPath, "makefile"), commands)
-	loadPyprojectCommands(filepath.Join(projectPath, "pyproject.toml"), commands)
-	for command := range commands {
-		result.VerificationCommands = append(result.VerificationCommands, command)
+	for _, command := range discoverVerificationCommands(projectPath) {
+		result.VerificationCommands = append(
+			result.VerificationCommands,
+			command.Command,
+		)
 	}
 	sort.Strings(result.VerificationCommands)
 	return result
 }
 
-func loadPackageScripts(path string, result map[string]bool) {
+func discoverVerificationCommands(
+	projectPath string,
+) []missionpack.DiscoveredCommand {
+	projectPath = filepath.Clean(strings.TrimSpace(projectPath))
+	if !filepath.IsAbs(projectPath) {
+		return nil
+	}
+	type sourceCommands struct {
+		path     string
+		commands map[string]bool
+	}
+	sources := []sourceCommands{
+		{
+			path:     filepath.Join(projectPath, "package.json"),
+			commands: make(map[string]bool),
+		},
+		{
+			path:     filepath.Join(projectPath, "Makefile"),
+			commands: make(map[string]bool),
+		},
+		{
+			path:     filepath.Join(projectPath, "makefile"),
+			commands: make(map[string]bool),
+		},
+		{
+			path:     filepath.Join(projectPath, "pyproject.toml"),
+			commands: make(map[string]bool),
+		},
+	}
+	loadPackageScripts(
+		sources[0].path,
+		selectPackageManager(projectPath),
+		sources[0].commands,
+	)
+	loadMakeTargets(sources[1].path, sources[1].commands)
+	loadMakeTargets(sources[2].path, sources[2].commands)
+	loadPyprojectCommands(sources[3].path, sources[3].commands)
+
+	var result []missionpack.DiscoveredCommand
+	for _, source := range sources {
+		body, err := readBoundedProjectFile(source.path)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(body)
+		relative, err := filepath.Rel(projectPath, source.path)
+		if err != nil || strings.HasPrefix(relative, "..") {
+			continue
+		}
+		for command := range source.commands {
+			class, ok := transcriptissues.ClassifyVerificationCommand(
+				command,
+				issueintel.ProjectConfig{
+					VerificationCommands: []string{command},
+				},
+			)
+			if !ok {
+				continue
+			}
+			result = append(result, missionpack.DiscoveredCommand{
+				Command:      command,
+				Class:        class,
+				SourceFile:   filepath.ToSlash(relative),
+				SourceSHA256: hex.EncodeToString(sum[:]),
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Command != result[j].Command {
+			return result[i].Command < result[j].Command
+		}
+		return result[i].SourceFile < result[j].SourceFile
+	})
+	return result
+}
+
+func selectPackageManager(projectPath string) string {
+	body, err := readBoundedProjectFile(filepath.Join(projectPath, "package.json"))
+	if err == nil {
+		var manifest struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if json.Unmarshal(body, &manifest) == nil {
+			value := strings.ToLower(strings.TrimSpace(manifest.PackageManager))
+			if index := strings.IndexByte(value, '@'); index >= 0 {
+				value = value[:index]
+			}
+			switch value {
+			case "npm", "pnpm", "yarn", "bun":
+				return value
+			}
+		}
+	}
+	for _, candidate := range []struct {
+		manager string
+		files   []string
+	}{
+		{"pnpm", []string{"pnpm-lock.yaml"}},
+		{"yarn", []string{"yarn.lock"}},
+		{"bun", []string{"bun.lock", "bun.lockb"}},
+		{"npm", []string{"package-lock.json", "npm-shrinkwrap.json"}},
+	} {
+		for _, name := range candidate.files {
+			if regularProjectFile(filepath.Join(projectPath, name)) {
+				return candidate.manager
+			}
+		}
+	}
+	return "npm"
+}
+
+func loadPackageScripts(path, manager string, result map[string]bool) {
 	body, err := readBoundedProjectFile(path)
 	if err != nil {
 		return
@@ -61,19 +174,13 @@ func loadPackageScripts(path string, result map[string]bool) {
 		if !looksLikeVerification(name + " " + body) {
 			continue
 		}
-		for _, prefix := range []string{
-			"npm run ",
-			"pnpm run ",
-			"yarn ",
-			"bun run ",
-		} {
-			result[prefix+name] = true
+		prefix := manager + " run "
+		if manager == "yarn" {
+			prefix = "yarn "
 		}
+		result[prefix+name] = true
 		if name == "test" {
-			result["npm test"] = true
-			result["pnpm test"] = true
-			result["yarn test"] = true
-			result["bun test"] = true
+			result[manager+" test"] = true
 		}
 	}
 }

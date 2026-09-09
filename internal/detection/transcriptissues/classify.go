@@ -106,6 +106,10 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 		if len(fields) > 1 && (fields[1] == "build" || fields[1] == "check") {
 			return commandClassBuild
 		}
+	case "python", "python3":
+		if len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest" {
+			return commandClassTest
+		}
 	case "pytest", "jest", "vitest", "mocha":
 		return commandClassTest
 	case "tsc", "pyright", "mypy":
@@ -127,7 +131,7 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 			return verificationClassFromWords(script)
 		}
 	}
-	return verificationClassFromWords(normalized)
+	return verificationClassFromExecutable(executable)
 }
 
 func packageScript(fields []string) string {
@@ -142,6 +146,38 @@ func packageScript(fields []string) string {
 		return ""
 	}
 	return fields[index]
+}
+
+func verificationClassFromExecutable(value string) string {
+	words := strings.FieldsFunc(
+		strings.ToLower(filepath.Base(value)),
+		func(character rune) bool {
+			return !unicode.IsLetter(character) && !unicode.IsDigit(character)
+		},
+	)
+	hasWord := func(want string) bool {
+		for _, word := range words {
+			if word == want {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case hasWord("typecheck") ||
+		(hasWord("type") && hasWord("check")):
+		return commandClassTypecheck
+	case hasWord("lint"):
+		return commandClassLint
+	case hasWord("format") && hasWord("check"):
+		return commandClassFormat
+	case hasWord("test") || hasWord("tests"):
+		return commandClassTest
+	case hasWord("build") || hasWord("check"):
+		return commandClassBuild
+	default:
+		return commandClassOther
+	}
 }
 
 func verificationClassFromWords(value string) string {
@@ -180,6 +216,25 @@ func isVerificationTurn(turn transcript.Turn, config issueintel.ProjectConfig) b
 		return true
 	default:
 		return false
+	}
+}
+
+// ClassifyVerificationCommand returns the stable verification class for a
+// command and reports whether the command is recognized as verification.
+func ClassifyVerificationCommand(
+	raw string,
+	config issueintel.ProjectConfig,
+) (string, bool) {
+	class := classifyCommand(raw, config)
+	switch class {
+	case commandClassTest,
+		commandClassBuild,
+		commandClassTypecheck,
+		commandClassLint,
+		commandClassFormat:
+		return class, true
+	default:
+		return "", false
 	}
 }
 

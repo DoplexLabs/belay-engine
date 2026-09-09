@@ -12,6 +12,7 @@ func TestLoadProjectConfigDiscoversVerificationCommands(t *testing.T) {
 	writeProjectConfigTestFile(t, filepath.Join(root, "CLAUDE.md"), "# instructions\n")
 	writeProjectConfigTestFile(t, filepath.Join(root, "AGENTS.md"), "# instructions\n")
 	writeProjectConfigTestFile(t, filepath.Join(root, "package.json"), `{
+		"packageManager": "pnpm@9.12.0",
 		"scripts": {
 			"check": "tsc --noEmit && eslint .",
 			"start": "node server.js",
@@ -38,7 +39,7 @@ serve = "python app.py"
 		t.Fatalf("instruction files = %+v", config)
 	}
 	for _, command := range []string{
-		"npm run check",
+		"pnpm run check",
 		"pnpm run test",
 		"make verify",
 		"pytest",
@@ -49,7 +50,14 @@ serve = "python app.py"
 			t.Fatalf("missing %q in %v", command, config.VerificationCommands)
 		}
 	}
-	for _, command := range []string{"npm run start", "make serve", "poe serve"} {
+	for _, command := range []string{
+		"npm run check",
+		"yarn check",
+		"bun run check",
+		"pnpm run start",
+		"make serve",
+		"poe serve",
+	} {
 		if slices.Contains(config.VerificationCommands, command) {
 			t.Fatalf("non-verification command retained: %q", command)
 		}

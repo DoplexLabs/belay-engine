@@ -58,6 +58,25 @@ func (s *Store) resumeFixRecurrenceMigration(ctx context.Context) error {
 	if applied == 0 {
 		return nil
 	}
+	var completed int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM local_migration_progress
+		WHERE migration_version = ?
+			AND phase IN (
+				'event_order',
+				'occurrence_scope',
+				'analysis_watermark',
+				'monitoring_subject'
+			)
+			AND complete = 1`,
+		fixRecurrenceMigrationVersion,
+	).Scan(&completed); err != nil {
+		return errors.New("inspect recurrence migration completion")
+	}
+	if completed == 4 {
+		return nil
+	}
 	if err := s.backfillEventOrderNS(ctx); err != nil {
 		return err
 	}

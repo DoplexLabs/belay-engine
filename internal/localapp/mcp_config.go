@@ -211,7 +211,7 @@ func manageMCPConfig(
 			available[index].executable = ""
 			continue
 		}
-		available[index].executable = resolved
+		available[index].executable = path
 	}
 
 	if identityErr != nil {

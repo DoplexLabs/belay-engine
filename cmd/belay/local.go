@@ -71,6 +71,10 @@ type runningLocalServer interface {
 	Wait() error
 }
 
+type localMCPCommandServer interface {
+	RunStdio(context.Context) error
+}
+
 var (
 	launchLocal                 = runLocalLaunch
 	discoverAndScan             = localapp.DiscoverAndScan
@@ -95,6 +99,7 @@ var (
 	) error {
 		return localapp.ScanHistoricalTranscripts(ctx, paths, store)
 	}
+	pollLive             = localapp.PollLive
 	startLocalHTTPServer = func(
 		ctx context.Context,
 		store *local.Store,
@@ -117,6 +122,16 @@ var (
 	openLocalCommandStore = func(path string) (*local.Store, error) {
 		return local.Open(path, local.NewMacOSKeychainProvider())
 	}
+	newLocalMCPCommandServer = func(
+		store *local.Store,
+	) (localMCPCommandServer, error) {
+		return newLocalMCPServer(store)
+	}
+	startMCPRecoveryWorker              = startLocalRecovery
+	startIntelligenceRuntime            = localapp.StartIntelligenceRuntime
+	startLocalRecoveryRuntime           = startLocalRecoveryWithDedicatedStore
+	runIntelligenceWorkerLoops          = runIntelligenceWorkers
+	runQuickstartSemanticAnalysisWorker = runQuickstartSemanticAnalysis
 )
 
 func addLocalRuntimeFlags(flags *flag.FlagSet) localRuntimeFlags {
@@ -430,83 +445,58 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	stopRecovery, recoveryDone := startLocalRecovery(
+	stopRecovery, recoveryDone := startLocalRecoveryRuntime(
 		runtimeCtx,
-		store,
-		func() {
-			fmt.Fprintf(
-				stderr,
-				"belay %s: issue analysis recovery pending; Local remains available\n",
-				options.commandName,
-			)
-		},
-		func() {
-			fmt.Fprintf(
-				stderr,
-				"belay %s: attempt monitoring recovery pending; Local remains available\n",
-				options.commandName,
-			)
-		},
+		runtime.paths.Database,
+		options.commandName,
+		stderr,
 	)
-	liveDone := make(chan struct{})
-	go func() {
-		defer close(liveDone)
-		localapp.PollLive(runtimeCtx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
-			fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
-		})
-	}()
-	transcriptDone := make(chan struct{})
-	go func() {
-		defer close(transcriptDone)
-		pollTranscripts(
-			runtimeCtx,
-			runtime.paths,
-			store,
-			2*time.Second,
-			func() {
-				fmt.Fprintf(
-					stderr,
-					"belay %s: transcript import retry pending\n",
-					options.commandName,
-				)
-			},
-		)
-	}()
-	issueAnalysisDone := make(chan struct{})
-	go func() {
-		defer close(issueAnalysisDone)
-		localapp.PollTranscriptIssueAnalysis(
-			runtimeCtx,
-			store,
-			2*time.Second,
-			func(error) {
-				fmt.Fprintf(
-					stderr,
-					"belay %s: cost issue analysis retry pending\n",
-					options.commandName,
-				)
-			},
-		)
-	}()
+	stopLive, liveDone := startLocalLiveWithDedicatedStore(
+		runtimeCtx,
+		runtime.paths,
+		runtime.config,
+		options.commandName,
+		stderr,
+	)
+	stopIntelligence, intelligenceDone := startLocalIntelligence(
+		runtimeCtx,
+		runtime.paths,
+		options.commandName,
+		stderr,
+	)
 	scanDone := closedSignal()
 	if options.historicalScan {
 		scanDone = localapp.StartHistoricalInitialization(
 			runtimeCtx,
 			initializationTracker,
 			func(scanCtx context.Context) error {
+				initializationStore, err := openLocalCommandStore(
+					runtime.paths.Database,
+				)
+				if err != nil {
+					fmt.Fprintf(
+						stderr,
+						"belay %s: historical worker storage unavailable; Local will continue\n",
+						options.commandName,
+					)
+					return errors.New(
+						"historical initialization store unavailable",
+					)
+				}
+				defer initializationStore.Close()
 				scanErr := runHistoricalScan(
 					scanCtx,
 					runtime,
-					store,
+					initializationStore,
 					options.commandName,
 					"historical scan",
 					stderr,
 				)
 				if options.analyze && scanCtx.Err() == nil {
-					if err := runQuickstartSemanticAnalysis(
+					if err := runQuickstartSemanticAnalysisWorker(
 						scanCtx,
 						runtime,
-						store,
+						initializationStore,
 						options.analyzeAgent,
 						stderr,
 					); err != nil {
@@ -529,9 +519,10 @@ func runLocalLaunch(
 	waitErr := running.Wait()
 	stopRuntime()
 	<-scanDone
+	stopLive()
 	<-liveDone
-	<-transcriptDone
-	<-issueAnalysisDone
+	stopIntelligence()
+	<-intelligenceDone
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
@@ -693,6 +684,146 @@ func pollTranscripts(
 	}
 }
 
+func runIntelligenceWorkers(
+	ctx context.Context,
+	paths localapp.Paths,
+	store *local.Store,
+	commandName string,
+	stderr io.Writer,
+) error {
+	transcriptDone := make(chan struct{})
+	go func() {
+		defer close(transcriptDone)
+		pollTranscripts(
+			ctx,
+			paths,
+			store,
+			2*time.Second,
+			func() {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: transcript import retry pending\n",
+					commandName,
+				)
+			},
+		)
+	}()
+	analysisDone := make(chan struct{})
+	go func() {
+		defer close(analysisDone)
+		localapp.PollTranscriptIssueAnalysis(
+			ctx,
+			store,
+			2*time.Second,
+			func(error) {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: cost issue analysis retry pending\n",
+					commandName,
+				)
+			},
+		)
+	}()
+	<-ctx.Done()
+	<-transcriptDone
+	<-analysisDone
+	return ctx.Err()
+}
+
+func startLocalIntelligence(
+	ctx context.Context,
+	paths localapp.Paths,
+	commandName string,
+	stderr io.Writer,
+) (context.CancelFunc, <-chan struct{}) {
+	return startDedicatedIntelligence(
+		ctx,
+		paths,
+		commandName,
+		stderr,
+		func() {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: intelligence freshness retry pending; Local remains available\n",
+				commandName,
+			)
+		},
+	)
+}
+
+func startLocalLiveWithDedicatedStore(
+	ctx context.Context,
+	paths localapp.Paths,
+	config localapp.Config,
+	commandName string,
+	stderr io.Writer,
+) (context.CancelFunc, <-chan struct{}) {
+	liveCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		liveStore, err := openLocalCommandStore(paths.Database)
+		if err != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: live acquisition storage unavailable; Local remains available\n",
+				commandName,
+			)
+			return
+		}
+		defer liveStore.Close()
+		pollLive(
+			liveCtx,
+			paths,
+			liveStore,
+			config,
+			2*time.Second,
+			func(error) {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: live import retry pending\n",
+					commandName,
+				)
+			},
+		)
+	}()
+	return cancel, done
+}
+
+func startDedicatedIntelligence(
+	ctx context.Context,
+	paths localapp.Paths,
+	commandName string,
+	stderr io.Writer,
+	onError func(),
+) (context.CancelFunc, <-chan struct{}) {
+	return startIntelligenceRuntime(
+		ctx,
+		paths.Root,
+		localapp.IntelligenceRuntimeOptions{
+			RunOwner: func(ownerCtx context.Context) error {
+				workerStore, err := openLocalCommandStore(paths.Database)
+				if err != nil {
+					return err
+				}
+				defer workerStore.Close()
+				return runIntelligenceWorkerLoops(
+					ownerCtx,
+					paths,
+					workerStore,
+					commandName,
+					stderr,
+				)
+			},
+			OnError: func(error) {
+				if onError != nil {
+					onError()
+				}
+			},
+		},
+	)
+}
+
 func newLocalHTTPServer(
 	store *local.Store,
 	token string,
@@ -704,6 +835,10 @@ func newLocalHTTPServer(
 		return nil, err
 	}
 	costFixes, err := localapp.NewCostIssueFixService(store)
+	if err != nil {
+		return nil, err
+	}
+	missionPacks, err := localapp.NewMissionPackService(store)
 	if err != nil {
 		return nil, err
 	}
@@ -725,6 +860,7 @@ func newLocalHTTPServer(
 		token,
 		localhttp.WithFixService(actions),
 		localhttp.WithCostIssueFixService(costFixes),
+		localhttp.WithMissionPackService(missionPacks),
 		localhttp.WithExperience(experience),
 	)
 }
@@ -746,12 +882,19 @@ func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	missionPacks, err := localapp.NewMissionPackService(store)
+	if err != nil {
+		return nil, err
+	}
 	return localmcp.New(readmodel.New(
 		store,
 		readmodel.WithIssueRepository(store),
 		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithCostIssueRepository(store),
-	), localmcp.WithCostIssueFixService(fixService))
+	),
+		localmcp.WithCostIssueFixService(fixService),
+		localmcp.WithMissionPackService(missionPacks),
+	)
 }
 
 func onboardLocalHooks(
@@ -933,12 +1076,12 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	if _, err := localapp.LoadOrCreateConfig(paths); err != nil {
 		return err
 	}
-	store, err := local.Open(paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(paths.Database)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	server, err := newLocalMCPServer(store)
+	server, err := newLocalMCPCommandServer(store)
 	if err != nil {
 		return err
 	}
@@ -949,9 +1092,39 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		serverDone <- server.RunStdio(ctx)
 	}()
 	<-serverStarted
-	stopRecovery, recoveryDone := startLocalRecovery(
+	stopRecovery, recoveryDone := startMCPRecovery(
 		ctx,
-		store,
+		paths.Database,
+		stderr,
+	)
+	stopIntelligence, intelligenceDone := startMCPIntelligence(
+		ctx,
+		paths,
+		stderr,
+	)
+	runErr := <-serverDone
+	stopIntelligence()
+	<-intelligenceDone
+	stopRecovery()
+	<-recoveryDone
+	return runErr
+}
+
+const mcpRecoveryPendingMessage = "belay mcp: recovery pending"
+
+func startMCPRecovery(
+	ctx context.Context,
+	databasePath string,
+	stderr io.Writer,
+) (context.CancelFunc, <-chan struct{}) {
+	recoveryStore, err := openLocalCommandStore(databasePath)
+	if err != nil {
+		fmt.Fprintln(stderr, mcpRecoveryPendingMessage)
+		return func() {}, closedSignal()
+	}
+	stopRecovery, workerDone := startMCPRecoveryWorker(
+		ctx,
+		recoveryStore,
 		func() {
 			fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
 		},
@@ -959,10 +1132,76 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 			fmt.Fprintln(stderr, "belay mcp: attempt monitoring recovery pending")
 		},
 	)
-	runErr := <-serverDone
-	stopRecovery()
-	<-recoveryDone
-	return runErr
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-workerDone
+		_ = recoveryStore.Close()
+	}()
+	return stopRecovery, done
+}
+
+func startMCPIntelligence(
+	ctx context.Context,
+	paths localapp.Paths,
+	stderr io.Writer,
+) (context.CancelFunc, <-chan struct{}) {
+	return startDedicatedIntelligence(
+		ctx,
+		paths,
+		"mcp",
+		stderr,
+		func() {
+			fmt.Fprintln(
+				stderr,
+				"belay mcp: intelligence freshness retry pending; reads remain available",
+			)
+		},
+	)
+}
+
+func startLocalRecoveryWithDedicatedStore(
+	ctx context.Context,
+	databasePath string,
+	commandName string,
+	stderr io.Writer,
+) (context.CancelFunc, <-chan struct{}) {
+	recoveryCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		recoveryStore, err := openLocalCommandStore(databasePath)
+		if err != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: recovery pending; Local remains available\n",
+				commandName,
+			)
+			return
+		}
+		defer recoveryStore.Close()
+		stopRecovery, recoveryDone := startMCPRecoveryWorker(
+			recoveryCtx,
+			recoveryStore,
+			func() {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: issue analysis recovery pending; Local remains available\n",
+					commandName,
+				)
+			},
+			func() {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: attempt monitoring recovery pending; Local remains available\n",
+					commandName,
+				)
+			},
+		)
+		<-recoveryDone
+		stopRecovery()
+	}()
+	return cancel, done
 }
 
 type localRecoveryActions struct {
@@ -1112,11 +1351,12 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	analysisStatus, analysisErr := loadDoctorAnalysis(ctx, store)
 	transcriptCoverage, transcriptErr := loadDoctorTranscriptCoverage(ctx, store)
 	status := map[string]any{
-		"config":            "ok",
-		"encrypted_storage": "ok",
-		"numbat_pin":        "ok",
-		"inventory":         projectCLIInventory(inventory),
-		"detector_catalog":  detection.CatalogVersion,
+		"config":                 "ok",
+		"encrypted_storage":      "ok",
+		"numbat_pin":             "ok",
+		"inventory":              projectCLIInventory(inventory),
+		"detector_catalog":       detection.CatalogVersion,
+		"intelligence_freshness": localapp.InspectIntelligenceReadiness(runtime.paths.Root),
 	}
 	if analysisErr != nil {
 		status["analysis"] = "failed"

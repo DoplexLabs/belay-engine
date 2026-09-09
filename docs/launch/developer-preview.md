@@ -208,7 +208,7 @@ Inspect or reverse the quickstart hook setup independently:
 Only detected Codex and Claude Code installations are configured. Ordinary
 `local`, `scan`, `agents`, `mcp`, and `doctor` commands do not install hooks.
 
-## Read-only MCP
+## Local MCP
 
 Normal quickstart may register Claude automatically when its status is safely
 understood. Codex add remains fail-closed unless the explicit opt-in flag is
@@ -237,7 +237,8 @@ Standalone `mcp-config install` may initialize private Belay configuration and
 directories so it can retain a stable installation/ownership ID. It does not
 create or open the Local database and does not create Keychain material.
 
-Belay MCP runs locally over stdio and exposes exactly nine read-only tools:
+Belay MCP runs locally over stdio and exposes fifteen tools. Thirteen are
+read-only:
 
 - `list_sessions`
 - `get_session`
@@ -248,10 +249,21 @@ Belay MCP runs locally over stdio and exposes exactly nine read-only tools:
 - `list_issues`
 - `get_issue`
 - `lookup_session_events`
+- `get_top_issues`
+- `get_issue_excerpts`
+- `get_fix_status`
+- `get_mission_pack`
+
+Two tools make bounded additions to Belay's local store:
+
+- `propose_fix`
+- `record_fix_applied`
 
 Results are bounded structured data marked `untrusted_observations: true`. MCP
-cannot install hooks, execute commands, modify files, write Belay data, or
-perform remediation.
+cannot install hooks, execute commands, modify project files, or perform
+remediation. `propose_fix` stores but never applies a unified diff limited to
+allowlisted harness configuration files. `record_fix_applied` stores the file
+hash after explicit user approval and external application.
 
 The issue-evidence loop is:
 
@@ -262,7 +274,39 @@ The issue-evidence loop is:
 4. call `lookup_session_events` only for the cited IDs needed;
 5. let the configured calling agent interpret the bounded evidence.
 
-Belay does not generate diagnosis, root cause, or remediation advice.
+Deterministic issues remain traceable to retained turns. Mission Pack guidance
+is an inactive proposal until the user explicitly approves it for the current
+session; transcript evidence remains untrusted.
+
+### Mission Packs
+
+The MCP implementation is `1.6.0`; Mission Packs use
+`mission-pack.det.v3`. The managed `/belay` skill calls `get_mission_pack` with
+the actual host harness (`claude` or `codex`), current project and intent, and
+a task hint only when the user has stated a concrete active task.
+
+Mission Packs are deliberately conservative:
+
+- no current harness means no semantic operating rules;
+- unanchored semantic rules must match the active task and be supported across
+  at least two sessions;
+- an issue-specific pack includes only that issue and its supported rule;
+- stale, low-confidence, and unsupported rules are omitted;
+- cross-harness targets are safely adapted to `CLAUDE.md` or `AGENTS.md` when
+  equivalent, otherwise suppressed;
+- no more than three verification commands are shown, selected for the intent;
+- an empty pack is reported as unavailable and cannot be activated.
+
+Preparing or approving a Mission Pack does not verify that a later change held,
+prevented recurrence, or reduced cost.
+
+For a quick manual check, start a concrete task in each client and run
+`/belay start`. Confirm Claude receives only Claude-compatible targets, Codex
+receives only Codex-compatible targets, and unrelated historical corrections
+do not appear. Then run `/belay start` without a concrete task: no unanchored
+semantic rule should be invented. If the result is empty, the client should
+stop without asking the user to activate it. The complete release gate is A10
+in [`clean-machine-alpha-qa.md`](clean-machine-alpha-qa.md).
 
 Alpha limitations:
 

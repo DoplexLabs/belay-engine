@@ -1,25 +1,23 @@
-# Read-Only MCP V1 Contract
+# Local MCP V1 Contract
 
-- **Status:** Nine-tool Local Alpha issue-evidence surface
+- **Status:** Fifteen-tool Local Alpha issue-intelligence surface
 - **Local protocol:** V1
-- **Implementation version:** `1.2.0`
+- **Implementation version:** `1.6.0`
 - **Hosted:** V1.1
 
 ## Boundary
 
-MCP is a read-only adapter over Belay's local read contract. Belay supplies
-bounded structured evidence; the developer's configured calling agent decides
-how to interpret it.
+MCP exposes Belay's local read contract plus two bounded additive records.
+Belay supplies bounded structured evidence; the developer's configured calling
+agent decides how to interpret it.
 
 Belay does not:
 
 - call or orchestrate a model;
-- generate a diagnosis, root-cause analysis, or remediation recommendation;
 - execute a command, write a file, or modify an agent;
-- record or retract a fix attempt through MCP;
 - expose P0-04 recurrence monitoring through MCP.
 
-The server advertises exactly these nine tools:
+The server advertises exactly these fifteen tools:
 
 1. `list_sessions`
 2. `get_session`
@@ -30,10 +28,19 @@ The server advertises exactly these nine tools:
 7. `list_issues`
 8. `get_issue`
 9. `lookup_session_events`
+10. `get_top_issues`
+11. `get_issue_excerpts`
+12. `get_fix_status`
+13. `get_mission_pack`
+14. `propose_fix`
+15. `record_fix_applied`
 
-All nine tools are read-only, idempotent, non-destructive, and closed-world.
-No prompts, resources, logging, completions, shell, filesystem, browser-write,
-fix-action, or monitoring capability is advertised.
+The first thirteen tools are read-only. `propose_fix` and
+`record_fix_applied` are non-destructive, closed-world additive tools that
+write only bounded records to Belay's encrypted local store. They cannot apply
+a diff, write a project file, execute a command, or authorize remediation. No
+prompts, resources, logging, completions, shell, arbitrary filesystem, or
+recurrence-monitoring capability is advertised.
 
 ## Local registration
 
@@ -432,6 +439,59 @@ diff hashes, prompt bodies, transcripts, completions, reasoning, command
 output, file contents, secrets, action tokens, idempotency keys, internal scope
 HMACs, job tokens, and unknown future fields are structurally absent.
 
+### `get_mission_pack`
+
+Returns a bounded, evidence-backed proposal for one project. Its schema is
+`belay.mission-pack.v1`; its deterministic generator is
+`mission-pack.det.v3`.
+
+Inputs:
+
+- `cwd`: optional absolute project path, maximum 4096 bytes;
+- `issue_id`: optional exact issue selector, maximum 512 bytes;
+- `intent`: optional `general`, `debug`, `implement`, `refactor`, `review`, or
+  `release`; defaults to `general`;
+- `harness`: optional `claude` or `codex`;
+- `task_hint`: optional active-task description, maximum 280 Unicode
+  characters.
+
+At least one of `cwd` or `issue_id` is required. Managed `/belay` calls pass
+the actual host harness and pass a `task_hint` only when a concrete active task
+exists; `/belay start` itself is not a task hint. Other callers may omit
+`harness`, but a pack without the current harness contains no semantic
+operating rules.
+
+For an unanchored project pack, semantic correction-cluster rules require a
+task hint with meaningful lexical overlap and support from at least two
+distinct sessions. An explicit `issue_id` limits issue guidance to that issue
+and its supported linked rule. Belay does not fill an otherwise irrelevant
+pack with unrelated historical rules.
+
+Semantic output is abstention-safe:
+
+- stale insights are not proposed as rules;
+- fixes and clusters below `0.8` confidence are omitted;
+- the analyzer may omit an issue when its evidence does not support a durable
+  rule;
+- Claude targets are limited to Claude-compatible configuration, with
+  `AGENTS.md` or Codex rule guidance safely adapted to `CLAUDE.md`;
+- Codex targets are limited to Codex-compatible configuration, with
+  `CLAUDE.md` guidance safely adapted to `AGENTS.md`;
+- incompatible targets, including Claude settings proposed to Codex, are
+  suppressed.
+
+Verification selection is intent-aware and returns at most three commands.
+Observed successful and configured-and-observed commands retain priority;
+release-specific commands are promoted only for release intent.
+
+Every non-empty pack is an inactive proposal with
+`instruction_authority=none`, `evidence_state=untrusted`, and
+`activation_required=true`. If no actionable trap, operating rule, or
+verification command remains, the pack returns `status=empty`,
+`guidance_state=unavailable`, and `activation_required=false`; clients must not
+offer activation. Mission Pack preparation does not verify that a later change
+held, prevented recurrence, or reduced cost.
+
 ## Trust wrapper and privacy
 
 Every new-tool success uses:
@@ -459,7 +519,7 @@ tool descriptions, trust metadata, catalog prose, next actions, or fixed error
 codes.
 
 Belay Local makes no product-network request and sends no product telemetry.
-The nine-tool server can run without network access. A configured MCP client
+The fifteen-tool server can run without network access. A configured MCP client
 or remotely hosted model may process or transmit tool results according to
 that product's policy and the user's configuration. Belay does not control or
 sandbox that actor and does not claim prompt-injection immunity.

@@ -551,8 +551,10 @@ Pass criteria:
   `pruned`, and `unknown`; the declarations themselves remain present.
 - No restart converts a declaration into a resolution claim or fabricates a
   recurrence observation.
-- MCP still exposes exactly nine read-only tools and no fix-history, record,
-  retract, replay, recurrence-monitoring, write, or remediation tool.
+- MCP still exposes the expected fifteen tools. The thirteen read-only tools
+  remain non-mutating; the two additive tools can only store a bounded proposal
+  or approved-application record and cannot write a project file, execute a
+  command, retract history, replay activity, monitor recurrence, or remediate.
 - The old tokenized browser URL is not used as the restarted launch credential.
 
 Evidence:
@@ -668,8 +670,10 @@ Pass criteria:
   observation.
 - History-only detail returns `current_issue_available=false` and
   `current_issue=null`.
-- MCP still exposes exactly nine read-only tools and no monitoring repository,
-  fix, recurrence, write, or remediation tool.
+- MCP still exposes the expected fifteen-tool surface and no recurrence
+  repository, command execution, arbitrary write, or remediation capability.
+  The two additive tools remain limited to a bounded proposal and an
+  approved-application record.
 
 Evidence:
 
@@ -733,7 +737,7 @@ Evidence:
 - Timeline event ID/screenshot:
 - Notes/defect:
 
-## A10 — MCP nine-tool issue-evidence contract
+## A10 — MCP issue-intelligence and Mission Pack contract
 
 Use the registrations created by A04. Do not manually edit Codex or Claude
 configuration. Run:
@@ -744,15 +748,29 @@ configuration. Run:
 
 Restart each client and inspect Belay's MCP tools.
 
+Mission Pack procedure:
+
+1. In Claude Code, state a concrete disposable implementation task, then run
+   `/belay start`.
+2. Repeat in Codex with an equivalent task.
+3. In each client, run `/belay start` when no concrete task is active.
+4. Call `get_mission_pack` directly with a deliberately unrelated
+   `task_hint`, then with an explicit fixture `issue_id`.
+5. Using approved fixture data, exercise stale, confidence-below-0.8,
+   unsupported, cross-harness, ordinary-intent, release-intent, and empty-pack
+   cases.
+
 Pass criteria:
 
 - Status uses schema `belay.mcp-config.v1`, reports Codex before Claude, prints
   no executable/home path, and classifies each available entry exactly.
 - Both clients connect over stdio.
-- Exactly these tools appear:
+- Exactly these fifteen tools appear:
   `list_sessions`, `get_session`, `get_session_timeline`, `query_activity`,
   `list_findings`, `get_stats`, `list_issues`, `get_issue`, and
-  `lookup_session_events`.
+  `lookup_session_events`, `get_top_issues`, `get_issue_excerpts`,
+  `get_fix_status`, `get_mission_pack`, `propose_fix`, and
+  `record_fix_applied`.
 - Representative calls and at least one two-page cursor chain succeed in each
   client.
 - Session, activity, and finding filters match the Local API results.
@@ -771,9 +789,35 @@ Pass criteria:
   with `instruction_authority=none`.
 - Catalog text is fixed evidence meaning/caveat, not generated diagnosis or
   remediation advice.
-- No prompts, resources, fix-history/record/retract tools, other write tools,
-  recurrence tools, command execution, remediation, or filesystem access are
-  exposed.
+- No prompts, resources, retraction/replay tools, recurrence tools, command
+  execution, remediation, or arbitrary filesystem access are exposed.
+- `propose_fix` rejects every target outside the documented harness
+  configuration allowlist and returns a diff without applying it.
+- `record_fix_applied` records only an approved proposal's path, SHA-256, and
+  optional commit; it does not edit the target.
+- MCP server information reports implementation version `1.6.0`.
+- `get_mission_pack` reports generator `mission-pack.det.v3` and returns
+  bounded guidance with `instruction_authority=none`.
+- Managed Claude and Codex calls pass their actual `harness`; calls without a
+  harness contain no semantic operating rules.
+- A concrete `task_hint` may select only semantically supported rules relevant
+  to that task. No-task and unrelated-task calls omit unanchored historical
+  correction rules.
+- An explicit `issue_id` includes only that issue and its supported linked
+  rule, not unrelated project issues.
+- Claude receives only Claude-compatible targets and Codex receives only
+  Codex-compatible targets. Safe `CLAUDE.md`/`AGENTS.md` adaptation is allowed;
+  incompatible targets are suppressed.
+- Stale, confidence-below-0.8, and unsupported semantic rules are absent.
+- Verification contains at most three commands and reflects intent; release
+  commands are not promoted for ordinary work and are preferred for release
+  intent when available.
+- Non-empty guidance is an inactive proposal with
+  `activation_required=true`. An empty pack has no traps, rules, verification
+  commands, or checklist; it reports `activation_required=false`, and neither
+  client offers activation.
+- Neither client claims that preparing or approving a Mission Pack proves a
+  later change held, prevented recurrence, or reduced cost.
 - A filtered `get_stats` request is recorded as an expected alpha limitation;
   unfiltered `get_stats` succeeds.
 
@@ -873,8 +917,9 @@ Pass criteria:
 - Browser refresh and timeline reads succeed.
 - Existing fix-attempt history remains readable; an eligible declaration and
   retraction can be recorded through loopback without hosted access.
-- All nine MCP tools remain discoverable. Representative session/timeline
-  reads and the issue list → detail → cited-event lookup loop succeed.
+- All fifteen MCP tools remain discoverable. Representative session/timeline
+  reads, the issue list → detail → cited-event lookup loop, and Mission Pack
+  preparation succeed.
 - `./bin/belay mcp-config status` completes without a Belay product-network
   request. If a host CLI wrapper performs its own credential or network check,
   record that separately; quickstart must remain fail-open.

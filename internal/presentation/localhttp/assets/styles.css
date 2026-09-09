@@ -3708,6 +3708,202 @@ h1 {
   white-space: pre-wrap;
 }
 
+.mission-pack-scroll {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.mission-pack-drawer {
+  width: min(680px, 92vw);
+}
+
+.mission-pack-loading,
+.mission-pack-error {
+  min-height: 120px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.mission-pack-loading {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.mission-pack-loading p,
+.mission-pack-error p,
+.mission-pack-size,
+.mission-pack-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.mission-pack-error .secondary-button {
+  margin-top: 12px;
+}
+
+.mission-pack-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--line);
+}
+
+.mission-pack-metadata > div {
+  min-width: 0;
+  padding: 11px 12px;
+  background: var(--bg);
+}
+
+.mission-pack-metadata dt {
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mission-pack-metadata dd {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+#mission-pack-sections {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.mission-pack-section h3 {
+  margin: 0 0 9px;
+  font-size: 13px;
+}
+
+.mission-pack-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mission-pack-item,
+.mission-pack-checklist,
+.mission-pack-expandable,
+.mission-pack-section > .mission-pack-list > .mission-pack-guidance {
+  min-width: 0;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.mission-pack-item h4,
+.mission-pack-guidance {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.mission-pack-item-meta {
+  margin: 5px 0 0;
+  color: var(--subtle);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.mission-pack-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.mission-pack-expandable {
+  color: var(--text);
+}
+
+.mission-pack-expandable summary {
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.mission-pack-expandable[open] summary {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--subtle);
+  -webkit-line-clamp: unset;
+}
+
+.mission-pack-badges {
+  display: flex;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mission-pack-badge {
+  max-width: 100%;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(213, 255, 69, 0.18);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-pack-command {
+  display: block;
+  overflow-x: auto;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.mission-pack-checklist {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.mission-pack-checkbox {
+  color: var(--accent);
+}
+
+.mission-pack-size {
+  margin-top: 14px;
+}
+
+.mission-pack-actions {
+  flex-wrap: wrap;
+}
+
+.mission-pack-actions .primary-button {
+  margin-right: auto;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -4172,6 +4368,25 @@ h1 {
     height: 100dvh;
     border-left: 0;
     border-radius: 0;
+  }
+
+  .mission-pack-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-pack-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mission-pack-actions .primary-button {
+    grid-column: 1 / -1;
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .mission-pack-actions .secondary-button {
+    width: 100%;
   }
 
   .modal-header,
