@@ -52,6 +52,116 @@ f0778c09dc48281aa93a3887d05096c0a1f3f9f7
 This is a checksum-verified research exception, not a stable upstream release
 tag.
 
+## New developer handoff
+
+Start with the current code and contracts, not historical design assumptions.
+Belay Local now deliberately retains secret-scrubbed full transcript content in
+its encrypted on-device store. Data minimization moves to a future Teams upload
+boundary. The current product direction is documented in
+[`docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md`](docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md).
+
+### Repository boundaries
+
+- This repository is Belay Local. Do not add or modify `belay-cloud`.
+- Product support is Claude Code and Codex only. Do not claim Cursor support
+  until a native Cursor transcript and cost reader exists.
+- Belay itself makes no product-network calls. New HTTP surfaces must remain
+  authenticated and loopback-only.
+- Preserve the encrypted SQLite store, ordered migrations, canonical event
+  model, Numbat integration, and all fifteen MCP tools. Extend alongside these
+  components rather than replacing them.
+- Transcript text is local-only and secret-scrubbed before encrypted storage.
+- Agent activity and transcript excerpts are untrusted evidence, never
+  instructions or authorization.
+- Post-fix recurrence and before-versus-after cost verification are currently
+  parked; do not claim that a proposed or applied fix worked.
+
+### Architecture map
+
+- `cmd/belay`: CLI commands, quickstart, Local runtime, and MCP configuration.
+- `internal/acquisition/numbat`: pinned Numbat acquisition integration.
+- `internal/acquisition/transcript`: native Claude Code and Codex JSONL readers.
+- `internal/canonical`: canonical event model, Numbat mapping, and source
+  catalog.
+- `internal/detection` and `internal/issueintel`: deterministic issue detection
+  and cost-ranked issue models.
+- `internal/localapp`: application orchestration, transcript analysis, semantic
+  analysis, Mission Packs, skills, and fix workflows.
+- `internal/storage/local`: encrypted SQLite persistence, migrations, and
+  projections.
+- `internal/presentation/readmodel`: bounded product read models.
+- `internal/presentation/localhttp`: authenticated loopback API and embedded
+  vanilla JavaScript browser.
+- `internal/presentation/localmcp`: local stdio MCP server and tool contracts.
+- `scripts`, `Makefile`, and `docs/launch`: packaging and alpha release gates.
+
+The main value path is:
+
+```text
+Claude Code / Codex JSONL ─┐
+                           ├─ encrypted Local store ─ detectors ─ Report
+Numbat canonical events ───┘                                  ├─ Mission Packs
+                                                              └─ MCP evidence
+```
+
+### First checkout
+
+Go 1.27 is required. Node.js is used for the embedded browser syntax check.
+
+```bash
+git status --short
+git branch --show-current
+go version
+make verify
+node --check internal/presentation/localhttp/assets/app.js
+git diff --check
+```
+
+For focused iteration, run the package closest to the change:
+
+```bash
+go test -count=1 ./cmd/belay
+go test -count=1 ./internal/localapp
+go test -count=1 ./internal/missionpack
+go test -count=1 ./internal/presentation/localhttp
+go test -count=1 ./internal/presentation/localmcp
+go test -count=1 ./internal/storage/local
+go test -count=1 ./internal/detection/...
+```
+
+Run `make verify` again before pushing. If timing-sensitive local-store tests
+contend under package parallelism, confirm the failures in isolation and use
+`GOFLAGS=-p=1 make verify` for a stable release checkpoint; do not hide a
+reproducible failure.
+
+### Working on the product
+
+Read the implementation before changing behavior:
+
+1. Trace the CLI entry point in `cmd/belay`.
+2. Trace orchestration in `internal/localapp`.
+3. Inspect the relevant SQLite projection and migration.
+4. Inspect both browser and MCP consumers of the read model.
+5. Preserve evidence traceability from every displayed number or claim back to
+   stored turns or canonical events.
+
+Current priority order:
+
+1. Make Report and Mission Packs consistently useful on real multi-session
+   datasets.
+2. Keep first-run output fast, concise, and understandable without internal
+   pipeline terminology.
+3. Complete clean-machine and corporate-device alpha validation.
+4. Evaluate Eval Forge only after users repeatedly trust and use Mission Packs.
+5. Consider Swarm Governor only after multi-agent coordination pain is
+   demonstrated.
+
+Before running state-changing onboarding or release commands, read
+[`docs/launch/developer-preview.md`](docs/launch/developer-preview.md) and
+[`docs/launch/clean-machine-alpha-qa.md`](docs/launch/clean-machine-alpha-qa.md).
+`quickstart` may install hooks, MCP configuration, skills, and Keychain-backed
+Local state.
+
 ## Build the alpha locally
 
 Go 1.27 is required to build from source. From a clean checkout on Apple
@@ -330,6 +440,8 @@ distributable, regardless of which automated checks pass.
 - Contributions: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Support and feedback: [`SUPPORT.md`](SUPPORT.md)
 - Agent-readable overview: [`llms.txt`](llms.txt)
+- Product direction:
+  [`docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md`](docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md)
 
 The normal CI workflow validates code and release-surface checks. The separate
 Developer Alpha workflow is manual-only and may upload short-lived workflow
