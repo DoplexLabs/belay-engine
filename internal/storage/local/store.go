@@ -3,6 +3,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -14,40 +15,45 @@ import (
 	"io/fs"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/DoplexLabs/belay-engine/internal/canonical/commandsafe"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
-	_ "modernc.org/sqlite"
+	"github.com/DoplexLabs/belay-engine/internal/limits"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
 type Store struct {
-	db        *sql.DB
-	cipher    *payloadCipher
-	storeID   string
-	mutations *mutationAuthorizer
+	db      *sql.DB
+	cipher  *payloadCipher
+	storeID string
+	clock   func() time.Time
+	random  io.Reader
 }
 
 type OpenOptions struct {
 	KeyProvider KeyProvider
 	Random      io.Reader
+	Clock       func() time.Time
 }
 
 type Finding struct {
-	FindingID     string
-	SourceRunID   string
-	SessionKey    string
-	DetectedAt    time.Time
-	RuleID        string
-	RuleVersion   string
-	Severity      string
-	SourceAgent   string
-	Confidence    string
-	CitedEventIDs []string
+	FindingID        string
+	SourceRunID      string
+	SessionKey       string
+	ProjectScopeHint string `json:"-"`
+	DetectedAt       time.Time
+	RuleID           string
+	RuleVersion      string
+	Severity         string
+	SourceAgent      string
+	Confidence       string
+	CitedEventIDs    []string
 }
 
 type ImportSummary struct {
@@ -71,6 +77,23 @@ type Quarantine struct {
 
 var ErrUnresolvedCitation = errors.New("finding citation could not be resolved")
 
+type AppendEventResult struct {
+	Inserted       bool
+	EventID        string
+	ReadGeneration int64
+}
+
+type RecordFindingResult struct {
+	Inserted        bool
+	SessionKey      string
+	ScopeBackfilled bool
+}
+
+var (
+	ErrFindingCitationLimit    = errors.New("finding citation count exceeds limit")
+	ErrFindingIdentityConflict = errors.New("finding identity conflicts with persisted record")
+)
+
 func Open(path string, keyProvider KeyProvider) (*Store, error) {
 	return OpenWithOptions(path, OpenOptions{KeyProvider: keyProvider})
 }
@@ -82,15 +105,14 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if options.Random == nil {
 		options.Random = rand.Reader
 	}
-	mutations, err := newMutationAuthorizer()
-	if err != nil {
-		return nil, err
+	if options.Clock == nil {
+		options.Clock = time.Now
 	}
 	dsn, err := sqliteDSN(path)
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openGuardedSQLite(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open local database: %w", err)
 	}
@@ -103,12 +125,12 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, errors.New("enable secure local deletion")
 	}
-	store := &Store{db: db, mutations: mutations}
+	store := &Store{db: db, clock: options.Clock, random: options.Random}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.installMutationTriggers(context.Background()); err != nil {
+	if err := store.installMutationGuards(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -124,6 +146,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) nowUTC() time.Time {
+	return s.clock().UTC()
 }
 
 func sqliteDSN(path string) (string, error) {
@@ -160,68 +186,115 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) AppendEvent(ctx context.Context, event model.Event) (bool, error) {
+	result, err := s.AppendEventResolved(ctx, event)
+	return result.Inserted, err
+}
+
+func (s *Store) AppendEventResolved(
+	ctx context.Context,
+	event model.Event,
+) (AppendEventResult, error) {
+	occurredAtOrder, validOrder := projectionOrderNS(event.OccurredAt)
+	if !validOrder {
+		return AppendEventResult{}, errors.New("canonical event time is outside supported range")
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
-		return false, fmt.Errorf("encode canonical event: %w", err)
+		return AppendEventResult{}, fmt.Errorf("encode canonical event: %w", err)
 	}
 	body, err = s.cipher.seal("event", event.EventID, "canonical_json", body)
 	if err != nil {
-		return false, err
+		return AppendEventResult{}, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, errors.New("begin canonical event persistence")
+		return AppendEventResult{}, errors.New("begin canonical event persistence")
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO events (
-			event_id, source_deduplication_key, schema_version, installation_id,
-			session_key, occurred_at, observed_at, source_sequence, event_type,
-			actor, action, outcome, source_agent, source_kind, source_record_id,
-			source_run_id, historical, canonical_json, canonical_encoding, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_deduplication_key) DO NOTHING`,
-		event.EventID,
-		event.Source.DeduplicationKey,
-		event.SchemaVersion,
-		event.InstallationID,
-		event.Session.Key,
-		event.OccurredAt.Format(time.RFC3339Nano),
-		event.ObservedAt.Format(time.RFC3339Nano),
-		event.Source.Sequence,
-		event.Observation.Type,
-		event.Observation.Actor,
-		event.Observation.Action,
-		event.Observation.Outcome,
-		event.Source.Agent,
-		event.Source.Kind,
-		event.Source.RecordID,
-		event.Source.RunID,
-		boolInt(event.Historical.IsHistorical),
-		body,
-		payloadEncodingAESGCM,
-		now,
-	)
-	if err != nil {
-		return false, fmt.Errorf("append canonical event: %w", err)
-	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return false, errors.New("inspect canonical event persistence")
-	}
-	if inserted == 1 {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO event_read_order (event_id) VALUES (?)",
+	var appendResult AppendEventResult
+	if err := withMutationTx(ctx, tx, mutationProjectionRebuild, func() error {
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO events (
+				event_id, source_deduplication_key, schema_version, installation_id,
+				session_key, occurred_at, observed_at, source_sequence, event_type,
+				actor, action, outcome, source_agent, source_kind, source_record_id,
+				source_run_id, historical, canonical_json, canonical_encoding, created_at,
+				occurred_at_order_ns
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(source_deduplication_key) DO NOTHING`,
 			event.EventID,
-		); err != nil {
-			return false, errors.New("record canonical event read order")
+			event.Source.DeduplicationKey,
+			event.SchemaVersion,
+			event.InstallationID,
+			event.Session.Key,
+			event.OccurredAt.Format(time.RFC3339Nano),
+			event.ObservedAt.Format(time.RFC3339Nano),
+			event.Source.Sequence,
+			event.Observation.Type,
+			event.Observation.Actor,
+			event.Observation.Action,
+			event.Observation.Outcome,
+			event.Source.Agent,
+			event.Source.Kind,
+			event.Source.RecordID,
+			event.Source.RunID,
+			boolInt(event.Historical.IsHistorical),
+			body,
+			payloadEncodingAESGCM,
+			now,
+			occurredAtOrder,
+		)
+		if err != nil {
+			return fmt.Errorf("append canonical event: %w", err)
 		}
+		inserted, err := result.RowsAffected()
+		if err != nil {
+			return errors.New("inspect canonical event persistence")
+		}
+		appendResult.Inserted = inserted == 1
+		if appendResult.Inserted {
+			readOrder, err := tx.ExecContext(ctx,
+				"INSERT INTO event_read_order (event_id) VALUES (?)",
+				event.EventID,
+			)
+			if err != nil {
+				return errors.New("record canonical event read order")
+			}
+			appendResult.ReadGeneration, err = readOrder.LastInsertId()
+			if err != nil {
+				return errors.New("inspect canonical event read order")
+			}
+			appendResult.EventID = event.EventID
+			if _, err := s.markSessionDirtyTx(
+				ctx,
+				tx,
+				event.Session.Key,
+				"event_appended",
+				s.sessionScopeQualityTx(ctx, tx, event.Session.Key),
+				now,
+			); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.QueryRowContext(ctx, `
+				SELECT e.event_id, read_order.sequence
+				FROM events e
+				JOIN event_read_order read_order ON read_order.event_id = e.event_id
+				WHERE e.source_deduplication_key = ?`,
+				event.Source.DeduplicationKey,
+			).Scan(&appendResult.EventID, &appendResult.ReadGeneration); err != nil {
+				return errors.New("resolve duplicate canonical event")
+			}
+		}
+		return nil
+	}); err != nil {
+		return AppendEventResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New("commit canonical event persistence")
+		return AppendEventResult{}, errors.New("commit canonical event persistence")
 	}
-	return inserted == 1, nil
+	return appendResult, nil
 }
 
 func (s *Store) TouchImportRun(ctx context.Context, runID string) error {
@@ -272,60 +345,106 @@ func (s *Store) RecordImportSummary(ctx context.Context, summary ImportSummary) 
 }
 
 func (s *Store) RecordFinding(ctx context.Context, finding Finding) (bool, error) {
-	if finding.SourceRunID == "" || finding.SessionKey == "" || len(finding.CitedEventIDs) == 0 {
-		return false, ErrUnresolvedCitation
+	result, err := s.RecordFindingResolved(ctx, finding)
+	return result.Inserted, err
+}
+
+func (s *Store) RecordFindingResolved(
+	ctx context.Context,
+	finding Finding,
+) (RecordFindingResult, error) {
+	if finding.FindingID == "" || finding.SourceRunID == "" ||
+		finding.SessionKey == "" || len(finding.CitedEventIDs) == 0 {
+		return RecordFindingResult{}, ErrUnresolvedCitation
+	}
+	if len(finding.CitedEventIDs) > limits.MaxFindingCitedEventIDs {
+		return RecordFindingResult{}, ErrFindingCitationLimit
+	}
+	if finding.ProjectScopeHint != "" && !validProjectScopeHint(finding.ProjectScopeHint) {
+		return RecordFindingResult{}, errors.New("finding project scope hint is invalid")
 	}
 	cited, err := json.Marshal(finding.CitedEventIDs)
 	if err != nil {
-		return false, err
+		return RecordFindingResult{}, err
 	}
 	cited, err = s.cipher.seal("finding", finding.FindingID, "cited_event_ids_json", cited)
 	if err != nil {
-		return false, err
+		return RecordFindingResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, errors.New("begin finding persistence")
+		return RecordFindingResult{}, errors.New("begin finding persistence")
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO findings (
 			finding_id, source_run_id, session_key, detected_at, rule_id,
 			rule_version, severity, source_agent, confidence,
-			cited_event_ids_json, cited_event_ids_encoding, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			project_scope_hint, cited_event_ids_json, cited_event_ids_encoding, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(finding_id) DO NOTHING`,
 		finding.FindingID,
 		finding.SourceRunID,
 		nullable(finding.SessionKey),
-		finding.DetectedAt.Format(time.RFC3339Nano),
+		finding.DetectedAt.UTC().Format(time.RFC3339Nano),
 		finding.RuleID,
 		finding.RuleVersion,
 		finding.Severity,
 		finding.SourceAgent,
 		finding.Confidence,
+		nullable(finding.ProjectScopeHint),
 		cited,
 		payloadEncodingAESGCM,
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return false, fmt.Errorf("record finding: %w", err)
+		return RecordFindingResult{}, fmt.Errorf("record finding: %w", err)
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		return false, errors.New("inspect finding persistence")
+		return RecordFindingResult{}, errors.New("inspect finding persistence")
 	}
 	if inserted == 0 {
-		if err := tx.Commit(); err != nil {
-			return false, errors.New("complete duplicate finding persistence")
+		persisted, err := s.findingIdentityTx(ctx, tx, finding.FindingID)
+		if err != nil {
+			return RecordFindingResult{}, err
 		}
-		return false, nil
+		if !sameFindingIdentity(persisted, finding) {
+			return RecordFindingResult{}, ErrFindingIdentityConflict
+		}
+		recordResult := RecordFindingResult{SessionKey: persisted.SessionKey}
+		if finding.ProjectScopeHint != "" {
+			if err := withMutationTx(ctx, tx, mutationPayloadUpgrade, func() error {
+				update, err := tx.ExecContext(ctx, `
+					UPDATE findings
+					SET project_scope_hint = ?
+					WHERE finding_id = ?
+						AND (project_scope_hint IS NULL OR project_scope_hint = '')`,
+					finding.ProjectScopeHint,
+					finding.FindingID,
+				)
+				if err == nil {
+					updated, rowsErr := update.RowsAffected()
+					if rowsErr != nil {
+						return rowsErr
+					}
+					recordResult.ScopeBackfilled = updated == 1
+				}
+				return err
+			}); err != nil {
+				return RecordFindingResult{}, errors.New("backfill duplicate finding project scope")
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return RecordFindingResult{}, errors.New("complete duplicate finding persistence")
+		}
+		return recordResult, nil
 	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO finding_read_order (finding_id) VALUES (?)",
 		finding.FindingID,
 	); err != nil {
-		return false, errors.New("record finding read order")
+		return RecordFindingResult{}, errors.New("record finding read order")
 	}
 	for _, eventID := range finding.CitedEventIDs {
 		var matching int
@@ -337,10 +456,10 @@ func (s *Store) RecordFinding(ctx context.Context, finding Finding) (bool, error
 			finding.SourceRunID,
 			finding.SessionKey,
 		).Scan(&matching); err != nil {
-			return false, errors.New("validate canonical finding citation")
+			return RecordFindingResult{}, errors.New("validate canonical finding citation")
 		}
 		if matching != 1 {
-			return false, ErrUnresolvedCitation
+			return RecordFindingResult{}, ErrUnresolvedCitation
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO finding_event_citations (finding_id, event_id)
@@ -348,13 +467,82 @@ func (s *Store) RecordFinding(ctx context.Context, finding Finding) (bool, error
 			finding.FindingID,
 			eventID,
 		); err != nil {
-			return false, errors.New("persist canonical finding citation")
+			return RecordFindingResult{}, errors.New("persist canonical finding citation")
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New("commit finding persistence")
+		return RecordFindingResult{}, errors.New("commit finding persistence")
 	}
-	return true, nil
+	return RecordFindingResult{
+		Inserted:   true,
+		SessionKey: finding.SessionKey,
+	}, nil
+}
+
+func (s *Store) findingIdentityTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	findingID string,
+) (Finding, error) {
+	var result Finding
+	var sessionKey sql.NullString
+	var detectedAt, encoding string
+	var cited []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT finding_id, source_run_id, session_key, detected_at, rule_id,
+			rule_version, severity, source_agent, confidence,
+			cited_event_ids_json, cited_event_ids_encoding
+		FROM findings
+		WHERE finding_id = ?`,
+		findingID,
+	).Scan(
+		&result.FindingID,
+		&result.SourceRunID,
+		&sessionKey,
+		&detectedAt,
+		&result.RuleID,
+		&result.RuleVersion,
+		&result.Severity,
+		&result.SourceAgent,
+		&result.Confidence,
+		&cited,
+		&encoding,
+	)
+	if err != nil {
+		return Finding{}, errors.New("read duplicate finding identity")
+	}
+	result.SessionKey = sessionKey.String
+	result.DetectedAt, err = time.Parse(time.RFC3339Nano, detectedAt)
+	if err != nil {
+		return Finding{}, errors.New("decode duplicate finding timestamp")
+	}
+	cited, err = s.cipher.open(
+		"finding",
+		findingID,
+		"cited_event_ids_json",
+		encoding,
+		cited,
+	)
+	if err != nil {
+		return Finding{}, err
+	}
+	if err := json.Unmarshal(cited, &result.CitedEventIDs); err != nil {
+		return Finding{}, errors.New("decode duplicate finding citations")
+	}
+	return result, nil
+}
+
+func sameFindingIdentity(persisted, incoming Finding) bool {
+	return persisted.FindingID == incoming.FindingID &&
+		persisted.SourceRunID == incoming.SourceRunID &&
+		persisted.SessionKey == incoming.SessionKey &&
+		persisted.DetectedAt.UTC().Equal(incoming.DetectedAt.UTC()) &&
+		persisted.RuleID == incoming.RuleID &&
+		persisted.RuleVersion == incoming.RuleVersion &&
+		persisted.Severity == incoming.Severity &&
+		persisted.SourceAgent == incoming.SourceAgent &&
+		persisted.Confidence == incoming.Confidence &&
+		slices.Equal(persisted.CitedEventIDs, incoming.CitedEventIDs)
 }
 
 func (s *Store) ResolveCanonicalEventIDs(
@@ -732,10 +920,29 @@ func (s *Store) ListFindings(ctx context.Context, limit int) ([]model.FindingSum
 }
 
 func (s *Store) QueryFindings(ctx context.Context, query model.FindingQuery) (model.FindingPage, error) {
+	page, _, err := s.queryFindings(ctx, query, 0)
+	return page, err
+}
+
+// QueryFindingsForAnalysis reads only a bounded prefix of citations from each
+// legacy finding payload. The boolean result reports whether any payload in
+// the page exceeded the canonical per-finding limit.
+func (s *Store) QueryFindingsForAnalysis(
+	ctx context.Context,
+	query model.FindingQuery,
+) (model.FindingPage, bool, error) {
+	return s.queryFindings(ctx, query, limits.MaxFindingCitedEventIDs)
+}
+
+func (s *Store) queryFindings(
+	ctx context.Context,
+	query model.FindingQuery,
+	citationLimit int,
+) (model.FindingPage, bool, error) {
 	query.Filter.Limit = boundedReadLimit(query.Filter.Limit, 20, 101)
 	snapshot, err := s.findingSnapshot(ctx, query.Snapshot)
 	if err != nil {
-		return model.FindingPage{}, err
+		return model.FindingPage{}, false, err
 	}
 	clauses := []string{"read_order.sequence <= ?"}
 	args := []any{snapshot}
@@ -761,6 +968,7 @@ func (s *Store) QueryFindings(ctx context.Context, query model.FindingQuery) (mo
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT f.finding_id, COALESCE(f.session_key, ''), f.detected_at, f.rule_id,
 			f.rule_version, f.severity, f.source_agent, f.confidence,
+			COALESCE(f.project_scope_hint, ''),
 			f.cited_event_ids_json, f.cited_event_ids_encoding
 		FROM findings f
 		JOIN finding_read_order read_order ON read_order.finding_id = f.finding_id
@@ -770,26 +978,28 @@ func (s *Store) QueryFindings(ctx context.Context, query model.FindingQuery) (mo
 		args...,
 	)
 	if err != nil {
-		return model.FindingPage{}, fmt.Errorf("list local findings: %w", err)
+		return model.FindingPage{}, false, fmt.Errorf("list local findings: %w", err)
 	}
 	defer rows.Close()
 	findings := make([]model.FindingSummary, 0, query.Filter.Limit)
+	citationsTruncated := false
 	for rows.Next() {
-		finding, err := s.scanFinding(rows)
+		finding, truncated, err := s.scanFinding(rows, citationLimit)
 		if err != nil {
-			return model.FindingPage{}, err
+			return model.FindingPage{}, false, err
 		}
+		citationsTruncated = citationsTruncated || truncated
 		findings = append(findings, finding)
 	}
 	if err := rows.Err(); err != nil {
-		return model.FindingPage{}, err
+		return model.FindingPage{}, false, err
 	}
 	dataThrough, err := s.dataThrough(ctx)
 	return model.FindingPage{
 		Data:        findings,
 		Snapshot:    snapshot,
 		DataThrough: dataThrough,
-	}, err
+	}, citationsTruncated, err
 }
 
 type rowScanner interface {
@@ -983,20 +1193,23 @@ func outcomeExplanation(outcome string) model.OutcomeExplanation {
 	switch outcome {
 	case "incomplete":
 		result.Source = "absence_of_session_end"
-		result.Explanation = "No session.end event was observed; Belay does not infer task success."
+		result.Explanation = "The agent reported that the session ended but did not report an outcome."
 	case "succeeded":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported a succeeded outcome."
+		result.Explanation = "The agent reported that this session completed successfully."
 	case "failed":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported a failed outcome."
+		result.Explanation = "The agent reported that this session ended with a failure."
 	case "interrupted":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported an interrupted outcome."
+		result.Explanation = "The agent reported that this session was interrupted."
+	case "unknown":
+		result.Source = "session.end"
+		result.Explanation = "The agent did not report how this session ended."
 	default:
 		result.Value = "unknown"
 		result.Source = "session.end"
-		result.Explanation = "A session.end event was observed without an explicit terminal outcome."
+		result.Explanation = "The agent reported that the session ended but did not report an outcome."
 	}
 	return result
 }
@@ -1037,10 +1250,39 @@ func (s *Store) decodeEvent(eventID, encoding string, body []byte) (model.Event,
 	if err := json.Unmarshal(body, &event); err != nil {
 		return model.Event{}, fmt.Errorf("decode stored canonical event: %w", err)
 	}
+	normalizeDecodedCommand(&event)
 	return event, nil
 }
 
-func (s *Store) scanFinding(row rowScanner) (model.FindingSummary, error) {
+func normalizeDecodedCommand(event *model.Event) {
+	if event == nil ||
+		(event.Observation.Type != "command.exec" &&
+			event.Observation.Type != "command.result") {
+		return
+	}
+	candidate := event.Observation.Summary
+	if candidate == "" &&
+		event.Observation.Resource != nil &&
+		event.Observation.Resource.Kind == "command" {
+		candidate = event.Observation.Resource.Name
+	}
+	display := commandsafe.Normalize(candidate)
+	if display.Executable == "" {
+		event.Observation.Summary = ""
+		event.Observation.Resource = nil
+		return
+	}
+	event.Observation.Summary = display.Summary
+	event.Observation.Resource = &model.Resource{
+		Kind: "command",
+		Name: display.Executable,
+	}
+}
+
+func (s *Store) scanFinding(
+	row rowScanner,
+	citationLimit int,
+) (model.FindingSummary, bool, error) {
 	var finding model.FindingSummary
 	var detectedAt, encoding string
 	var cited []byte
@@ -1053,15 +1295,16 @@ func (s *Store) scanFinding(row rowScanner) (model.FindingSummary, error) {
 		&finding.Severity,
 		&finding.Harness,
 		&finding.Confidence,
+		&finding.ProjectScopeHint,
 		&cited,
 		&encoding,
 	); err != nil {
-		return model.FindingSummary{}, err
+		return model.FindingSummary{}, false, err
 	}
 	var err error
 	finding.DetectedAt, err = time.Parse(time.RFC3339Nano, detectedAt)
 	if err != nil {
-		return model.FindingSummary{}, errors.New("decode stored finding timestamp")
+		return model.FindingSummary{}, false, errors.New("decode stored finding timestamp")
 	}
 	cited, err = s.cipher.open(
 		"finding",
@@ -1071,12 +1314,48 @@ func (s *Store) scanFinding(row rowScanner) (model.FindingSummary, error) {
 		cited,
 	)
 	if err != nil {
-		return model.FindingSummary{}, err
+		return model.FindingSummary{}, false, err
 	}
-	if err := json.Unmarshal(cited, &finding.CitedEventIDs); err != nil {
-		return model.FindingSummary{}, errors.New("decode stored finding payload")
+	var truncated bool
+	finding.CitedEventIDs, truncated, err = decodeFindingCitations(cited, citationLimit)
+	if err != nil {
+		return model.FindingSummary{}, false, errors.New("decode stored finding payload")
 	}
-	return finding, nil
+	return finding, truncated, nil
+}
+
+func decodeFindingCitations(body []byte, limit int) ([]string, bool, error) {
+	if limit <= 0 {
+		var result []string
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, false, err
+		}
+		return result, false, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('[') {
+		return nil, false, errors.New("finding citations are not an array")
+	}
+	result := make([]string, 0, limit)
+	for decoder.More() {
+		if len(result) == limit {
+			return result, true, nil
+		}
+		var eventID string
+		if err := decoder.Decode(&eventID); err != nil {
+			return nil, false, err
+		}
+		result = append(result, eventID)
+	}
+	token, err = decoder.Token()
+	if err != nil || token != json.Delim(']') {
+		return nil, false, errors.New("finding citations have an invalid terminator")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, false, errors.New("finding citations contain trailing data")
+	}
+	return result, false, nil
 }
 
 func (s *Store) eventSnapshot(ctx context.Context, requested int64) (int64, error) {
@@ -1217,6 +1496,7 @@ func (s *Store) GetFinding(ctx context.Context, findingID string) (Finding, erro
 	err := s.db.QueryRowContext(ctx, `
 		SELECT finding_id, source_run_id, session_key, detected_at, rule_id,
 			rule_version, severity, source_agent, confidence,
+			COALESCE(project_scope_hint, ''),
 			cited_event_ids_json, cited_event_ids_encoding
 		FROM findings
 		WHERE finding_id = ?`,
@@ -1231,6 +1511,7 @@ func (s *Store) GetFinding(ctx context.Context, findingID string) (Finding, erro
 		&result.Severity,
 		&result.SourceAgent,
 		&result.Confidence,
+		&result.ProjectScopeHint,
 		&cited,
 		&encoding,
 	)
@@ -1334,6 +1615,12 @@ func (s *Store) Count(ctx context.Context, table string) (int, error) {
 		"events": true, "findings": true, "import_runs": true,
 		"quarantine": true, "diagnostics": true, "local_store_metadata": true,
 		"finding_event_citations": true,
+		"session_scopes":          true, "event_enrichments": true,
+		"dirty_sessions": true, "session_analysis_revisions": true,
+		"issue_occurrences": true, "issue_occurrence_events": true,
+		"issue_projection_metadata": true, "analysis_diagnostics": true,
+		"fix_annotations": true, "fix_annotation_events": true,
+		"fix_annotation_retractions": true,
 	}
 	if !allowed[table] {
 		return 0, errors.New("unsupported count table")
@@ -1383,9 +1670,35 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
+		apply := func() error {
+			_, err := tx.ExecContext(ctx, string(body))
+			return err
+		}
+		if version == 9 {
+			err = withMutationTx(ctx, tx, mutationProjectionRebuild, apply)
+		} else {
+			err = apply()
+		}
+		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
+		}
+		if version == issueSummaryMigrationVersion {
+			epoch, err := newIssueCursorEpoch(s.random)
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE issue_summary_metadata
+				SET cursor_epoch = ?, updated_at = ?
+				WHERE singleton = 1 AND cursor_epoch IS NULL`,
+				epoch,
+				formatProjectionTime(s.nowUTC()),
+			); err != nil {
+				_ = tx.Rollback()
+				return errors.New("initialize issue cursor epoch")
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
@@ -1398,7 +1711,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	if err := s.resumeFixRecurrenceMigration(ctx); err != nil {
+		return err
+	}
+	return s.resumeValueFirstMigration(ctx)
 }
 
 func boolInt(value bool) int {

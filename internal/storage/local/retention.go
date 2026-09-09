@@ -8,8 +8,8 @@ import (
 )
 
 // RetentionPolicy has no implicit defaults. At least one positive bound must be
-// supplied by the caller. MaxPayloadBytes covers encrypted event and finding
-// payload blobs, not SQLite indexes or page overhead.
+// supplied by the caller. MaxPayloadBytes covers encrypted event, finding,
+// enrichment, and issue-projection payload blobs, not indexes or page overhead.
 type RetentionPolicy struct {
 	MaxAge          time.Duration `json:"max_age"`
 	MaxEventCount   int           `json:"max_event_count"`
@@ -47,12 +47,14 @@ type MaintenanceResult struct {
 }
 
 type retentionItem struct {
-	recordType string
-	recordID   string
-	occurredAt time.Time
-	sequence   int64
-	bytes      int64
-	selected   bool
+	recordType     string
+	recordID       string
+	occurredAt     time.Time
+	sequence       int64
+	bytes          int64
+	protectedUntil time.Time
+	pinned         bool
+	selected       bool
 }
 
 func (policy RetentionPolicy) validate() error {
@@ -115,8 +117,36 @@ func (s *Store) Prune(
 	}
 	before := evaluateRetention(policy, now, items, dependencies)
 	result := PruneResult{Before: before}
-	if err := s.mutations.with(mutationRetentionPrune, func() error {
-		for _, recordType := range []string{"finding", "event"} {
+	if err := withMutationTx(ctx, tx, mutationRetentionPrune, func() error {
+		affectedSessions, issueRevisionDeleted, err := affectedRetentionSessions(
+			ctx,
+			tx,
+			items,
+		)
+		if err != nil {
+			return err
+		}
+		affectedIssueIDs := make(map[string]struct{})
+		for sessionKey := range affectedSessions {
+			sessionIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+			if err != nil {
+				return err
+			}
+			mergeIssueIDs(affectedIssueIDs, sessionIssueIDs)
+		}
+		for sessionKey := range affectedSessions {
+			if _, err := s.markSessionDirtyTx(
+				ctx,
+				tx,
+				sessionKey,
+				"retention_prune",
+				s.sessionScopeQualityTx(ctx, tx, sessionKey),
+				formatProjectionTime(now),
+			); err != nil {
+				return err
+			}
+		}
+		for _, recordType := range []string{"finding", "issue", "event"} {
 			for _, item := range items {
 				if !item.selected || item.recordType != recordType {
 					continue
@@ -129,6 +159,8 @@ func (s *Store) Prune(
 				case "finding":
 					statement = "DELETE FROM findings WHERE finding_id = ?"
 					result.PrunedFindingCount++
+				case "issue":
+					statement = "DELETE FROM issue_occurrences WHERE revision_id = ?"
 				default:
 					return errors.New("unsupported local retention record")
 				}
@@ -141,6 +173,114 @@ func (s *Store) Prune(
 					return errors.New("local retention record changed during prune")
 				}
 				result.PrunedPayloadBytes += item.bytes
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM session_scopes
+			WHERE NOT EXISTS (
+				SELECT 1 FROM events
+				WHERE events.session_key = session_scopes.session_key
+			)`); err != nil {
+			return errors.New("delete orphaned session scopes")
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM analysis_diagnostics
+			WHERE NOT EXISTS (
+				SELECT 1 FROM events
+				WHERE events.session_key = analysis_diagnostics.session_key
+			)`); err != nil {
+			return errors.New("delete orphaned analysis diagnostics")
+		}
+		removedJobs, err := tx.ExecContext(ctx, `
+			DELETE FROM fix_recurrence_jobs
+			WHERE state = 'complete'
+				AND revision_id IN (
+					SELECT revision_id
+					FROM session_analysis_revisions
+					WHERE NOT EXISTS (
+						SELECT 1 FROM events
+						WHERE events.session_key =
+							session_analysis_revisions.session_key
+					)
+						AND updated_at <= ?
+				)`,
+			formatProjectionTime(now.Add(-time.Hour)),
+		)
+		if err != nil {
+			return errors.New("delete completed recurrence jobs")
+		}
+		removedJobCount, _ := removedJobs.RowsAffected()
+		var removedAnalysisRevisions int64
+		removed, err := tx.ExecContext(ctx, `
+					DELETE FROM session_analysis_revisions
+					WHERE NOT EXISTS (
+						SELECT 1 FROM events
+						WHERE events.session_key = session_analysis_revisions.session_key
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM fix_recurrence_jobs
+						WHERE fix_recurrence_jobs.revision_id =
+							session_analysis_revisions.revision_id
+							AND fix_recurrence_jobs.state <> 'complete'
+					)
+					AND updated_at <= ?`,
+			formatProjectionTime(now.Add(-time.Hour)),
+		)
+		if err != nil {
+			return errors.New("delete orphaned analysis revisions")
+		}
+		removedAnalysisRevisions, _ = removed.RowsAffected()
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM dirty_sessions
+			WHERE NOT EXISTS (
+				SELECT 1 FROM events
+				WHERE events.session_key = dirty_sessions.session_key
+			)`); err != nil {
+			return errors.New("delete orphaned dirty-session state")
+		}
+		relevantPrune := issueRevisionDeleted ||
+			removedAnalysisRevisions > 0 ||
+			removedJobCount > 0 ||
+			hasSelectedRetentionItem(items)
+		finalProjectionChange := issueRevisionDeleted ||
+			removedAnalysisRevisions > 0 ||
+			hasSelectedRetentionRecordType(items, "event")
+		if finalProjectionChange {
+			for sessionKey := range affectedSessions {
+				sessionIssueIDs, err := activeIssueIDsForSessionTx(ctx, tx, sessionKey)
+				if err != nil {
+					return err
+				}
+				mergeIssueIDs(affectedIssueIDs, sessionIssueIDs)
+			}
+			generation, err := nextProjectionGenerationTx(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if err := s.refreshIssueProjectionIfReadyTx(
+				ctx,
+				tx,
+				generation,
+				formatProjectionTime(now),
+				affectedIssueIDs,
+			); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE issue_projection_metadata
+				SET oldest_retained_generation = ?,
+					retention_generation = retention_generation + 1
+				WHERE singleton = 1`,
+				generation,
+			); err != nil {
+				return errors.New("advance retained issue generation")
+			}
+		} else if relevantPrune {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE issue_projection_metadata
+				SET retention_generation = retention_generation + 1
+				WHERE singleton = 1`); err != nil {
+				return errors.New("advance retention generation")
 			}
 		}
 		return nil
@@ -157,6 +297,24 @@ func (s *Store) Prune(
 	return result, nil
 }
 
+func hasSelectedRetentionItem(items []retentionItem) bool {
+	for _, item := range items {
+		if item.selected {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSelectedRetentionRecordType(items []retentionItem, recordType string) bool {
+	for _, item := range items {
+		if item.selected && item.recordType == recordType {
+			return true
+		}
+	}
+	return false
+}
+
 type retentionQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -166,9 +324,15 @@ func readCitationDependencies(
 	querier retentionQuerier,
 ) (map[string][]string, error) {
 	rows, err := querier.QueryContext(ctx, `
-		SELECT event_id, finding_id
-		FROM finding_event_citations
-		ORDER BY event_id, finding_id`)
+		SELECT event_id, dependent_id
+		FROM (
+			SELECT event_id, finding_id AS dependent_id
+			FROM finding_event_citations
+			UNION ALL
+			SELECT event_id, revision_id AS dependent_id
+			FROM issue_occurrence_events
+		)
+		ORDER BY event_id, dependent_id`)
 	if err != nil {
 		return nil, errors.New("read finding citation dependencies")
 	}
@@ -189,23 +353,49 @@ func readCitationDependencies(
 
 func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retentionItem, error) {
 	rows, err := querier.QueryContext(ctx, `
-		SELECT record_type, record_id, occurred_at, source_sequence, payload_bytes
+		SELECT record_type, record_id, occurred_at, source_sequence,
+			payload_bytes, protection_base, pinned
 		FROM (
 			SELECT
 				'event' AS record_type,
-				event_id AS record_id,
-				occurred_at,
-				source_sequence,
-				LENGTH(canonical_json) AS payload_bytes
-			FROM events
+				e.event_id AS record_id,
+				e.occurred_at,
+				e.source_sequence,
+				LENGTH(e.canonical_json) +
+					COALESCE(LENGTH(ee.enrichment_payload), 0) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM events e
+			LEFT JOIN event_enrichments ee ON ee.event_id = e.event_id
 			UNION ALL
 			SELECT
 				'finding' AS record_type,
 				finding_id AS record_id,
 				detected_at AS occurred_at,
 				0 AS source_sequence,
-				LENGTH(cited_event_ids_json) AS payload_bytes
+				LENGTH(cited_event_ids_json) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
 			FROM findings
+			UNION ALL
+			SELECT
+				'issue' AS record_type,
+				revision_id AS record_id,
+				last_observed_at AS occurred_at,
+				0 AS source_sequence,
+				LENGTH(evidence_payload) AS payload_bytes,
+				updated_at AS protection_base,
+				EXISTS (
+					SELECT 1
+					FROM fix_recurrence_jobs frj
+					JOIN session_analysis_revisions sar
+						ON sar.revision_id = frj.revision_id
+					WHERE sar.session_key = issue_occurrences.session_key
+						AND sar.visible_from_generation =
+							issue_occurrences.visible_from_generation
+						AND frj.state <> 'complete'
+				) AS pinned
+			FROM issue_occurrences
 		)
 		ORDER BY occurred_at ASC, source_sequence ASC, record_id ASC, record_type ASC`)
 	if err != nil {
@@ -216,19 +406,31 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 	for rows.Next() {
 		var item retentionItem
 		var occurredAt string
+		var protectionBase sql.NullString
+		var pinned int
 		if err := rows.Scan(
 			&item.recordType,
 			&item.recordID,
 			&occurredAt,
 			&item.sequence,
 			&item.bytes,
+			&protectionBase,
+			&pinned,
 		); err != nil {
 			return nil, errors.New("read local retention record")
 		}
-		item.occurredAt, err = time.Parse(time.RFC3339Nano, occurredAt)
+		item.occurredAt, err = parseProjectionTime(occurredAt)
 		if err != nil {
 			return nil, errors.New("decode local retention timestamp")
 		}
+		if protectionBase.Valid {
+			item.protectedUntil, err = parseProjectionTime(protectionBase.String)
+			if err != nil {
+				return nil, errors.New("decode local retention protection")
+			}
+			item.protectedUntil = item.protectedUntil.Add(time.Hour)
+		}
+		item.pinned = pinned == 1
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -253,14 +455,14 @@ func evaluateRetention(
 		diagnostics.OldestPayloadAt = &oldest
 		diagnostics.NewestPayloadAt = &newest
 	}
-	findingIndexes := make(map[string]int)
+	recordIndexes := make(map[string]int)
 	for index, item := range items {
 		diagnostics.CurrentPayloadBytes += item.bytes
+		recordIndexes[item.recordID] = index
 		if item.recordType == "event" {
 			diagnostics.CurrentEventCount++
-		} else {
+		} else if item.recordType == "finding" {
 			diagnostics.CurrentFindingCount++
-			findingIndexes[item.recordID] = index
 		}
 	}
 
@@ -286,6 +488,12 @@ func evaluateRetention(
 		if item.selected {
 			continue
 		}
+		if !item.protectedUntil.IsZero() && now.Before(item.protectedUntil) {
+			continue
+		}
+		if item.pinned {
+			continue
+		}
 		expired := policy.MaxAge > 0 && item.occurredAt.Before(cutoff)
 		overCount := policy.MaxEventCount > 0 &&
 			item.recordType == "event" &&
@@ -295,11 +503,32 @@ func evaluateRetention(
 		if !expired && !overCount && !overBytes {
 			continue
 		}
+		if item.recordType == "event" {
+			protectedDependency := false
+			for _, dependentID := range dependencies[item.recordID] {
+				if dependentIndex, ok := recordIndexes[dependentID]; ok {
+					dependent := items[dependentIndex]
+					if dependent.pinned ||
+						(!dependent.protectedUntil.IsZero() &&
+							now.Before(dependent.protectedUntil)) {
+						protectedDependency = true
+						break
+					}
+				}
+			}
+			if protectedDependency {
+				continue
+			}
+		}
 		selectItem(index)
 		if item.recordType == "event" {
-			for _, findingID := range dependencies[item.recordID] {
-				if findingIndex, ok := findingIndexes[findingID]; ok {
-					selectItem(findingIndex)
+			for _, dependentID := range dependencies[item.recordID] {
+				if dependentIndex, ok := recordIndexes[dependentID]; ok {
+					dependent := items[dependentIndex]
+					if dependent.protectedUntil.IsZero() ||
+						!now.Before(dependent.protectedUntil) {
+						selectItem(dependentIndex)
+					}
 				}
 			}
 		}
@@ -311,11 +540,56 @@ func evaluateRetention(
 		diagnostics.EligiblePayloadBytes += item.bytes
 		if item.recordType == "event" {
 			diagnostics.EligibleEventCount++
-		} else {
+		} else if item.recordType == "finding" {
 			diagnostics.EligibleFindingCount++
 		}
 	}
 	return diagnostics
+}
+
+func affectedRetentionSessions(
+	ctx context.Context,
+	tx *sql.Tx,
+	items []retentionItem,
+) (map[string]struct{}, bool, error) {
+	result := make(map[string]struct{})
+	issueDeleted := false
+	for _, item := range items {
+		if !item.selected {
+			continue
+		}
+		var sessionKey sql.NullString
+		switch item.recordType {
+		case "event":
+			if err := tx.QueryRowContext(ctx,
+				"SELECT session_key FROM events WHERE event_id = ?",
+				item.recordID,
+			).Scan(&sessionKey); err != nil {
+				return nil, false, errors.New("resolve retained event session")
+			}
+		case "finding":
+			if err := tx.QueryRowContext(ctx,
+				"SELECT session_key FROM findings WHERE finding_id = ?",
+				item.recordID,
+			).Scan(&sessionKey); err != nil {
+				return nil, false, errors.New("resolve retained finding session")
+			}
+		case "issue":
+			issueDeleted = true
+			if err := tx.QueryRowContext(ctx,
+				"SELECT session_key FROM issue_occurrences WHERE revision_id = ?",
+				item.recordID,
+			).Scan(&sessionKey); err != nil {
+				return nil, false, errors.New("resolve retained issue session")
+			}
+		default:
+			continue
+		}
+		if sessionKey.Valid && sessionKey.String != "" {
+			result[sessionKey.String] = struct{}{}
+		}
+	}
+	return result, issueDeleted, nil
 }
 
 func (s *Store) runPostPruneMaintenance(ctx context.Context) MaintenanceResult {

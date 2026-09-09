@@ -3,18 +3,92 @@ package localapp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
 type memoryKeyProvider struct {
 	keys map[string][]byte
+}
+
+func TestStartHistoricalInitializationTransitionsWithoutBlocking(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		scanError error
+		wantState string
+		wantCode  *string
+	}{
+		{
+			name:      "success",
+			wantState: initialization.StateReady,
+		},
+		{
+			name:      "failure",
+			scanError: errors.New("PRIVATE_SCAN_ERROR_/Users/private/project"),
+			wantState: initialization.StateDegraded,
+			wantCode:  stringPointer(initialization.ErrorHistoricalScanIncomplete),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tracker := initialization.NewTracker(true, time.Now)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := StartHistoricalInitialization(
+				context.Background(),
+				tracker,
+				func(context.Context) error {
+					close(started)
+					<-release
+					return test.scanError
+				},
+			)
+			<-started
+			if status := tracker.InitializationStatus(); status.State != initialization.StateInitializing {
+				t.Fatalf("blocked scan status = %+v", status)
+			}
+			close(release)
+			<-done
+			status := tracker.InitializationStatus()
+			if status.State != test.wantState {
+				t.Fatalf("terminal status = %+v, want %q", status, test.wantState)
+			}
+			if test.wantCode == nil {
+				if status.ErrorCode != nil {
+					t.Fatalf("error code = %v, want null", status.ErrorCode)
+				}
+			} else if status.ErrorCode == nil || *status.ErrorCode != *test.wantCode {
+				t.Fatalf("error code = %v, want %q", status.ErrorCode, *test.wantCode)
+			}
+			if status.ErrorCode != nil &&
+				strings.Contains(*status.ErrorCode, "PRIVATE_SCAN_ERROR") {
+				t.Fatalf("raw scan error leaked into status: %+v", status)
+			}
+		})
+	}
+}
+
+func TestStartHistoricalInitializationCancellationDoesNotReportFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	tracker := initialization.NewTracker(true, time.Now)
+	done := StartHistoricalInitialization(ctx, tracker, func(scanCtx context.Context) error {
+		<-scanCtx.Done()
+		return scanCtx.Err()
+	})
+	cancel()
+	<-done
+	if status := tracker.InitializationStatus(); status.State != initialization.StateInitializing {
+		t.Fatalf("canceled process status = %+v", status)
+	}
 }
 
 func (p *memoryKeyProvider) Load(_ context.Context, storeID string) ([]byte, error) {
@@ -98,6 +172,100 @@ esac
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %d, want 2", len(sessions))
+	}
+	issues, err := store.QueryIssues(
+		context.Background(),
+		model.IssueQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issues.Analysis.Complete || issues.Analysis.CurrentSessions != 2 {
+		t.Fatalf("historical analysis coverage = %+v", issues.Analysis)
+	}
+}
+
+func TestImportLiveAttemptsHarnessesIndependently(t *testing.T) {
+	tests := []struct {
+		name          string
+		failingAgent  string
+		successIndex  int
+		failureIndex  int
+		successCursor string
+	}{
+		{
+			name:          "Codex failure does not prevent Claude import",
+			failingAgent:  "codex",
+			successIndex:  1,
+			failureIndex:  0,
+			successCursor: "claude.cursor.json",
+		},
+		{
+			name:          "Claude failure preserves Codex import",
+			failingAgent:  "claude",
+			successIndex:  0,
+			failureIndex:  1,
+			successCursor: "codex.cursor.json",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := hookRuntimePaths(root)
+			if err := os.MkdirAll(filepath.Join(root, "live"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for fixture, spool := range map[string]string{
+				filepath.Join("..", "..", "testdata", "numbat", "v0.3.0", "live", "codex-sanitized.ndjson"):  paths.CodexSpool,
+				filepath.Join("..", "..", "testdata", "numbat", "v0.3.0", "live", "claude-sanitized.ndjson"): paths.ClaudeSpool,
+			} {
+				body, err := os.ReadFile(fixture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(spool, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(
+				filepath.Join(root, "live", test.failingAgent+".cursor.json"),
+				[]byte("{invalid"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			store, err := local.OpenWithOptions(filepath.Join(root, "belay.sqlite"), local.OpenOptions{
+				KeyProvider: &memoryKeyProvider{keys: make(map[string][]byte)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+
+			results, err := ImportLive(context.Background(), paths, store, Config{
+				Version:             ConfigVersion,
+				InstallationID:      "inst_live_isolation_test",
+				NumbatVersionMarker: "numbat-test",
+			})
+			if err == nil {
+				t.Fatal("ImportLive() error = nil, want one harness failure")
+			}
+			if !strings.Contains(err.Error(), test.failingAgent+" live import") {
+				t.Fatalf("ImportLive() error = %v, want failing harness attribution", err)
+			}
+			if len(results) != 2 {
+				t.Fatalf("ImportLive() result count = %d, want 2 attempted harnesses", len(results))
+			}
+			if results[test.successIndex].Import.EventsAccepted == 0 {
+				t.Fatalf("successful harness result = %+v, want accepted events", results[test.successIndex])
+			}
+			if results[test.failureIndex].Import.EventsAccepted != 0 {
+				t.Fatalf("failed harness result = %+v, want no accepted events", results[test.failureIndex])
+			}
+			if _, err := os.Stat(filepath.Join(root, "live", test.successCursor)); err != nil {
+				t.Fatalf("successful harness cursor was not checkpointed: %v", err)
+			}
+		})
 	}
 }
 

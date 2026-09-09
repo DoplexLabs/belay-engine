@@ -32,6 +32,9 @@ for path in \
   CONTRIBUTING.md \
   SUPPORT.md \
   llms.txt \
+  docs/contracts/mcp-v1.md \
+  docs/design/p0-09-one-command-onboarding.md \
+  docs/implementation/briefs/14-p0-one-command-onboarding.md \
   docs/launch/developer-preview.md \
   docs/launch/clean-machine-alpha-qa.md \
   docs/launch/local-v0-requirements.md; do
@@ -68,9 +71,72 @@ require_text "${repository_root}/docs/launch/local-v0-requirements.md" "next_cur
 require_text "${repository_root}/README.md" "./bin/belay quickstart"
 require_text "${repository_root}/docs/launch/developer-preview.md" "./bin/belay quickstart"
 require_text "${repository_root}/docs/launch/clean-machine-alpha-qa.md" "./bin/belay quickstart"
+require_text "${repository_root}/README.md" "./bin/belay quickstart --no-mcp"
+require_text "${repository_root}/README.md" \
+  "./bin/belay quickstart --allow-codex-mcp-add"
+require_text "${repository_root}/docs/launch/developer-preview.md" \
+  "./bin/belay quickstart --no-mcp"
+require_text "${repository_root}/docs/launch/developer-preview.md" \
+  "./bin/belay quickstart --allow-codex-mcp-add"
+require_text "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+  "./bin/belay quickstart --no-mcp"
+require_text "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+  "./bin/belay quickstart --allow-codex-mcp-add"
 require_text "${repository_root}/README.md" "./bin/belay local"
 require_text "${repository_root}/docs/launch/developer-preview.md" "./bin/belay local"
 require_text "${repository_root}/docs/launch/local-v0-requirements.md" "belay quickstart"
+for path in \
+  README.md \
+  llms.txt \
+  docs/launch/developer-preview.md \
+  docs/launch/clean-machine-alpha-qa.md \
+  docs/design/p0-09-one-command-onboarding.md \
+  docs/implementation/briefs/14-p0-one-command-onboarding.md \
+  docs/contracts/mcp-v1.md; do
+  require_text "${repository_root}/${path}" "mcp-config install"
+  require_text "${repository_root}/${path}" "mcp-config status"
+  require_text "${repository_root}/${path}" "mcp-config uninstall"
+  require_text "${repository_root}/${path}" "allow-codex-mcp-add"
+done
+require_text "${repository_root}/docs/launch/local-v0-requirements.md" \
+  "allow-codex-mcp-add"
+for path in \
+  README.md \
+  llms.txt \
+  docs/launch/developer-preview.md \
+  docs/launch/clean-machine-alpha-qa.md \
+  docs/design/p0-09-one-command-onboarding.md \
+  docs/implementation/briefs/14-p0-one-command-onboarding.md \
+  docs/contracts/mcp-v1.md; do
+  require_text "${repository_root}/${path}" "non-atomic"
+  require_text "${repository_root}/${path}" "duplicate-name behavior"
+done
+for path in \
+  README.md \
+  llms.txt \
+  docs/launch/developer-preview.md \
+  docs/launch/clean-machine-alpha-qa.md \
+  docs/contracts/mcp-v1.md; do
+  for tool in \
+    list_sessions \
+    get_session \
+    get_session_timeline \
+    query_activity \
+    list_findings \
+    get_stats \
+    list_issues \
+    get_issue \
+    lookup_session_events; do
+    require_text "${repository_root}/${path}" "${tool}"
+  done
+done
+require_text "${repository_root}/README.md" "foreign or unverifiable"
+require_text "${repository_root}/docs/launch/developer-preview.md" \
+  "foreign, scope-ambiguous"
+require_text "${repository_root}/docs/launch/developer-preview.md" \
+  "unverifiable entry"
+require_text "${repository_root}/docs/contracts/mcp-v1.md" \
+  "MCP uninstall does not remove monitor hooks"
 require_text "${repository_root}/scripts/build-developer-preview.sh" \
   "main.bundledNumbatSHA256"
 require_text "${repository_root}/scripts/build-developer-preview.sh" \
@@ -102,6 +168,56 @@ if grep -Eiq \
   "${repository_root}/docs/launch/developer-preview.md" \
   "${repository_root}/docs/launch/local-v0-requirements.md"; then
   die "release documentation contains a stale pagination or resource-filter limitation"
+fi
+
+if grep -Eiq \
+  'exposes exactly six tools|MCP remains exactly six( read-only)? tools|server advertises exactly six tools' \
+  "${repository_root}/README.md" \
+  "${repository_root}/SUPPORT.md" \
+  "${repository_root}/llms.txt" \
+  "${repository_root}/docs/contracts/mcp-v1.md" \
+  "${repository_root}/docs/launch/developer-preview.md" \
+  "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+  "${repository_root}/docs/launch/local-v0-requirements.md"; then
+  die "release documentation contains stale six-tool MCP wording"
+fi
+
+if grep -Eiq \
+  'quickstart registers (the )?(stdio server|Belay MCP) automatically for (each )?detected supported agent|registers the existing read-only MCP server in detected Codex and Claude Code user configuration|quickstart success registers detected agents|attempts ownership-safe user-scope registration for detected Codex and Claude Code' \
+  "${repository_root}/README.md" \
+  "${repository_root}/llms.txt" \
+  "${repository_root}/docs/contracts/mcp-v1.md" \
+  "${repository_root}/docs/design/p0-09-one-command-onboarding.md" \
+  "${repository_root}/docs/implementation/briefs/14-p0-one-command-onboarding.md" \
+  "${repository_root}/docs/launch/developer-preview.md" \
+  "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+  "${repository_root}/docs/launch/local-v0-requirements.md"; then
+  die "release documentation overstates automatic Codex MCP registration"
+fi
+
+for path in \
+  README.md \
+  llms.txt \
+  docs/contracts/mcp-v1.md \
+  docs/design/p0-09-one-command-onboarding.md \
+  docs/implementation/briefs/14-p0-one-command-onboarding.md \
+  docs/launch/developer-preview.md \
+  docs/launch/clean-machine-alpha-qa.md \
+  docs/launch/local-v0-requirements.md; do
+  require_text "${repository_root}/${path}" "mcp-config uninstall"
+done
+
+if grep -Eiq \
+  'when updating a prior Codex registration|Updating Codex requires|Codex update additionally requires|then use the same update/rollback flow|archive move/recognized update with the Codex opt-in|verified identity is updated safely|Codex update requires.*allow-codex-mcp-add' \
+  "${repository_root}/README.md" \
+  "${repository_root}/llms.txt" \
+  "${repository_root}/docs/contracts/mcp-v1.md" \
+  "${repository_root}/docs/design/p0-09-one-command-onboarding.md" \
+  "${repository_root}/docs/implementation/briefs/14-p0-one-command-onboarding.md" \
+  "${repository_root}/docs/launch/developer-preview.md" \
+  "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
+  "${repository_root}/docs/launch/local-v0-requirements.md"; then
+  die "release documentation incorrectly allows Codex registration migration"
 fi
 
 if grep -Fq 'if: runner.arch' \

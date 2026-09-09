@@ -9,11 +9,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/commandsafe"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 )
 
@@ -249,20 +249,38 @@ func action(eventType string) string {
 }
 
 func outcome(record numbat.EventRecord) string {
+	terminalOutcome := "unknown"
 	if record.ExitCode != nil {
 		if *record.ExitCode == 0 {
-			return "succeeded"
+			terminalOutcome = "succeeded"
+		} else {
+			terminalOutcome = "failed"
 		}
-		return "failed"
+	} else {
+		switch record.EventType {
+		case "permission.approved":
+			terminalOutcome = "succeeded"
+		case "permission.denied":
+			terminalOutcome = "failed"
+		}
 	}
-	switch record.EventType {
-	case "permission.approved":
-		return "succeeded"
-	case "permission.denied":
-		return "failed"
-	default:
+
+	if record.EventType != "tool.result" || !hasExactTag(record.Tags, "tool_error") {
+		return terminalOutcome
+	}
+	if terminalOutcome == "succeeded" {
 		return "unknown"
 	}
+	return "failed"
+}
+
+func hasExactTag(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func removedEnvelopeFields(record numbat.EventRecord) int {
@@ -284,32 +302,11 @@ func removedEnvelopeFields(record numbat.EventRecord) int {
 }
 
 func commandName(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return ""
-	}
-	return bounded(filepath.Base(fields[0]), 128)
+	return commandsafe.Normalize(command).Executable
 }
 
 func commandSummary(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return ""
-	}
-	result := []string{bounded(filepath.Base(fields[0]), 128)}
-	for _, field := range fields[1:] {
-		if !strings.HasPrefix(field, "-") {
-			continue
-		}
-		name, _, _ := strings.Cut(field, "=")
-		if len(name) <= 32 {
-			result = append(result, name)
-		}
-		if len(result) == 8 {
-			break
-		}
-	}
-	return bounded(strings.Join(result, " "), 512)
+	return commandsafe.Normalize(command).Summary
 }
 
 func detailsValue(details *model.Details, field string) string {

@@ -148,19 +148,41 @@ Expected path:
    Keychain stores the random Local data key.
 3. Belay installs reversible monitor-only hooks for detected Codex and Claude
    Code installations.
-4. Numbat inventories local harnesses and Belay scans supported history.
-5. Belay starts Local, prints a tokenized `127.0.0.1` URL, and attempts to open
+4. Belay safely inspects detected MCP configuration. Claude registration may
+   proceed automatically when its status is safely understood. Normal
+   quickstart does not add an absent Codex entry.
+5. Numbat inventories local harnesses and Belay scans supported history.
+6. Belay starts Local, prints a tokenized `127.0.0.1` URL, and attempts to open
    it in the default browser.
-6. The dashboard shows minimized historical sessions. If browser opening fails,
+7. The dashboard shows minimized historical sessions. If browser opening fails,
    copy the printed URL into a browser.
 
 The target is first useful history within 15 minutes. Record actual timing in
 the clean-machine checklist; the alpha must not claim this gate passed without
 external evidence.
 
-`quickstart` is explicit consent to the detected harness configuration changes
-needed for monitor-only hooks. Hooks never enforce, approve, deny, or block an
-agent action, and they can be removed with `./bin/belay hooks uninstall`.
+`quickstart` is explicit consent to monitor-only hook changes and to safe MCP
+inspection plus any Claude registration that Belay can verify. Hooks never
+enforce, approve, deny, or block an agent action. MCP registration launches
+only `belay mcp` over stdio and adds no write-capable tool.
+
+To include Codex MCP registration in the same command:
+
+```bash
+./bin/belay quickstart --allow-codex-mcp-add
+```
+
+This flag permits `codex mcp add` only after Belay strictly verifies that the
+`belay` entry is absent. It means the user explicitly accepts the Codex CLI's
+non-atomic duplicate-name behavior. Belay never invokes that add operation
+against an existing entry; foreign or unverifiable entries are preserved and
+never overwritten or removed.
+
+To install hooks but skip MCP inspection and registration:
+
+```bash
+./bin/belay quickstart --no-mcp
+```
 
 For users who do not want hook installation, the lower-side-effect path is:
 
@@ -170,12 +192,13 @@ For users who do not want hook installation, the lower-side-effect path is:
 
 `local` verifies packaged Numbat, imports existing live records, scans supported
 history, starts the loopback server, and prints the dashboard URL. It does not
-install hooks or open a browser. A user can later opt in with
-`./bin/belay hooks install`.
+install hooks, change MCP configuration, or open a browser. A user can later
+opt in with `./bin/belay hooks install` and
+`./bin/belay mcp-config install --allow-codex-mcp-add`.
 
 ## Live hooks
 
-Inspect or reverse the quickstart hook setup:
+Inspect or reverse the quickstart hook setup independently:
 
 ```bash
 ./bin/belay hooks status
@@ -187,7 +210,34 @@ Only detected Codex and Claude Code installations are configured. Ordinary
 
 ## Read-only MCP
 
-Belay MCP runs over stdio and exposes exactly six tools:
+Normal quickstart may register Claude automatically when its status is safely
+understood. Codex add remains fail-closed unless the explicit opt-in flag is
+present. Inspect or retry the exact ownership-safe registration:
+
+```bash
+./bin/belay mcp-config status
+./bin/belay mcp-config install --allow-codex-mcp-add
+```
+
+Direct install may register Claude automatically when its status is safely
+understood. `--allow-codex-mcp-add` is required before Belay may invoke Codex
+add, and only after strict absence verification. Belay inspects the existing
+entry before every mutation. An exact current Codex entry is an unchanged
+no-op. Codex install does not update, migrate, replace, or remove a recognized
+prior, foreign, unverifiable, or unavailable entry, even with the opt-in flag.
+After an archive move, inspect a recognized prior Codex entry with
+`mcp-config status`; after verifying ownership, explicitly run
+`mcp-config uninstall`, verify absence, and then rerun
+`mcp-config install --allow-codex-mcp-add`. A foreign, scope-ambiguous, or
+unverifiable entry named `belay` is preserved and must be resolved by the user.
+Unsupported host-CLI status output is reported as unverifiable; Belay does not
+guess.
+
+Standalone `mcp-config install` may initialize private Belay configuration and
+directories so it can retain a stable installation/ownership ID. It does not
+create or open the Local database and does not create Keychain material.
+
+Belay MCP runs locally over stdio and exposes exactly nine read-only tools:
 
 - `list_sessions`
 - `get_session`
@@ -195,10 +245,24 @@ Belay MCP runs over stdio and exposes exactly six tools:
 - `query_activity`
 - `list_findings`
 - `get_stats`
+- `list_issues`
+- `get_issue`
+- `lookup_session_events`
 
 Results are bounded structured data marked `untrusted_observations: true`. MCP
 cannot install hooks, execute commands, modify files, write Belay data, or
 perform remediation.
+
+The issue-evidence loop is:
+
+1. call `list_issues` and inspect normalized selection and analysis coverage;
+2. preserve its `view_cursor` for `get_issue`;
+3. inspect the fixed catalog observation, caveat, exact matching occurrences,
+   and cited event IDs;
+4. call `lookup_session_events` only for the cited IDs needed;
+5. let the configured calling agent interpret the bounded evidence.
+
+Belay does not generate diagnosis, root cause, or remediation advice.
 
 Alpha limitations:
 
@@ -211,33 +275,32 @@ Alpha limitations:
 - Resource-kind activity filtering scans the complete cursor snapshot; older
   matches are not omitted by an internal candidate-window bound.
 
-### Codex
+### Manual MCP troubleshooting
 
-Add to `~/.codex/config.toml`, using an absolute path:
+Belay's supported configuration commands use the agent CLIs and are preferred.
+If installation is unavailable, inspect the conflict first:
 
-```toml
-[mcp_servers.belay]
-command = "/absolute/path/to/belay-alpha/bin/belay"
-args = ["mcp"]
+```bash
+./bin/belay mcp-config status
 ```
 
-### Claude Code
+For a verified absent entry, the equivalent official CLI commands are:
 
-Add a project-scoped `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "belay": {
-      "type": "stdio",
-      "command": "/absolute/path/to/belay-alpha/bin/belay",
-      "args": ["mcp"]
-    }
-  }
-}
+```bash
+codex mcp add belay -- /absolute/path/to/belay-alpha/bin/belay mcp
+claude mcp add --scope user belay -- /absolute/path/to/belay-alpha/bin/belay mcp
 ```
 
-Restart the client after editing its MCP configuration.
+For an explicit non-default Belay home, use the exact server arguments:
+
+```bash
+codex mcp add belay -- /absolute/path/to/belay-alpha/bin/belay mcp --home /absolute/path/to/private/belay-home
+claude mcp add --scope user belay -- /absolute/path/to/belay-alpha/bin/belay mcp --home /absolute/path/to/private/belay-home
+```
+
+Do not replace an existing entry solely because it is named `belay`. Do not
+configure HTTP transport, a bearer token, environment secrets, a shell wrapper,
+or a working-directory override. Restart the client after registration.
 
 ## Privacy and outcome limitations
 
@@ -267,6 +330,12 @@ import, and stdio MCP require no hosted Belay service or internet connection.
 The browser binds to `127.0.0.1` and JSON routes require a random per-launch
 token.
 
+MCP registration itself makes no Belay, Doplex, Anthropic, OpenAI, or other
+network request and requires no paid service or account login from Belay. A
+host agent CLI wrapper may independently perform credential or network checks;
+if that bounded command fails, quickstart reports incomplete onboarding and
+continues opening Local.
+
 Offline behavior must be demonstrated manually because the packaged smoke test
 may run without an enforceable `sandbox-exec` environment.
 
@@ -279,14 +348,28 @@ failure and use a build containing the noninteractive Keychain fix.
 
 ## Uninstall and cleanup
 
-If hooks were installed:
+Remove the two independently managed integrations:
 
 ```bash
+./bin/belay mcp-config uninstall
 ./bin/belay hooks uninstall
 ```
 
-Then remove the Belay entries from Codex or Claude Code MCP configuration and
-delete the extracted package directory.
+`mcp-config uninstall` removes only an exact current or previously verified
+Belay-owned user registration. It preserves a foreign or unverifiable `belay`
+entry and returns a nonzero result when safe removal cannot be confirmed. It
+does not remove monitor hooks, Local data, Keychain entries, or the extracted
+package. `hooks uninstall` does not remove MCP configuration.
+
+Confirm the resulting state:
+
+```bash
+./bin/belay mcp-config status
+./bin/belay hooks status
+```
+
+After both integrations are absent, stop Belay and delete the extracted package
+directory if desired.
 
 Local data remains under `${BELAY_HOME:-~/.belay}`. Deleting that directory is a
 separate destructive choice and is never performed by readiness scripts.

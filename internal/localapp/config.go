@@ -23,13 +23,15 @@ const (
 )
 
 type Paths struct {
-	Root        string
-	Config      string
-	Database    string
-	CodexSpool  string
-	ClaudeSpool string
-	Logs        string
-	BundledBin  string
+	Root          string
+	Config        string
+	Database      string
+	CodexSpool    string
+	ClaudeSpool   string
+	Logs          string
+	BundledBin    string
+	MCPManifest   string
+	MCPConfigLock string
 }
 
 type Config struct {
@@ -64,6 +66,12 @@ func ResolvePaths(explicitRoot string) (Paths, error) {
 		ClaudeSpool: filepath.Join(absolute, "live", "claude.ndjson"),
 		Logs:        filepath.Join(absolute, "logs"),
 		BundledBin:  filepath.Join(absolute, "bin", "numbat"),
+		MCPManifest: filepath.Join(absolute, "mcp-config-ownership.json"),
+		MCPConfigLock: filepath.Join(
+			os.TempDir(),
+			"belay-mcp-config-locks",
+			fmt.Sprintf("%x.lock", sha256.Sum256([]byte(absolute))),
+		),
 	}, nil
 }
 

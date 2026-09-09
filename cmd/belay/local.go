@@ -13,6 +13,11 @@ import (
 	"unicode"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/detection"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
+	"github.com/DoplexLabs/belay-engine/internal/localaction"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localmcp"
@@ -39,21 +44,48 @@ type localRuntimeFlags struct {
 }
 
 type preparedRuntime struct {
-	paths  localapp.Paths
-	config localapp.Config
-	client *numbat.Client
+	paths           localapp.Paths
+	config          localapp.Config
+	client          *numbat.Client
+	belayExecutable string
 }
 
 type localLaunchOptions struct {
-	runtime        localRuntimeFlags
-	listen         string
-	installHooks   bool
-	historicalScan bool
-	openBrowser    bool
-	commandName    string
+	runtime          localRuntimeFlags
+	listen           string
+	installHooks     bool
+	installMCP       bool
+	allowCodexMCPAdd bool
+	historicalScan   bool
+	openBrowser      bool
+	commandName      string
 }
 
-var launchLocal = runLocalLaunch
+type runningLocalServer interface {
+	BrowserURL() string
+	Wait() error
+}
+
+var (
+	launchLocal          = runLocalLaunch
+	discoverAndScan      = localapp.DiscoverAndScan
+	startLocalHTTPServer = func(
+		ctx context.Context,
+		store *local.Store,
+		token string,
+		address string,
+		initializationProvider initialization.Provider,
+	) (runningLocalServer, error) {
+		server, err := newLocalHTTPServer(store, token, initializationProvider)
+		if err != nil {
+			return nil, err
+		}
+		return server.Start(ctx, address)
+	}
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.Open(path, local.NewMacOSKeychainProvider())
+	}
+)
 
 func addLocalRuntimeFlags(flags *flag.FlagSet) localRuntimeFlags {
 	return localRuntimeFlags{
@@ -151,7 +183,12 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 	if err != nil {
 		return preparedRuntime{}, err
 	}
-	return preparedRuntime{paths: paths, config: config, client: client}, nil
+	return preparedRuntime{
+		paths:           paths,
+		config:          config,
+		client:          client,
+		belayExecutable: belayExecutable,
+	}, nil
 }
 
 func compiledNumbatPin() (numbat.BinaryPin, bool, error) {
@@ -218,8 +255,13 @@ func runQuickstart(ctx context.Context, args []string, stdout, stderr io.Writer)
 
 Explicitly initializes private Belay Local state, verifies packaged Numbat,
 installs monitor-only hooks for detected Codex and Claude Code installations,
-imports minimized local activity, scans local history, and opens a loopback-only
+installs read-only user-scoped MCP registration for detected CLIs, imports
+minimized local activity, scans local history, and opens a loopback-only
 browser. No prompts, completions, file contents, or telemetry are sent to Belay.
+Use --no-mcp to opt out only from MCP registration.
+Codex MCP add is disabled by default because its CLI can replace duplicate
+names non-atomically. --allow-codex-mcp-add accepts that behavior after Belay
+strictly verifies that no existing Codex entry named belay is present.
 
 Options:`)
 		flags.PrintDefaults()
@@ -227,16 +269,24 @@ Options:`)
 	runtimeFlags := addLocalRuntimeFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:0", "loopback listen address")
 	noOpen := flags.Bool("no-open", false, "print the Local URL without opening a browser")
+	noMCP := flags.Bool("no-mcp", false, "do not modify Codex or Claude MCP configuration")
+	allowCodexMCPAdd := flags.Bool(
+		"allow-codex-mcp-add",
+		false,
+		"accept Codex CLI non-atomic duplicate-name behavior after strict absence verification",
+	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	return launchLocal(ctx, localLaunchOptions{
-		runtime:        runtimeFlags,
-		listen:         *listen,
-		installHooks:   true,
-		historicalScan: true,
-		openBrowser:    !*noOpen,
-		commandName:    "quickstart",
+		runtime:          runtimeFlags,
+		listen:           *listen,
+		installHooks:     true,
+		installMCP:       !*noMCP,
+		allowCodexMCPAdd: *allowCodexMCPAdd,
+		historicalScan:   true,
+		openBrowser:      !*noOpen,
+		commandName:      "quickstart",
 	}, stdout, stderr)
 }
 
@@ -249,53 +299,184 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 
-	if _, err := localapp.ImportLive(ctx, runtime.paths, store, runtime.config); err != nil {
-		fmt.Fprintf(stderr, "belay %s: live records will be retried\n", options.commandName)
-	}
+	onboardingComplete := true
 	if options.installHooks {
-		onboardHooks(ctx, runtime.client, runtime.paths, options.commandName, stderr)
+		if !onboardHooks(ctx, runtime.client, runtime.paths, options.commandName, stderr) {
+			onboardingComplete = false
+		}
 	}
+	if options.installMCP {
+		if options.allowCodexMCPAdd {
+			fmt.Fprintln(
+				stderr,
+				"belay quickstart: Codex MCP add opt-in accepts non-atomic duplicate-name behavior",
+			)
+		}
+		if !onboardMCPConfiguration(
+			ctx,
+			runtime,
+			options.commandName,
+			options.allowCodexMCPAdd,
+			stderr,
+		) {
+			onboardingComplete = false
+		}
+	} else if options.commandName == "quickstart" {
+		fmt.Fprintln(stderr, "belay quickstart: mcp skipped_by_user")
+	}
+	if !onboardingComplete && options.commandName == "quickstart" {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: onboarding incomplete; Local will continue\n",
+			options.commandName,
+		)
+	}
+	initializationTracker := initialization.NewTracker(options.historicalScan, time.Now)
 	token, err := localhttp.NewLaunchToken()
 	if err != nil {
 		return err
 	}
-	localServer, err := localhttp.New(readmodel.New(store), token)
+	runtimeCtx, stopRuntime := context.WithCancel(ctx)
+	defer stopRuntime()
+	running, err := startLocalHTTPServer(
+		runtimeCtx,
+		store,
+		token,
+		options.listen,
+		initializationTracker,
+	)
 	if err != nil {
 		return err
 	}
-	running, err := localServer.Start(ctx, options.listen)
-	if err != nil {
-		return err
-	}
-	go localapp.PollLive(ctx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
-		fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
-	})
+	stopRecovery, recoveryDone := startLocalRecovery(
+		runtimeCtx,
+		store,
+		func() {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: issue analysis recovery pending; Local remains available\n",
+				options.commandName,
+			)
+		},
+		func() {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: attempt monitoring recovery pending; Local remains available\n",
+				options.commandName,
+			)
+		},
+	)
+	liveDone := make(chan struct{})
+	go func() {
+		defer close(liveDone)
+		localapp.PollLive(runtimeCtx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
+			fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
+		})
+	}()
+	scanDone := closedSignal()
 	if options.historicalScan {
-		go func() {
-			_, reports, scanErr := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
-			if scanErr != nil {
-				fmt.Fprintf(
-					stderr,
-					"belay %s: historical discovery failed; Local remains available\n",
+		scanDone = localapp.StartHistoricalInitialization(
+			runtimeCtx,
+			initializationTracker,
+			func(scanCtx context.Context) error {
+				return runHistoricalScan(
+					scanCtx,
+					runtime,
+					store,
 					options.commandName,
+					"historical scan",
+					stderr,
 				)
-				return
-			}
-			_ = writeJSON(stderr, reports)
-		}()
+			},
+		)
 	}
 	browserURL := running.BrowserURL()
 	fmt.Fprintln(stdout, browserURL)
 	if options.openBrowser {
-		attemptBrowserOpen(ctx, browserURL, options.commandName, stderr)
+		attemptBrowserOpen(runtimeCtx, browserURL, options.commandName, stderr)
 	}
-	return running.Wait()
+	waitErr := running.Wait()
+	stopRuntime()
+	<-scanDone
+	<-liveDone
+	stopRecovery()
+	<-recoveryDone
+	return waitErr
+}
+
+func closedSignal() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func runHistoricalScan(
+	ctx context.Context,
+	runtime preparedRuntime,
+	store *local.Store,
+	commandName string,
+	label string,
+	stderr io.Writer,
+) error {
+	_, _, scanErr := discoverAndScan(
+		ctx,
+		runtime.client,
+		store,
+		runtime.config,
+	)
+	if scanErr != nil && ctx.Err() == nil {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: %s incomplete; Local will continue\n",
+			commandName,
+			label,
+		)
+	}
+	return scanErr
+}
+
+func newLocalHTTPServer(
+	store *local.Store,
+	token string,
+	providers ...initialization.Provider,
+) (*localhttp.Server, error) {
+	actions, err := localaction.New(store, store)
+	if err != nil {
+		return nil, err
+	}
+	readOptions := []readmodel.Option{
+		readmodel.WithIssueRepository(store),
+		readmodel.WithIssueCursorCodec(store),
+		readmodel.WithFixMonitoringRepository(store),
+	}
+	if len(providers) > 0 && providers[0] != nil {
+		readOptions = append(
+			readOptions,
+			readmodel.WithInitializationProvider(providers[0]),
+		)
+	}
+	return localhttp.New(
+		readmodel.New(store, readOptions...),
+		token,
+		localhttp.WithFixService(actions),
+	)
+}
+
+func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
+	if store == nil {
+		return nil, errors.New("local MCP server requires a store")
+	}
+	return localmcp.New(readmodel.New(
+		store,
+		readmodel.WithIssueRepository(store),
+		readmodel.WithIssueCursorCodec(store),
+	))
 }
 
 func onboardLocalHooks(
@@ -304,7 +485,7 @@ func onboardLocalHooks(
 	paths localapp.Paths,
 	stderr io.Writer,
 ) {
-	onboardHooks(ctx, client, paths, "local", stderr)
+	_ = onboardHooks(ctx, client, paths, "local", stderr)
 }
 
 func onboardHooks(
@@ -313,22 +494,82 @@ func onboardHooks(
 	paths localapp.Paths,
 	commandName string,
 	stderr io.Writer,
-) {
+) bool {
 	results, hookErr := localapp.ManageHooks(ctx, client, paths, "install")
-	if err := writeJSON(stderr, results); err != nil {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: hook onboarding results could not be reported; Local remains available\n",
-			commandName,
-		)
+	if commandName != "quickstart" {
+		if err := writeJSON(stderr, results); err != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: hook onboarding results could not be reported; Local remains available\n",
+				commandName,
+			)
+		}
+		if hookErr != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: hook onboarding incomplete; Local remains available\n",
+				commandName,
+			)
+		}
+		return hookErr == nil
+	}
+	statuses := map[string]string{
+		"codex":  "skipped_not_detected",
+		"claude": "skipped_not_detected",
+	}
+	for _, result := range results {
+		status := "configured"
+		if result.Error != "" {
+			status = "failed"
+		}
+		statuses[result.Agent] = status
 	}
 	if hookErr != nil {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: hook onboarding incomplete; Local remains available\n",
-			commandName,
-		)
+		if len(results) == 0 {
+			statuses["codex"] = "unavailable"
+			statuses["claude"] = "unavailable"
+		}
 	}
+	fmt.Fprintf(
+		stderr,
+		"belay %s: hooks codex=%s claude=%s\n",
+		commandName,
+		statuses["codex"],
+		statuses["claude"],
+	)
+	return hookErr == nil
+}
+
+type cliInventoryRow struct {
+	Agent    string `json:"agent"`
+	Present  bool   `json:"present"`
+	Detected bool   `json:"detected"`
+}
+
+type cliInventory struct {
+	Rows          []cliInventoryRow          `json:"rows"`
+	LaunchTargets map[string]cliInventoryRow `json:"launch_targets"`
+}
+
+func projectCLIInventory(inventory numbat.Inventory) cliInventory {
+	result := cliInventory{
+		Rows:          make([]cliInventoryRow, 0, 2),
+		LaunchTargets: make(map[string]cliInventoryRow, 2),
+	}
+	for _, agent := range []numbat.Agent{numbat.AgentCodex, numbat.AgentClaude} {
+		row, ok := inventory.LaunchTargets[agent]
+		if !ok {
+			continue
+		}
+		projected := cliInventoryRow{
+			Agent:    agent.String(),
+			Present:  row.Present,
+			Detected: row.Detected,
+		}
+		result.Rows = append(result.Rows, projected)
+		result.LaunchTargets[projected.Agent] = projected
+	}
+	return result
 }
 
 func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -342,14 +583,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 	inventory, reports, err := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
 	if writeErr := writeJSON(stdout, map[string]any{
-		"inventory": inventory,
+		"inventory": projectCLIInventory(inventory),
 		"scans":     reports,
 	}); writeErr != nil {
 		return writeErr
@@ -374,7 +615,7 @@ func runAgents(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, inventory)
+	return writeJSON(stdout, projectCLIInventory(inventory))
 }
 
 func runHooks(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -421,11 +662,156 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	server, err := localmcp.New(readmodel.New(store))
+	server, err := newLocalMCPServer(store)
 	if err != nil {
 		return err
 	}
-	return server.RunStdio(ctx)
+	serverDone := make(chan error, 1)
+	serverStarted := make(chan struct{})
+	go func() {
+		close(serverStarted)
+		serverDone <- server.RunStdio(ctx)
+	}()
+	<-serverStarted
+	stopRecovery, recoveryDone := startLocalRecovery(
+		ctx,
+		store,
+		func() {
+			fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
+		},
+		func() {
+			fmt.Fprintln(stderr, "belay mcp: attempt monitoring recovery pending")
+		},
+	)
+	runErr := <-serverDone
+	stopRecovery()
+	<-recoveryDone
+	return runErr
+}
+
+type localRecoveryActions struct {
+	analysisStartup   func(context.Context) error
+	monitoringStartup func(context.Context) error
+	monitoringDrain   func(context.Context) error
+}
+
+const localRecoveryInterval = 2 * time.Second
+
+func startLocalRecovery(
+	ctx context.Context,
+	store *local.Store,
+	onAnalysisError func(),
+	onMonitoringError func(),
+) (context.CancelFunc, <-chan struct{}) {
+	recoveryCtx, cancel := context.WithCancel(ctx)
+	reconciler := analysis.NewReconciler(store)
+	worker := analysis.NewRecurrenceWorker(store)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runLocalRecovery(
+			recoveryCtx,
+			localRecoveryActions{
+				analysisStartup: func(ctx context.Context) error {
+					_, err := reconciler.Startup(ctx)
+					return err
+				},
+				monitoringStartup: func(ctx context.Context) error {
+					_, err := worker.Startup(ctx)
+					return err
+				},
+				monitoringDrain: func(ctx context.Context) error {
+					_, err := worker.Recover(ctx)
+					return err
+				},
+			},
+			localRecoveryInterval,
+			onAnalysisError,
+			onMonitoringError,
+		)
+	}()
+	return cancel, done
+}
+
+func runLocalRecovery(
+	ctx context.Context,
+	actions localRecoveryActions,
+	interval time.Duration,
+	onAnalysisError func(),
+	onMonitoringError func(),
+) {
+	if interval <= 0 {
+		interval = localRecoveryInterval
+	}
+	analysisFailureReported := false
+	for actions.analysisStartup != nil {
+		err := actions.analysisStartup(ctx)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		if !analysisFailureReported && onAnalysisError != nil {
+			onAnalysisError()
+			analysisFailureReported = true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+	monitoringFailureReported := false
+	for actions.monitoringStartup != nil {
+		err := actions.monitoringStartup(ctx)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		if !monitoringFailureReported && onMonitoringError != nil {
+			onMonitoringError()
+			monitoringFailureReported = true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+	if actions.monitoringDrain == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	drainFailureReported := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := actions.monitoringDrain(ctx); err != nil &&
+				!errors.Is(err, context.Canceled) &&
+				onMonitoringError != nil {
+				if !drainFailureReported {
+					onMonitoringError()
+					drainFailureReported = true
+				}
+				continue
+			}
+			drainFailureReported = false
+		}
+	}
 }
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -439,7 +825,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
@@ -447,11 +833,18 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	inventory, command, discoverErr := runtime.client.Discover(discoveryCtx)
+	analysisStatus, analysisErr := loadDoctorAnalysis(ctx, store)
 	status := map[string]any{
 		"config":            "ok",
 		"encrypted_storage": "ok",
 		"numbat_pin":        "ok",
-		"inventory":         inventory,
+		"inventory":         projectCLIInventory(inventory),
+		"detector_catalog":  detection.CatalogVersion,
+	}
+	if analysisErr != nil {
+		status["analysis"] = "failed"
+	} else {
+		status["analysis"] = analysisStatus
 	}
 	if discoverErr != nil {
 		status["discovery"] = "failed"
@@ -462,5 +855,24 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := writeJSON(stdout, status); err != nil {
 		return err
 	}
-	return discoverErr
+	return errors.Join(discoverErr, analysisErr)
+}
+
+type doctorAnalysisStatus struct {
+	CatalogVersion string                      `json:"catalog_version"`
+	Coverage       model.IssueAnalysisCoverage `json:"coverage"`
+}
+
+func loadDoctorAnalysis(
+	ctx context.Context,
+	store *local.Store,
+) (doctorAnalysisStatus, error) {
+	page, err := store.QueryIssues(ctx, model.IssueQuery{Limit: 1})
+	if err != nil {
+		return doctorAnalysisStatus{}, err
+	}
+	return doctorAnalysisStatus{
+		CatalogVersion: detection.CatalogVersion,
+		Coverage:       page.Analysis,
+	}, nil
 }

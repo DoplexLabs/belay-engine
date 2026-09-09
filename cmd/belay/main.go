@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/pipeline"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
@@ -45,6 +46,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runHooks(ctx, args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(ctx, args[1:], stderr)
+	case "mcp-config":
+		return runMCPConfig(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "import":
@@ -98,6 +101,9 @@ func runImport(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	report, err := pipeline.New(store, *installationID, *engineVersion).Import(ctx, input)
 	if err != nil {
 		return err
+	}
+	if _, reconcileErr := analysis.NewReconciler(store).Drain(ctx); reconcileErr != nil {
+		fmt.Fprintln(stderr, "belay import: issue analysis pending")
 	}
 	return writeJSON(stdout, report)
 }
@@ -228,6 +234,7 @@ Commands:
   agents          show Numbat's local agent inventory
   hooks           install, inspect, or remove monitor-only live hooks
   mcp             run the read-only Local MCP server over stdio
+  mcp-config      install, inspect, or remove read-only MCP registration
   doctor          verify Local configuration, storage, and Numbat discovery
   import          import strict Numbat 0.3.0 NDJSON into Belay Local
   sessions        list Local session summaries
@@ -236,8 +243,9 @@ Commands:
   verify-numbat   verify a pinned Numbat binary checksum and version marker
 
 belay quickstart changes only local Belay state and detected Codex/Claude hook
-configuration. Hooks are monitor-only and never block agent actions. Belay Local
-keeps minimized evidence on-device and does not send prompts, completions, file
-contents, or product telemetry. Use belay quickstart --no-open to print the
+and user-scoped MCP configuration. Hooks are monitor-only, MCP is read-only,
+and neither blocks agent actions. Belay Local keeps minimized evidence
+on-device and does not send prompts, completions, file contents, or product
+telemetry. Use --no-mcp to skip MCP registration and --no-open to print the
 loopback URL without opening a browser.`)
 }

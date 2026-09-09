@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 )
 
@@ -198,6 +199,108 @@ func TestStaticBrowserDoesNotRequireToken(t *testing.T) {
 	}
 }
 
+func TestInitializationRouteIsAuthenticatedFixedAndRejectsQueryParameters(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tracker := initialization.NewTracker(true, func() time.Time { return now })
+	server, err := New(
+		readmodel.New(
+			testRepository{},
+			readmodel.WithInitializationProvider(tracker),
+		),
+		"launch-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauthorized := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	unauthorized.RemoteAddr = "127.0.0.1:1234"
+	unauthorizedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorizedResponse.Code)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	request.RemoteAddr = "127.0.0.1:1234"
+	request.Header.Set("Authorization", "Bearer launch-secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var body readmodel.InitializationResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SchemaVersion != initialization.SchemaVersion ||
+		body.Initialization.State != initialization.StateInitializing ||
+		body.Initialization.CompletedAt != nil ||
+		body.Initialization.ErrorCode != nil {
+		t.Fatalf("initialization response = %+v", body)
+	}
+
+	for _, rawQuery := range []string{"state=ready", "private=RAW_ERROR_CANARY"} {
+		withQuery := httptest.NewRequest(
+			http.MethodGet,
+			"http://127.0.0.1/v1/initialization?"+rawQuery,
+			nil,
+		)
+		withQuery.RemoteAddr = "127.0.0.1:1234"
+		withQuery.Header.Set("Authorization", "Bearer launch-secret")
+		queryResponse := httptest.NewRecorder()
+		server.Handler().ServeHTTP(queryResponse, withQuery)
+		if queryResponse.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status = %d", rawQuery, queryResponse.Code)
+		}
+		if strings.Contains(queryResponse.Body.String(), "RAW_ERROR_CANARY") {
+			t.Fatalf("query response reflected input: %s", queryResponse.Body.String())
+		}
+	}
+}
+
+func TestInitializationRouteDegradedStateIsPayloadFree(t *testing.T) {
+	tracker := initialization.NewTracker(true, time.Now)
+	tracker.MarkHistoricalScanIncomplete()
+	server, err := New(
+		readmodel.New(
+			testRepository{},
+			readmodel.WithInitializationProvider(tracker),
+		),
+		"launch-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	request.RemoteAddr = "127.0.0.1:1234"
+	request.Header.Set("Authorization", "Bearer launch-secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(
+		response.Body.String(),
+		`"error_code":"historical_scan_incomplete"`,
+	) ||
+		strings.Contains(response.Body.String(), "/Users/") {
+		t.Fatalf("degraded response = %s", response.Body.String())
+	}
+}
+
 func TestStartRejectsNonLoopbackAddress(t *testing.T) {
 	server, err := New(readmodel.New(testRepository{}), "launch-secret")
 	if err != nil {
@@ -346,7 +449,7 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 		`if (explicitOutcomes.has(outcome)) {`,
 		`"status-badge"`,
 		`if (outcome === "unknown") {`,
-		`"Outcome · Not reported by source"`,
+		`"Outcome · Not reported"`,
 	} {
 		if !strings.Contains(eventRow, required) {
 			t.Fatalf("event-row rendering is missing %q", required)
@@ -360,7 +463,7 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 		t.Error("event rows must have exactly one conditionally rendered outcome badge")
 	}
 	if strings.Index(eventRow, `if (outcome === "unknown") {`) >
-		strings.Index(eventRow, `"Outcome · Not reported by source"`) {
+		strings.Index(eventRow, `"Outcome · Not reported"`) {
 		t.Error("source-unreported metadata is not guarded by the unknown-outcome check")
 	}
 	if !strings.Contains(source,
@@ -369,12 +472,16 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`if (outcome === "unknown") return "Outcome unavailable";`,
-		`if (outcome === "incomplete") return "No terminal event";`,
+		`if (outcome === "unknown") return "Outcome not reported";`,
+		`if (outcome === "incomplete") return "Outcome not reported";`,
 	} {
 		if !strings.Contains(sessionLabels, required) {
 			t.Fatalf("session outcome labels are missing %q", required)
 		}
+	}
+	if strings.Contains(source, "terminal event") ||
+		strings.Contains(source, "terminal session event") {
+		t.Error("browser retains customer-facing terminal-event jargon")
 	}
 	if strings.Contains(sessionLabels, `"Succeeded"`) {
 		t.Error("unknown or incomplete session outcomes must never be coerced to success")
@@ -413,10 +520,10 @@ func TestBrowserLaunchUXContract(t *testing.T) {
 		`state.sessionOccurredAfter = dateLowerBound(state.filters.days);`,
 		`parameters.set("occurred_after", state.sessionOccurredAfter);`,
 		`session_id: sessionID`,
-		`Partial overview ·`,
-		`"additional resources exist beyond the API projection."`,
-		`"No findings reported by configured rules."`,
-		`"Outcome availability applies to loaded matches; load more before treating results as exhaustive."`,
+		`Partial session summary ·`,
+		`"additional referenced resources were not included in this summary."`,
+		`"No findings were reported for this session."`,
+		`"Load more sessions before treating this outcome filter as complete."`,
 		`details.append(createElement("summary", "", "Evidence"));`,
 		`history === "mixed"`,
 	} {
@@ -489,7 +596,11 @@ func TestBrowserLaunchUXContract(t *testing.T) {
 		`.session-overview {`,
 		`overflow: auto;`,
 		`min-height: 44px;`,
-		`max-height: 55vh;`,
+		`max-height: none;`,
+		`overflow: visible;`,
+		`.timeline-panel {`,
+		`overflow-y: auto;`,
+		`overscroll-behavior: contain;`,
 	} {
 		if !strings.Contains(styles, required) {
 			t.Errorf("responsive browser styles are missing %q", required)

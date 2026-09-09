@@ -152,7 +152,11 @@ func (s *Store) payloadEncodingCounts(ctx context.Context) (int, int, error) {
 			SELECT canonical_encoding AS encoding FROM events
 			UNION ALL
 			SELECT cited_event_ids_encoding AS encoding FROM findings
-		)`,
+			UNION ALL
+			SELECT enrichment_encoding AS encoding FROM event_enrichments
+			UNION ALL
+			SELECT evidence_encoding AS encoding FROM issue_occurrences
+			)`,
 		payloadEncodingPlaintext,
 		payloadEncodingAESGCM,
 		payloadEncodingPlaintext,
@@ -246,7 +250,7 @@ func (s *Store) backfillPlaintextPayloads(ctx context.Context) error {
 		return errors.New("begin local payload upgrade")
 	}
 	defer tx.Rollback()
-	if err := s.mutations.with(mutationPayloadUpgrade, func() error {
+	if err := withMutationTx(ctx, tx, mutationPayloadUpgrade, func() error {
 		for _, payload := range encrypted {
 			var result sql.Result
 			switch payload.recordType {
@@ -265,6 +269,26 @@ func (s *Store) backfillPlaintextPayloads(ctx context.Context) error {
 					UPDATE findings
 					SET cited_event_ids_json = ?, cited_event_ids_encoding = ?
 					WHERE finding_id = ? AND cited_event_ids_encoding = ?`,
+					payload.envelope,
+					payloadEncodingAESGCM,
+					payload.recordID,
+					payloadEncodingPlaintext,
+				)
+			case "event_enrichment":
+				result, err = tx.ExecContext(ctx, `
+					UPDATE event_enrichments
+					SET enrichment_payload = ?, enrichment_encoding = ?
+					WHERE event_id = ? AND enrichment_encoding = ?`,
+					payload.envelope,
+					payloadEncodingAESGCM,
+					payload.recordID,
+					payloadEncodingPlaintext,
+				)
+			case "issue_occurrence":
+				result, err = tx.ExecContext(ctx, `
+					UPDATE issue_occurrences
+					SET evidence_payload = ?, evidence_encoding = ?
+					WHERE revision_id = ? AND evidence_encoding = ?`,
 					payload.envelope,
 					payloadEncodingAESGCM,
 					payload.recordID,
@@ -327,7 +351,29 @@ func (s *Store) readPlaintextPayloads(ctx context.Context) ([]storedPayload, err
 			COALESCE(session_key, '')
 		FROM findings
 		WHERE cited_event_ids_encoding = ?
+		UNION ALL
+		SELECT
+			'event_enrichment',
+			event_id,
+			'enrichment_payload',
+			enrichment_payload,
+			'',
+			''
+		FROM event_enrichments
+		WHERE enrichment_encoding = ?
+		UNION ALL
+		SELECT
+			'issue_occurrence',
+			revision_id,
+			'evidence_payload',
+			evidence_payload,
+			'',
+			''
+		FROM issue_occurrences
+		WHERE evidence_encoding = ?
 		ORDER BY 1, 2`,
+		payloadEncodingPlaintext,
+		payloadEncodingPlaintext,
 		payloadEncodingPlaintext,
 		payloadEncodingPlaintext,
 	)

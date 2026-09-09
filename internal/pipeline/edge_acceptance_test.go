@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/limits"
 	"github.com/DoplexLabs/belay-engine/internal/pipeline"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
@@ -143,6 +144,37 @@ func TestEdgeAcceptanceUnresolvedFindingCitationIsQuarantined(t *testing.T) {
 	}
 	if len(quarantines) != 1 ||
 		quarantines[0].Category != "unresolved_finding_citation" {
+		t.Fatalf("quarantines = %+v", quarantines)
+	}
+}
+
+func TestEdgeAcceptanceOversizedFindingCitationSetIsQuarantined(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+	record := otherRecordFamilies(t)[0].(map[string]any)
+	citations := make([]string, limits.MaxFindingCitedEventIDs+1)
+	for index := range citations {
+		citations[index] = fmt.Sprintf("event-%03d", index)
+	}
+	record["cited_event_ids"] = citations
+
+	report, err := newTestImporter(store).Import(
+		ctx,
+		bytes.NewReader(appendNDJSON(t, nil, record)),
+	)
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if report.FindingsAccepted != 0 || report.Quarantined != 1 {
+		t.Fatalf("report = %+v, want oversized finding quarantined", report)
+	}
+	quarantines, err := store.Quarantines(ctx)
+	if err != nil {
+		t.Fatalf("Quarantines() error = %v", err)
+	}
+	if len(quarantines) != 1 ||
+		quarantines[0].Category != "invalid_record" ||
+		quarantines[0].Reason != "finding cited_event_ids exceeds limit" {
 		t.Fatalf("quarantines = %+v", quarantines)
 	}
 }

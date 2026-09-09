@@ -21,12 +21,43 @@ func TestSessionOutcomeRequiresTerminalEvidence(t *testing.T) {
 		sessionID       string
 		terminalOutcome string
 		wantOutcome     string
+		wantSource      string
+		wantExplanation string
 	}{
-		{sessionID: "session-incomplete", wantOutcome: "incomplete"},
-		{sessionID: "session-succeeded", terminalOutcome: "succeeded", wantOutcome: "succeeded"},
-		{sessionID: "session-failed", terminalOutcome: "failed", wantOutcome: "failed"},
-		{sessionID: "session-interrupted", terminalOutcome: "interrupted", wantOutcome: "interrupted"},
-		{sessionID: "session-unknown", terminalOutcome: "unknown", wantOutcome: "unknown"},
+		{
+			sessionID:       "session-incomplete",
+			wantOutcome:     "incomplete",
+			wantSource:      "absence_of_session_end",
+			wantExplanation: "The agent reported that the session ended but did not report an outcome.",
+		},
+		{
+			sessionID:       "session-succeeded",
+			terminalOutcome: "succeeded",
+			wantOutcome:     "succeeded",
+			wantSource:      "session.end",
+			wantExplanation: "The agent reported that this session completed successfully.",
+		},
+		{
+			sessionID:       "session-failed",
+			terminalOutcome: "failed",
+			wantOutcome:     "failed",
+			wantSource:      "session.end",
+			wantExplanation: "The agent reported that this session ended with a failure.",
+		},
+		{
+			sessionID:       "session-interrupted",
+			terminalOutcome: "interrupted",
+			wantOutcome:     "interrupted",
+			wantSource:      "session.end",
+			wantExplanation: "The agent reported that this session was interrupted.",
+		},
+		{
+			sessionID:       "session-unknown",
+			terminalOutcome: "unknown",
+			wantOutcome:     "unknown",
+			wantSource:      "session.end",
+			wantExplanation: "The agent did not report how this session ended.",
+		},
 	}
 
 	unique := 1
@@ -62,6 +93,27 @@ func TestSessionOutcomeRequiresTerminalEvidence(t *testing.T) {
 		if detail.Outcome != test.wantOutcome {
 			t.Errorf("GetSession(%q) outcome = %q, want %q", test.sessionID, detail.Outcome, test.wantOutcome)
 		}
+		if detail.Overview == nil {
+			t.Fatalf("GetSession(%q) overview is nil", test.sessionID)
+		}
+		if detail.Overview.Outcome.Value != test.wantOutcome ||
+			detail.Overview.Outcome.Source != test.wantSource ||
+			detail.Overview.Outcome.Explanation != test.wantExplanation {
+			t.Errorf("GetSession(%q) outcome explanation = %+v, want value=%q source=%q explanation=%q",
+				test.sessionID,
+				detail.Overview.Outcome,
+				test.wantOutcome,
+				test.wantSource,
+				test.wantExplanation,
+			)
+		}
+	}
+
+	fallback := outcomeExplanation("PRIVATE_UNKNOWN_OUTCOME")
+	if fallback.Value != "unknown" ||
+		fallback.Source != "session.end" ||
+		fallback.Explanation != "The agent reported that the session ended but did not report an outcome." {
+		t.Fatalf("fallback outcome explanation = %+v", fallback)
 	}
 }
 

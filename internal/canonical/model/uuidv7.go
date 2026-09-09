@@ -8,6 +8,34 @@ import (
 	"time"
 )
 
+func IsCanonicalUUIDv7(value string) bool {
+	if len(value) != 36 ||
+		value[8] != '-' ||
+		value[13] != '-' ||
+		value[18] != '-' ||
+		value[23] != '-' ||
+		value[14] != '7' {
+		return false
+	}
+	switch value[19] {
+	case '8', '9', 'a', 'b':
+	default:
+		return false
+	}
+	for index := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			continue
+		}
+		character := value[index]
+		if !('0' <= character && character <= '9') &&
+			!('a' <= character && character <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func NewUUIDv7(now time.Time, random io.Reader) (string, error) {
 	if random == nil {
 		random = rand.Reader

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
+	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/numbatmap"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
@@ -171,11 +172,25 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 				RecordSHA256: digest,
 			})
 		}
-		inserted, err := i.store.AppendEvent(ctx, event)
+		appendResult, err := i.store.AppendEventResolved(ctx, event)
 		if err != nil {
 			return err
 		}
-		if inserted {
+		if err := analysis.EnrichEventRecord(
+			ctx,
+			i.store,
+			appendResult.EventID,
+			event.Session.Key,
+			value,
+		); err != nil {
+			_ = i.store.RecordAnalysisDiagnostic(
+				ctx,
+				event.Session.Key,
+				"enrichment",
+				analysis.EnrichmentDiagnosticCode(err),
+			)
+		}
+		if appendResult.Inserted {
 			report.EventsAccepted++
 		} else {
 			report.EventDuplicates++
@@ -199,6 +214,21 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 		if value.SessionID != "" {
 			sessionKey = numbatmap.SessionKey(value.SourceAgent, value.SessionID, "")
 		}
+		projectScopeHint := ""
+		if value.ProjectPathHash != "" {
+			scope, err := i.store.DeriveNumbatProjectScopeHash(value.ProjectPathHash)
+			if err != nil {
+				report.Quarantined++
+				return i.store.RecordQuarantine(ctx, local.Quarantine{
+					SourceRunID:  value.RunID,
+					LineNumber:   line,
+					Category:     "invalid_record",
+					Reason:       "finding project path hash is invalid",
+					RecordSHA256: digest,
+				})
+			}
+			projectScopeHint = scope.ID
+		}
 		canonicalEventIDs, err := i.store.ResolveCanonicalEventIDs(
 			ctx,
 			value.RunID,
@@ -218,22 +248,52 @@ func (i *Importer) handle(ctx context.Context, line int64, digest string, record
 		if err != nil {
 			return err
 		}
-		inserted, err := i.store.RecordFinding(ctx, local.Finding{
-			FindingID:     value.FindingID,
-			SourceRunID:   value.RunID,
-			SessionKey:    sessionKey,
-			DetectedAt:    detectedAt,
-			RuleID:        value.RuleID,
-			RuleVersion:   value.RuleVersion,
-			Severity:      value.Severity,
-			SourceAgent:   value.SourceAgent,
-			Confidence:    value.Confidence,
-			CitedEventIDs: canonicalEventIDs,
+		findingResult, err := i.store.RecordFindingResolved(ctx, local.Finding{
+			FindingID:        value.FindingID,
+			SourceRunID:      value.RunID,
+			SessionKey:       sessionKey,
+			ProjectScopeHint: projectScopeHint,
+			DetectedAt:       detectedAt,
+			RuleID:           value.RuleID,
+			RuleVersion:      value.RuleVersion,
+			Severity:         value.Severity,
+			SourceAgent:      value.SourceAgent,
+			Confidence:       value.Confidence,
+			CitedEventIDs:    canonicalEventIDs,
 		})
+		if errors.Is(err, local.ErrFindingCitationLimit) {
+			report.Quarantined++
+			return i.store.RecordQuarantine(ctx, local.Quarantine{
+				SourceRunID:  value.RunID,
+				LineNumber:   line,
+				Category:     "finding_citation_limit",
+				Reason:       "finding citation count exceeds the configured limit",
+				RecordSHA256: digest,
+			})
+		}
+		if errors.Is(err, local.ErrFindingIdentityConflict) {
+			report.Quarantined++
+			return i.store.RecordQuarantine(ctx, local.Quarantine{
+				SourceRunID:  value.RunID,
+				LineNumber:   line,
+				Category:     "finding_identity_conflict",
+				Reason:       "finding ID conflicts with an existing immutable identity",
+				RecordSHA256: digest,
+			})
+		}
 		if err != nil {
 			return err
 		}
-		if inserted {
+		if findingResult.SessionKey != "" {
+			if _, err := i.store.MarkSessionDirty(
+				ctx,
+				findingResult.SessionKey,
+				"finding_imported",
+			); err != nil {
+				return err
+			}
+		}
+		if findingResult.Inserted {
 			report.FindingsAccepted++
 		} else {
 			report.FindingDuplicates++

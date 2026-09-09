@@ -128,12 +128,17 @@ Evidence:
 From the extracted archive, start Belay with the packaged one-command path:
 
 ```bash
-./bin/belay quickstart
+./bin/belay quickstart --allow-codex-mcp-add
 ```
 
-This invocation is explicit consent to install reversible monitor-only hooks in
-detected Codex and Claude Code configurations, scan supported history, start
-Local, print its URL, and attempt to open the dashboard.
+This invocation is explicit consent to install reversible monitor-only hooks
+and the existing read-only Belay MCP server in detected Codex and Claude Code
+user configuration, scan supported history, start Local, print its URL, and
+attempt to open the dashboard. The flag permits Codex `mcp add` only after
+Belay strictly verifies that the `belay` entry is absent and records explicit
+acceptance of the Codex CLI's non-atomic duplicate-name behavior. Run from an
+extracted path containing a space so the executable remains one command
+argument.
 
 Pass criteria:
 
@@ -147,6 +152,14 @@ Pass criteria:
 - `./bin/belay hooks status` reports the detected Codex and Claude Code
   monitor-only hooks installed or reports an objective per-harness reason that
   a hook was not applicable.
+- `./bin/belay mcp-config status` returns schema
+  `belay.mcp-config.v1`, target order Codex then Claude, and reports each
+  available detected target as `owned_current`.
+- Codex add is never invoked while an entry named `belay` is present. Foreign
+  or unverifiable Codex entries are preserved and never overwritten or removed.
+- Quickstart stdout contains only the one-line tokenized Local URL. Fixed hook
+  and MCP summaries appear on stderr without executable paths or raw agent-CLI
+  output.
 - `./bin/belay doctor` reports configuration, encrypted storage, Numbat pin,
   and discovery as healthy.
 
@@ -158,6 +171,8 @@ Evidence:
 - Redacted `${BELAY_HOME:-~/.belay}/config.json`:
 - Redacted `doctor` output:
 - Hook status:
+- MCP configuration status:
+- Redacted quickstart stdout/stderr:
 - Keychain service/account screenshot:
 - Notes/defect:
 
@@ -441,6 +456,232 @@ Evidence:
 - Response-header capture:
 - Notes/defect:
 
+## A07f — P0-03 fix-attempt declaration and retraction
+
+Precondition: use a sanitized stable, non-experimental issue whose analysis is
+current and whose scope is `resolved` or `lexical`. Do not use a real secret,
+paste private change details, or treat this declaration as proof that a change
+worked.
+
+Procedure:
+
+1. Open the issue in Attention and inspect the **Fix attempts** section.
+2. Select **Record fix attempt**.
+3. Confirm that no category is preselected and that no free-text control exists.
+4. Select one truthful fixed category and explicitly confirm.
+5. Preserve a redacted browser network record of the eligibility and creation
+   responses.
+6. Confirm the new history row, then choose **Retract**, select one fixed reason,
+   and explicitly confirm.
+7. Preserve the retraction response and resulting history row.
+8. Verify listener-bound rejection without sending a valid action token:
+
+   ```bash
+   ISSUE_ID='paste-the-sanitized-eligible-issue-id'
+   curl -sS -o fix-cross-origin.json -w '%{http_code}\n' \
+     -H "Authorization: Bearer ${TOKEN}" \
+     -H 'Origin: http://127.0.0.1:1' \
+     -H 'Content-Type: application/json' \
+     -H 'Idempotency-Key: 12345678-1234-4234-9234-123456789abc' \
+     -H 'X-Belay-Intent: record-fix-attempt.v1' \
+     --data '{}' \
+     "${BASE_URL}/v1/issues/${ISSUE_ID}/fixes"
+   ```
+
+Pass criteria:
+
+- Issue detail presents monitoring as exact post-attempt evidence and does not
+  claim that recording the declaration changed or resolved the issue.
+- The dialog explains that Belay records a declaration and cannot verify the
+  change or its effect.
+- No category is preselected; no note, command, path, diff, prompt, output,
+  environment value, or URL can be entered.
+- Eligibility returns `schema_version=belay.fix.v1`, a signed action token, and
+  `change_catalog_version=fix-change.v1`.
+- First creation returns `201`, `replayed=false`, the selected fixed category,
+  `recorded_via=local_ui`, `state=active`, and explicit null
+  `retraction_reason`/`retracted_at`.
+- Browser wording says **Fix attempt declaration recorded · Not verified by
+  Belay** and never says fixed, resolved, successful, prevented, or safe.
+- First retraction returns `201`, `replayed=false`, and one fixed reason. History
+  preserves the original declaration with `state=retracted`.
+- The cross-origin request returns `403` with
+  `type=belay.local/write-forbidden`, creates no row, and reflects none of the
+  request values.
+- Browser developer tools show no request to a non-loopback origin.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Sanitized issue ID and eligibility reason:
+- Dialog and history screenshots:
+- Redacted eligibility/create/retraction responses:
+- Cross-origin status/problem response:
+- Browser network-origin recording:
+- Notes/defect:
+
+## A07g — P0-03 restart durability and MCP isolation
+
+Procedure:
+
+1. Before stopping Local, record one additional sanitized fix-attempt
+   declaration and leave it active. Record its annotation ID and category.
+2. Stop every Belay Local process and close browser tabs using the old launch
+   token.
+3. Restart using:
+
+   ```bash
+   ./bin/belay local --no-scan
+   ```
+
+4. Open the newly printed URL, return to the same issue, and inspect complete
+   fix-attempt history.
+5. Disable non-loopback networking as in A11 and reload the issue/history.
+6. Inspect MCP from Codex and Claude Code after restart.
+
+Pass criteria:
+
+- Local reuses the same database and Keychain key without creating replacement
+  state or requesting a password.
+- Both the active and retracted declarations retain their exact annotation IDs,
+  categories, recording times, states, and retraction metadata.
+- History remains readable with non-loopback networking disabled.
+- Evidence status may truthfully change only among `available`, `partial`,
+  `pruned`, and `unknown`; the declarations themselves remain present.
+- No restart converts a declaration into a resolution claim or fabricates a
+  recurrence observation.
+- MCP still exposes exactly nine read-only tools and no fix-history, record,
+  retract, replay, recurrence-monitoring, write, or remediation tool.
+- The old tokenized browser URL is not used as the restarted launch credential.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Pre-restart annotation IDs/state:
+- Post-restart annotation IDs/state:
+- Keychain/database reuse evidence:
+- Offline history screenshot:
+- Post-restart MCP tool lists:
+- Notes/defect:
+
+## A07h — P0-04 exact recurrence monitoring
+
+Precondition: use a disposable project and a sanitized stable Belay-origin issue
+with current analysis and a deterministic command-failure fingerprint. Do not
+rerun a destructive command, use a real secret, edit SQLite directly, or treat
+a matching observation as proof that a fix failed.
+
+Procedure:
+
+1. Record an active `code_change` fix-attempt declaration for the issue and
+   record its annotation ID and `monitor_from`.
+2. Open **After attempts** and preserve the top-level monitoring response.
+3. Open the issue's monitoring detail and preserve its
+   `monitoring_view_cursor`, attempt `observation_view_cursor`, coverage, and
+   initial state.
+4. In a disposable directory, run the same harmless failing command through a
+   launch-validated harness after `monitor_from`; wait for live import and
+   analysis.
+5. Refresh monitoring, open the attempt, then open its recurrence evidence.
+6. Fetch any returned retained event IDs through
+   `/v1/sessions/{session_id}/events/lookup` using only repeated `event_id`
+   parameters.
+7. Retract the attempt and compare default monitoring with
+   `include_retracted=true`.
+
+Pass criteria:
+
+- Initial monitoring is neutral: `awaiting_later_evidence`,
+  `monitoring_incomplete`, or `comparison_unavailable` as supported by the
+  captured coverage. It never says fixed, successful, prevented, or safe.
+- The later exact compatible occurrence changes the attempt to
+  `matching_evidence_observed` and adds exactly one durable observation; replay
+  or reanalysis does not duplicate it.
+- The observation distinguishes `same_session_as_anchor`, reports immutable
+  citation count, bounded retained UUIDv7 event IDs, retained/missing counts,
+  truncation, and evidence state.
+- Browser wording describes a match as attention evidence, not proof that the
+  attempted fix failed or that two sessions share a semantic root cause.
+- `historical_matching_evidence_count` aggregates qualifying post-baseline
+  observations across all attempts for the issue, including retracted attempts.
+  It remains separate from the driving attempt's own `fix_recurrence_count`.
+- After retraction, the issue is absent from the default active list unless
+  another active attempt exists. `include_retracted=true` preserves the
+  all-retracted history with zero active/observed-attempt counts.
+- Unknown evidence returns an empty event-ID array and null retained/missing/
+  truncation fields; it is never converted to available evidence.
+- No monitoring request reaches a non-loopback origin.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Sanitized issue/annotation/recurrence IDs:
+- Initial and final monitoring responses:
+- Observation and exact event-lookup responses:
+- Browser screenshots/network recording:
+- Notes/defect:
+
+## A07i — P0-04 catch-up, restart, retention, and isolation
+
+Use the approved sanitized upgrade/catch-up and retention fixtures. Do not
+change monitoring metadata, projection tables, clocks, or retention generation
+with an ad-hoc SQLite client.
+
+Procedure:
+
+1. Start Local on the upgrade fixture and immediately request
+   `/v1/fix-monitoring` plus representative pre-existing session, Attention,
+   fix-history, and health routes.
+2. Record the monitoring readiness response, wait for background analysis then
+   recurrence catch-up, and retry without changing the initial request shape.
+3. Stop Local during a separate catch-up run, restart with the same database and
+   Keychain provider, and wait for convergence.
+4. On the retained-history fixture, capture a list view cursor, detail view
+   cursor, observation view cursor, and at least one continuation cursor.
+5. Stop and restart Local, verify the durable observation/history, then apply
+   the approved retention fixture transition and retry the old cursors.
+6. Refresh without cursors and inspect degraded evidence plus MCP tools.
+
+Pass criteria:
+
+- HTTP starts before background catch-up. During catch-up, only the three
+  monitoring routes return fixed `503
+  belay.local/monitoring-catchup-in-progress`; health, sessions, Attention, and
+  fix history remain available.
+- A failed catch-up returns only fixed `503
+  belay.local/monitoring-catchup-failed`, no internal diagnostic or stored
+  value, and a due retry or restart transitions back through catching-up to
+  ready.
+- Cancellation leaves durable work retryable and is not reported as a false
+  failed state.
+- After readiness, list → detail → observation view handoff preserves one
+  snapshot. Continuations preserve original filters and page size with no
+  equal-time loss or duplication.
+- Close/reopen with the same database and key preserves recurrence IDs,
+  attempt/retraction state, counts, and positive observations.
+- Old monitoring cursors return `410 belay.local/cursor-expired` after the
+  approved retention-generation transition. A fresh read may report
+  `partial`, `pruned`, or `unknown` evidence without deleting the durable
+  observation.
+- History-only detail returns `current_issue_available=false` and
+  `current_issue=null`.
+- MCP still exposes exactly nine read-only tools and no monitoring repository,
+  fix, recurrence, write, or remediation tool.
+
+Evidence:
+
+- Result:
+- Started/finished:
+- Catch-up/failed/recovery responses:
+- Existing-route availability during catch-up:
+- Restart persistence responses:
+- Retention 410 and fresh degraded-evidence responses:
+- MCP tool lists:
+- Notes/defect:
+
 ## A08 — Explicit live hooks: Codex
 
 The A04 `quickstart` command was the explicit hook-install consent. Confirm its
@@ -457,7 +698,7 @@ Pass criteria:
 
 - Only explicit install changes harness configuration.
 - The installed state came from the explicit `quickstart` invocation.
-- Codex hook status reports installed/healthy.
+- Codex hook status reports installed and configured.
 - The Codex action completes normally.
 - A corresponding new minimized event appears within 10 seconds while Belay is
   running.
@@ -478,7 +719,7 @@ test directory.
 
 Pass criteria:
 
-- Claude Code hook status reports installed/healthy.
+- Claude Code hook status reports installed and configured.
 - The Claude Code action completes normally.
 - A corresponding new minimized event appears within 10 seconds while Belay is
   running.
@@ -492,25 +733,120 @@ Evidence:
 - Timeline event ID/screenshot:
 - Notes/defect:
 
-## A10 — MCP six-tool contract
+## A10 — MCP nine-tool issue-evidence contract
 
-Configure both Codex and Claude Code using the examples in
-`developer-preview.md`, restart each client, and inspect Belay's MCP tools.
+Use the registrations created by A04. Do not manually edit Codex or Claude
+configuration. Run:
+
+```bash
+./bin/belay mcp-config status
+```
+
+Restart each client and inspect Belay's MCP tools.
 
 Pass criteria:
 
+- Status uses schema `belay.mcp-config.v1`, reports Codex before Claude, prints
+  no executable/home path, and classifies each available entry exactly.
 - Both clients connect over stdio.
 - Exactly these tools appear:
   `list_sessions`, `get_session`, `get_session_timeline`, `query_activity`,
-  `list_findings`, and `get_stats`.
+  `list_findings`, `get_stats`, `list_issues`, `get_issue`, and
+  `lookup_session_events`.
 - Representative calls and at least one two-page cursor chain succeed in each
   client.
 - Session, activity, and finding filters match the Local API results.
-- Results contain `untrusted_observations: true`.
-- No prompts, resources, write tools, command execution, remediation, or
-  filesystem access are exposed.
+- `list_issues` defaults to stable ordinary issues, returns normalized
+  `selection`, analysis coverage, and a non-empty `view_cursor`.
+- A non-default-limit issue continuation sends only `cursor`; filters and limit
+  remain stable across the chain.
+- `get_issue` accepts the transferred `view_cursor`, returns exact matching
+  occurrences, fixed catalog metadata, snapshot-matched
+  `global_analysis_coverage`, and a new `view_cursor`.
+- Occurrence continuation sends only `issue_id` plus `cursor`.
+- `lookup_session_events` returns only selected cited IDs from the selected
+  session, reports missing IDs explicitly, and states that its current-ingestion
+  snapshot is not issue-snapshot-bound.
+- New-tool results contain `untrusted_observations: true` and trust metadata
+  with `instruction_authority=none`.
+- Catalog text is fixed evidence meaning/caveat, not generated diagnosis or
+  remediation advice.
+- No prompts, resources, fix-history/record/retract tools, other write tools,
+  recurrence tools, command execution, remediation, or filesystem access are
+  exposed.
 - A filtered `get_stats` request is recorded as an expected alpha limitation;
   unfiltered `get_stats` succeeds.
+
+Cross-agent cited-answer acceptance:
+
+1. Call `list_issues` and select an exact issue whose returned agent coverage
+   includes both Codex and Claude. If the prepared data has no such issue, mark
+   A10 blocked; do not substitute a merely similar issue.
+2. Pass its `view_cursor` to `get_issue`. Confirm the exact occurrences include
+   at least one Codex session and one Claude session.
+3. For one occurrence from each agent, call `lookup_session_events` with that
+   occurrence's session ID and cited event IDs.
+4. Ask the connected agent: “What finding was recorded across Codex and Claude,
+   and which cited events support that answer?”
+
+Pass criteria:
+
+- The answer uses the fixed catalog meaning and caveat, identifies both agents,
+  and cites only evidence returned by `lookup_session_events`.
+- Missing cited IDs are disclosed rather than inferred.
+- The answer does not invent a shared cause, semantic similarity, diagnosis,
+  remediation, or activity that is absent from the returned evidence.
+- The recorded tool chain is `list_issues` → `get_issue` occurrences →
+  `lookup_session_events` cited evidence.
+
+Ownership, idempotency, and opt-out checks:
+
+1. Stop Local, rerun `./bin/belay quickstart --no-open`, and confirm the MCP
+   summary reports `already_installed` without duplicate entries.
+2. Stop Local, run `./bin/belay mcp-config uninstall`, then run
+   `./bin/belay quickstart --no-mcp --no-open`.
+3. Confirm hooks and Local still start, the fixed summary says
+   `belay quickstart: mcp skipped_by_user`, and `mcp-config status` still
+   reports the entries absent.
+4. Run normal `./bin/belay quickstart --no-open` with both entries absent.
+   Confirm Claude may be installed when its status is safely understood, while
+   Codex is not added and onboarding continues with a fixed incomplete summary.
+5. Restore Codex with
+   `./bin/belay mcp-config install --allow-codex-mcp-add`. Confirm the opt-in
+   warning is fixed and payload-free.
+6. In an isolated test account/configuration, create a foreign entry named
+   `belay` with a different command or transport. Confirm install and uninstall
+   preserve it and report `foreign_preserved`/foreign ownership rather than
+   replacing or removing it.
+7. Restore the owned registration, move to a newly extracted approved archive,
+   and run `quickstart --allow-codex-mcp-add`. Confirm Claude may follow its
+   ownership-safe update path, but the recognized prior Codex entry is not
+   updated, migrated, replaced, or removed. Verify Codex is reported
+   unavailable/incomplete. Inspect it with `mcp-config status`, verify that it
+   is the expected Belay-owned prior identity, explicitly run
+   `mcp-config uninstall`, verify absence, and then rerun
+   `quickstart --allow-codex-mcp-add`. Confirm only this final absent-state run
+   installs the new Codex identity.
+8. Supply an approved unsupported/changed status-output fixture and confirm
+   status is `unverifiable`, no mutation occurs, and explicit install/uninstall
+   exits nonzero after writing fixed JSON.
+9. With an isolated empty Belay home, run standalone
+   `mcp-config install --allow-codex-mcp-add`. Confirm private Belay
+   configuration/directories may be initialized for a stable ownership ID, but
+   no Local database or Keychain item is created.
+
+Cursor-expiry check:
+
+1. Open Attention and retain an issue-list cursor, issue `view_cursor`,
+   occurrence cursor if available, and fix eligibility without submitting.
+2. Apply the approved stale-epoch fixture or use an explicitly prepared
+   pre-migration database.
+3. Retry each stale issue cursor.
+4. Confirm HTTP returns fixed `410 belay.local/cursor-expired`.
+5. Confirm the browser closes selected detail, clears list/detail/occurrence,
+   catalog, coverage, eligibility, action-token, and dependent fix state,
+   refreshes both Attention lists, and requires explicit issue reselection.
+6. Confirm no fix declaration or retraction is automatically submitted.
 
 Evidence:
 
@@ -518,6 +854,12 @@ Evidence:
 - Started/finished:
 - Codex tool list/call transcript:
 - Claude Code tool list/call transcript:
+- Cross-agent issue/occurrence/cited-evidence transcript and answer:
+- Repeated quickstart/no-op evidence:
+- `--no-mcp` and restored-registration evidence:
+- Foreign-entry preservation evidence:
+- Archive-move Codex refusal, explicit uninstall, and absent-state reinstall evidence:
+- Unverifiable-output preservation evidence:
 - Notes/defect:
 
 ## A11 — Offline behavior
@@ -529,10 +871,18 @@ Pass criteria:
 
 - Existing and historical sessions remain readable in the browser.
 - Browser refresh and timeline reads succeed.
-- All six MCP tools remain discoverable and representative session/timeline
-  reads succeed.
+- Existing fix-attempt history remains readable; an eligible declaration and
+  retraction can be recorded through loopback without hosted access.
+- All nine MCP tools remain discoverable. Representative session/timeline
+  reads and the issue list → detail → cited-event lookup loop succeed.
+- `./bin/belay mcp-config status` completes without a Belay product-network
+  request. If a host CLI wrapper performs its own credential or network check,
+  record that separately; quickstart must remain fail-open.
 - No hosted login or Belay service is requested.
 - A new supported live-hook event can be imported while offline.
+- If the configured client uses a remotely hosted model, distinguish that
+  client's network behavior from Belay Local; it is not evidence of a Belay
+  product-network request.
 
 Evidence:
 
@@ -575,6 +925,14 @@ Pass criteria:
 - The canary is absent from Belay logs.
 - The canary is absent from SQLite database, WAL, and SHM bytes.
 - Minimized event metadata still appears without the prompt body.
+- Allowed MCP evidence is limited to documented minimized fields such as
+  executable/tool names, bounded option names, project-relative paths or
+  basenames, model/provider labels, and network scheme/host values.
+- Evidence strings remain structured untrusted observations and never enter
+  tool descriptions, fixed narrative, errors, or diagnostics.
+- Record separately whether the configured MCP client/model transmitted tool
+  results under its own policy. Do not attribute client/model processing to
+  Belay Local.
 
 Evidence:
 
@@ -620,12 +978,14 @@ Evidence:
 Run:
 
 ```bash
+./bin/belay mcp-config uninstall
+./bin/belay mcp-config status
 ./bin/belay hooks uninstall
 ./bin/belay hooks status
 ```
 
-Remove Belay from Codex and Claude Code MCP configuration and stop Belay.
-Then run the lower-side-effect path and stop it after the URL is printed:
+Do not manually remove or replace a foreign/unverifiable entry. Stop Belay,
+then run the lower-side-effect path and stop it after the URL is printed:
 
 ```bash
 ./bin/belay local --no-scan
@@ -634,6 +994,11 @@ Then run the lower-side-effect path and stop it after the URL is printed:
 Pass criteria:
 
 - Both monitor hooks are removed or reported absent.
+- Exact current or previously verified Belay MCP entries are removed and status
+  reports them absent. Foreign or unverifiable entries are preserved and make
+  explicit uninstall nonzero.
+- MCP uninstall does not remove hooks, Local history, Keychain data, or the
+  extracted package; hook uninstall does not remove MCP configuration.
 - Running `local --no-scan` does not reinstall either hook and does not open a
   browser.
 - Both clients no longer advertise Belay MCP after restart.
@@ -648,6 +1013,7 @@ Evidence:
 - Result:
 - Started/finished:
 - Hook uninstall/status:
+- MCP uninstall/status JSON:
 - Post-uninstall `local` hook status/browser observation:
 - MCP removal evidence:
 - Post-uninstall harness actions:
@@ -670,6 +1036,10 @@ Evidence:
 | A07c Overview truthfulness | PASS | | |
 | A07d Session-scoped findings >500 | PASS | | |
 | A07e Injection rendering | PASS | | |
+| A07f Fix declaration/retraction | PASS | | |
+| A07g Fix restart/MCP isolation | PASS | | |
+| A07h Exact recurrence monitoring | PASS | | |
+| A07i Monitoring catch-up/restart/retention | PASS | | |
 | A08 Codex hooks | PASS | | |
 | A09 Claude hooks | PASS | | |
 | A10 MCP | PASS | | |

@@ -7,6 +7,7 @@ import "time"
 const (
 	EventSchemaVersion = "belay.event.v1"
 	RedactionVersion   = "belay.redaction.v1"
+	MaxEventLookupIDs  = 50
 )
 
 type Event struct {
@@ -141,15 +142,16 @@ type OutcomeExplanation struct {
 }
 
 type FindingSummary struct {
-	FindingID     string    `json:"finding_id"`
-	SessionID     string    `json:"session_id"`
-	DetectedAt    time.Time `json:"detected_at"`
-	RuleID        string    `json:"rule_id"`
-	RuleVersion   string    `json:"rule_version"`
-	Severity      string    `json:"severity"`
-	Harness       string    `json:"harness"`
-	Confidence    string    `json:"confidence"`
-	CitedEventIDs []string  `json:"cited_event_ids"`
+	FindingID        string    `json:"finding_id"`
+	SessionID        string    `json:"session_id"`
+	ProjectScopeHint string    `json:"-"`
+	DetectedAt       time.Time `json:"detected_at"`
+	RuleID           string    `json:"rule_id"`
+	RuleVersion      string    `json:"rule_version"`
+	Severity         string    `json:"severity"`
+	Harness          string    `json:"harness"`
+	Confidence       string    `json:"confidence"`
+	CitedEventIDs    []string  `json:"cited_event_ids"`
 }
 
 type ActivityFilter struct {
@@ -197,6 +199,28 @@ type EventPage struct {
 	Data        []Event
 	Snapshot    int64
 	DataThrough time.Time
+}
+
+type EventLookupQuery struct {
+	SessionID string
+	EventIDs  []string
+}
+
+type EventLookupResult struct {
+	Data            []Event   `json:"data"`
+	RequestedCount  int       `json:"requested_count"`
+	FoundCount      int       `json:"found_count"`
+	MissingCount    int       `json:"missing_count"`
+	MissingEventIDs []string  `json:"missing_event_ids"`
+	DataThrough     time.Time `json:"data_through"`
+}
+
+type EventLookupSummary struct {
+	RequestedCount  int       `json:"requested_count"`
+	FoundCount      int       `json:"found_count"`
+	MissingCount    int       `json:"missing_count"`
+	MissingEventIDs []string  `json:"missing_event_ids"`
+	DataThrough     time.Time `json:"data_through"`
 }
 
 type ActivityQuery struct {
