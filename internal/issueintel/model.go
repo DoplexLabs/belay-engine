@@ -181,3 +181,39 @@ type FixStatus struct {
 	WeeklyCostBeforeUSD *float64  `json:"weekly_cost_before_usd"`
 	WeeklyCostAfterUSD  *float64  `json:"weekly_cost_after_usd"`
 }
+
+type UsageTotals struct {
+	SessionCount           int        `json:"session_count"`
+	WallDurationMS         int64      `json:"wall_duration_ms"`
+	WallDurationLowerBound bool       `json:"wall_duration_lower_bound"`
+	TotalTokens            int64      `json:"total_tokens"`
+	TokensLowerBound       bool       `json:"tokens_lower_bound"`
+	TotalCostUSD           float64    `json:"total_cost_usd"`
+	CostLowerBound         bool       `json:"cost_lower_bound"`
+	Harnesses              []string   `json:"harnesses"`
+	FirstActivityAt        *time.Time `json:"first_activity_at,omitempty"`
+	LastActivityAt         *time.Time `json:"last_activity_at,omitempty"`
+}
+
+type UsageWeek struct {
+	WeekStart              time.Time `json:"week_start"`
+	SessionCount           int       `json:"session_count"`
+	WallDurationMS         int64     `json:"wall_duration_ms"`
+	WallDurationLowerBound bool      `json:"wall_duration_lower_bound"`
+	TotalTokens            int64     `json:"total_tokens"`
+	TokensLowerBound       bool      `json:"tokens_lower_bound"`
+	TotalCostUSD           float64   `json:"total_cost_usd"`
+	CostLowerBound         bool      `json:"cost_lower_bound"`
+}
+
+type UsageSnapshot struct {
+	Totals   UsageTotals               `json:"totals"`
+	Weeks    []UsageWeek               `json:"weeks"`
+	Coverage transcript.CoverageCounts `json:"coverage"`
+}
+
+type IssueCostTotals struct {
+	AttributedUSD float64 `json:"attributed_usd"`
+	LowerBound    bool    `json:"lower_bound"`
+	IssueCount    int     `json:"issue_count"`
+}

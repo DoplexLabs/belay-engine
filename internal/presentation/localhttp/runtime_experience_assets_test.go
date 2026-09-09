@@ -83,7 +83,7 @@ func TestRuntimeExperienceCopyAndDataAttributes(t *testing.T) {
 	for _, required := range []string{
 		`<body data-experience="current">`,
 		`id="app-shell" data-experience="current"`,
-		`<span id="nav-brief-label">Brief</span>`,
+		`<span id="nav-brief-label">Report</span>`,
 		`<span id="nav-attention-label">Attention</span>`,
 		`<span id="nav-sessions-label">Sessions</span>`,
 	} {
@@ -93,16 +93,16 @@ func TestRuntimeExperienceCopyAndDataAttributes(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`navBrief: "Brief"`,
+		`navBrief: "Report"`,
 		`navAttention: "Attention"`,
 		`navSessions: "Sessions"`,
-		`briefLoading: "Preparing your local brief…"`,
-		`navBrief: "Home"`,
+		`briefLoading: "Preparing your report…"`,
+		`navBrief: "Report"`,
 		`navAttention: "Review"`,
 		`navSessions: "History"`,
-		`briefLoading: "Preparing Home…"`,
-		`briefOpenAttention: "Open Review"`,
-		`briefOpenSessions: "Open History"`,
+		`briefLoading: "Preparing your report…"`,
+		`briefOpenAttention: "Open all issues"`,
+		`briefOpenSessions: "Open history"`,
 		`attentionHeading: "Review"`,
 		`sessionsHeading: "History"`,
 		`document.body.dataset.experience = selected;`,

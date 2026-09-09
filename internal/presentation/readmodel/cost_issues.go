@@ -51,6 +51,9 @@ func WithCostIssueRepository(repository CostIssueRepository) Option {
 		if insights, ok := repository.(InsightRepository); ok {
 			service.insightRepository = insights
 		}
+		if reports, ok := repository.(UsageReportRepository); ok {
+			service.reportRepository = reports
+		}
 	}
 }
 

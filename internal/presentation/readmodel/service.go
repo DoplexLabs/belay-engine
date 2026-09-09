@@ -114,6 +114,7 @@ type Service struct {
 	transcriptRepository      TranscriptRepository
 	costIssueRepository       CostIssueRepository
 	insightRepository         InsightRepository
+	reportRepository          UsageReportRepository
 	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }

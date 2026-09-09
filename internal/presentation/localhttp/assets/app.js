@@ -18,18 +18,18 @@
   const runtimeSchemaVersion = "belay.local-runtime.v1";
   const experienceCopy = Object.freeze({
     current: Object.freeze({
-      navBrief: "Brief",
+      navBrief: "Report",
       navAttention: "Attention",
       navSessions: "Sessions",
-      briefEyebrow: "Developer Brief",
-      briefLoading: "Preparing your local brief…",
-      briefErrorTitle: "Brief unavailable",
+      briefEyebrow: "Belay Report",
+      briefLoading: "Preparing your report…",
+      briefErrorTitle: "Report unavailable",
       briefErrorDetail:
-        "Belay could not prepare the brief. Attention and Sessions remain available.",
-      briefOpenAttention: "Open Attention",
-      briefOpenSessions: "Open Sessions",
+        "Belay could not prepare the report. Attention and Sessions remain available.",
+      briefOpenAttention: "Open all issues",
+      briefOpenSessions: "Open history",
       briefRecentEmptyDetail:
-        "Older stored sessions remain available in Sessions.",
+        "Use /belay from Claude Code or Codex to review the top issue.",
       attentionAriaLabel: "Attention inbox",
       attentionEyebrow: "Findings",
       attentionHeading: "Attention",
@@ -41,18 +41,18 @@
       sessionsHeading: "Sessions",
     }),
     "value-first": Object.freeze({
-      navBrief: "Home",
+      navBrief: "Report",
       navAttention: "Review",
       navSessions: "History",
-      briefEyebrow: "Home",
-      briefLoading: "Preparing Home…",
-      briefErrorTitle: "Home unavailable",
+      briefEyebrow: "Belay Report",
+      briefLoading: "Preparing your report…",
+      briefErrorTitle: "Report unavailable",
       briefErrorDetail:
-        "Belay could not prepare Home. Review and History remain available.",
-      briefOpenAttention: "Open Review",
-      briefOpenSessions: "Open History",
+        "Belay could not prepare the report. Review and History remain available.",
+      briefOpenAttention: "Open all issues",
+      briefOpenSessions: "Open history",
       briefRecentEmptyDetail:
-        "Older stored sessions remain available in History.",
+        "Use /belay from Claude Code or Codex to review the top issue.",
       attentionAriaLabel: "Review findings",
       attentionEyebrow: "Findings and evidence gaps",
       attentionHeading: "Review",
@@ -398,6 +398,7 @@
     briefAgentCount: document.querySelector("#brief-agent-count"),
     briefOutcomeCount: document.querySelector("#brief-outcome-count"),
     briefLatestActivity: document.querySelector("#brief-latest-activity"),
+    reportSparkline: document.querySelector("#report-sparkline"),
     transcriptRefreshStatus: document.querySelector(
       "#transcript-refresh-status",
     ),
@@ -1198,7 +1199,7 @@
       renderDeveloperBrief();
     }
     try {
-      const response = await apiGet("/v1/developer-brief");
+      const response = await apiGet("/v1/report");
       if (generation !== state.briefRequestGeneration) return false;
       state.developerBrief = requireDeveloperBrief(response);
       state.briefStatus = "ready";
@@ -1225,26 +1226,23 @@
   }
 
   function requireDeveloperBrief(response) {
-    const brief =
-      isRecord(response && response.data) &&
-      readText(response.data.projection_version) ===
-        "belay.developer-brief.v1"
-        ? response.data
-        : response;
+    const brief = isRecord(response && response.data)
+      ? response.data
+      : response;
     if (
       !isRecord(brief) ||
-      readText(brief.projection_version) !== "belay.developer-brief.v1" ||
-      !["ready", "limited"].includes(readText(brief.status)) ||
-      !isRecord(brief.window) ||
-      !isRecord(brief.recent_summary) ||
-      !Array.isArray(brief.action_cards) ||
-      !Array.isArray(brief.recent_work) ||
-      !isRecord(brief.coverage) ||
-      !Array.isArray(brief.coverage.sources) ||
-      !Array.isArray(brief.coverage.limitations)
+      readText(brief.projection_version) !== "belay.report.v1" ||
+      !isRecord(brief.totals) ||
+      !Array.isArray(brief.weeks) ||
+      !Array.isArray(brief.top_issues) ||
+      !Array.isArray(brief.fixes) ||
+      !isRecord(brief.waste) ||
+      !isRecord(brief.about) ||
+      !Array.isArray(brief.about.notes)
     ) {
-      throw new Error("Local API returned an invalid developer brief.");
+      throw new Error("Local API returned an invalid report.");
     }
+    brief.top_issues = brief.top_issues.slice(0, 5).map(requireCostIssue);
     return brief;
   }
 
@@ -1263,27 +1261,238 @@
           "Loading the latest recorded activity…";
         elements.briefStatus.textContent = "";
       }
+      elements.reportSparkline.replaceChildren();
+      elements.reportSparkline.hidden = true;
       renderBriefSummary(null);
       return;
     }
-    const start = parseDate(brief.window.started_at);
-    const end = parseDate(brief.window.ended_at);
-    elements.briefWindow.textContent =
-      start && end
-        ? `${formatFullDate(start)} to ${formatFullDate(end)}`
-        : "Rolling 24-hour window";
-    elements.briefStatus.textContent = experiencePageText(
-      initializationInProgress()
-        ? "Initial import is still in progress; these values are partial."
-        : readText(brief.status) === "limited"
-          ? "Brief is limited. Review the coverage notes before relying on it."
-          : "Based on the activity Belay could evaluate.",
+    const harnesses = Array.isArray(brief.totals.harnesses)
+      ? brief.totals.harnesses.map(displayHarness).filter(Boolean)
+      : [];
+    elements.briefWindow.textContent = harnesses.length
+      ? `All retained activity across ${harnesses.join(" and ")}`
+      : "All retained activity across supported harnesses";
+    elements.briefStatus.textContent = initializationInProgress()
+      ? "Initial import is still in progress; these values are partial."
+      : `Updated ${formatRelativeTime(brief.generated_at) || "just now"}`;
+    renderReportTotals(brief);
+    renderReportIssues(brief.top_issues);
+    renderReportFixes(brief.fixes);
+    renderReportWaste(brief.waste);
+    renderReportAbout(brief.about);
+  }
+
+  function renderReportTotals(report) {
+    const totals = report.totals;
+    elements.briefSessionCount.textContent = formatNumber(totals.sessions);
+    elements.briefAgentCount.textContent =
+      `${totals.hours_lower_bound === true ? "≥" : ""}${formatNumber(totals.hours)} h`;
+    elements.briefOutcomeCount.textContent =
+      `${totals.tokens_lower_bound === true ? "≥" : ""}${formatNumber(totals.tokens)}`;
+    elements.briefLatestActivity.textContent =
+      `${totals.dollars_lower_bound === true ? "≥" : ""}${formatReportDollars(totals.dollars)}`;
+    const weeks = report.weeks.slice(-12);
+    const maximum = Math.max(
+      1,
+      ...weeks.map((week) => toFiniteNumber(week && week.session_count)),
     );
-    renderBriefSummary(brief.recent_summary);
-    renderBriefActions(brief);
-    renderBriefRecentWork(brief);
-    renderBriefAcrossAgents(brief.recent_summary);
-    renderBriefCoverage(brief);
+    const fragment = document.createDocumentFragment();
+    weeks.forEach((week) => {
+      const sessions = toFiniteNumber(week && week.session_count);
+      const bar = createElement("span", "report-spark-bar");
+      bar.style.height =
+        sessions === 0
+          ? "0"
+          : `${Math.max(8, (sessions / maximum) * 100)}%`;
+      bar.title = `${formatFullDate(parseDate(week && week.week_start)) || "Week"} · ${formatNumber(sessions)} ${sessions === 1 ? "session" : "sessions"} · ${week && week.cost_lower_bound === true ? "at least " : ""}${formatReportDollars(week && week.total_cost_usd)}`;
+      fragment.append(bar);
+    });
+    elements.reportSparkline.replaceChildren(fragment);
+    elements.reportSparkline.hidden = weeks.length === 0;
+  }
+
+  function renderReportIssues(issues) {
+    const fragment = document.createDocumentFragment();
+    issues.forEach((issue) => {
+      fragment.append(createReportIssueCard(issue));
+    });
+    elements.briefActionList.replaceChildren(fragment);
+    elements.briefActionsEmpty.hidden = issues.length !== 0;
+  }
+
+  function createReportIssueCard(issue) {
+    const card = createElement("article", "brief-action-card report-issue-card");
+    card.append(
+      createElement("h3", "", readText(issue.headline)),
+      createElement(
+        "p",
+        "brief-evidence",
+        [
+          formatIssueDollarCost(issue.cost),
+          formatIssueMinutes(issue.cost),
+          formatIssueTokens(issue.cost),
+          `${formatNumber(issue.session_count)} ${toFiniteNumber(issue.session_count) === 1 ? "session" : "sessions"}`,
+          reportTrendSummary(issue.trend),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+    );
+    if (issue.excerpts.length) {
+      card.append(createCostIssueExcerpt(issue.excerpts[0], true));
+    }
+    const fix = createElement("div", "report-issue-fix");
+    fix.append(
+      createElement(
+        "strong",
+        "",
+        readText(issue.suggested_fix.target_file) || "Agent instructions",
+      ),
+      createElement(
+        "p",
+        "",
+        readText(issue.suggested_fix.rationale) ||
+          "Add a durable project instruction for this pattern.",
+      ),
+    );
+    card.append(fix);
+    const evidence = createElement("div", "report-issue-evidence");
+    evidence.hidden = true;
+    issue.excerpts.forEach((excerpt) => {
+      evidence.append(createCostIssueExcerpt(excerpt, false));
+    });
+    const actions = createElement("div", "report-card-actions");
+    const fixButton = createElement(
+      "button",
+      "primary-button",
+      "Fix with Claude Code",
+    );
+    fixButton.type = "button";
+    fixButton.addEventListener("click", () => {
+      void copyText(`/belay ${readText(issue.issue_id)}`, fixButton);
+    });
+    const evidenceButton = createElement(
+      "button",
+      "secondary-button",
+      "Show evidence",
+    );
+    evidenceButton.type = "button";
+    evidenceButton.addEventListener("click", () => {
+      evidence.hidden = !evidence.hidden;
+      evidenceButton.textContent = evidence.hidden
+        ? "Show evidence"
+        : "Hide evidence";
+    });
+    actions.append(fixButton, evidenceButton);
+    card.append(actions, evidence);
+    return card;
+  }
+
+  function reportTrendSummary(trend) {
+    if (!Array.isArray(trend) || trend.length < 2) return "";
+    const values = trend.slice(-8).map((week) => toFiniteNumber(week && week.count));
+    const latest = values[values.length - 1];
+    const prior = values.slice(0, -1).reduce((sum, value) => sum + value, 0);
+    const average = prior / Math.max(1, values.length - 1);
+    if (latest > average) return "trending up";
+    if (latest < average) return "trending down";
+    return "steady";
+  }
+
+  function renderReportFixes(fixes) {
+    const values = Array.isArray(fixes) ? fixes.slice(0, 20) : [];
+    const fragment = document.createDocumentFragment();
+    values.forEach((status) => {
+      const fix = isRecord(status && status.fix) ? status.fix : {};
+      const card = createElement("article", "brief-session-card report-fix-card");
+      const stateLabel =
+        readText(fix.state) === "applied" ? "Applied" : "Proposed";
+      card.append(
+        createElement(
+          "strong",
+          "",
+          `${stateLabel}: ${readText(fix.target_file) || "configuration"}`,
+        ),
+        createElement(
+          "p",
+          "",
+          readText(fix.rule_text) || "Fix rule unavailable",
+        ),
+        createElement(
+          "small",
+          "",
+          status && status.verification_state === "deferred"
+            ? "Recurrence and cost verification deferred"
+            : "Verification pending",
+        ),
+      );
+      fragment.append(card);
+    });
+    elements.briefRecentList.replaceChildren(fragment);
+    elements.briefRecentEmpty.hidden = values.length !== 0;
+  }
+
+  function renderReportWaste(waste) {
+    const hasShare = waste && typeof waste.share_percent === "number";
+    const share = hasShare
+      ? `${formatNumber(waste.share_percent)}%`
+      : formatReportDollars(waste && waste.attributed_usd);
+    const prefix = waste && waste.lower_bound === true ? "At least " : "";
+    elements.briefAgentSummary.replaceChildren(
+      createElement("strong", "report-waste-number", `${prefix}${share}`),
+      createElement(
+        "p",
+        "",
+        hasShare
+          ? `${formatReportDollars(waste && waste.attributed_usd)} attributed to detected issues`
+          : waste && waste.total_incomplete === true
+            ? "Attributed waste; total spend is incomplete, so no percentage is shown."
+            : waste && waste.overlap_capped === true
+              ? "Attributed costs overlap total spend, so no percentage is shown."
+              : "Attributed to detected issues.",
+      ),
+    );
+  }
+
+  function renderReportAbout(about) {
+    const notes = Array.isArray(about && about.notes) ? about.notes : [];
+    elements.briefCoverage.open = false;
+    elements.briefCoverageSummary.textContent =
+      "Coverage, lower bounds, and calculation notes.";
+    const noteFragment = document.createDocumentFragment();
+    notes.forEach((note) => {
+      noteFragment.append(createElement("li", "", readText(note)));
+    });
+    elements.briefLimitations.replaceChildren(noteFragment);
+    const coverage = isRecord(about && about.transcript_coverage)
+      ? about.transcript_coverage
+      : {};
+    const sourceFragment = document.createDocumentFragment();
+    [
+      ["Sessions with transcript", coverage.with_transcript],
+      ["Partial transcript", coverage.partial],
+      ["Without transcript", coverage.without_transcript],
+      ["Transcript only", coverage.transcript_only],
+    ].forEach(([label, value]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", formatNumber(value)),
+      );
+      sourceFragment.append(row);
+    });
+    elements.briefSources.replaceChildren(sourceFragment);
+  }
+
+  function formatReportDollars(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "$0.00";
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
   }
 
   function renderBriefSummary(summary) {
@@ -2408,6 +2617,11 @@
     const formatted =
       minutes >= 10 ? Math.round(minutes).toString() : minutes.toFixed(1);
     return `${cost && cost.lower_bound ? "At least " : ""}${formatted} min`;
+  }
+
+  function formatIssueTokens(cost) {
+    const tokens = Math.max(0, toFiniteNumber(cost && cost.wasted_tokens));
+    return `${cost && cost.lower_bound ? "At least " : ""}${formatNumber(tokens)} tokens`;
   }
 
   function projectDisplayName(project) {

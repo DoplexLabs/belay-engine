@@ -35,7 +35,7 @@
             type="button"
             aria-current="page"
           >
-            <span id="nav-brief-label">Brief</span>
+            <span id="nav-brief-label">Report</span>
           </button>
           <button
             class="primary-nav-button"
@@ -86,9 +86,9 @@
           <div class="brief-scroll">
             <header class="brief-header">
               <div>
-                <p class="eyebrow" id="brief-eyebrow">Developer Brief</p>
-                <h1 id="brief-heading" tabindex="-1">Your last 24 hours</h1>
-                <p id="brief-window">Loading the latest recorded activity…</p>
+                <p class="eyebrow" id="brief-eyebrow">Belay Report</p>
+                <h1 id="brief-heading" tabindex="-1">Your agent usage</h1>
+                <p id="brief-window">Claude Code and Codex · all retained time</p>
               </div>
               <p
                 class="brief-status"
@@ -98,86 +98,42 @@
               ></p>
             </header>
 
-            <section class="brief-summary" aria-label="Recent activity summary">
+            <section class="brief-summary" aria-label="All-time usage summary">
               <dl>
                 <div>
-                  <dt>Evaluated sessions</dt>
+                  <dt>Sessions</dt>
                   <dd id="brief-session-count">—</dd>
                 </div>
                 <div>
-                  <dt>Agents represented</dt>
+                  <dt>Hours</dt>
                   <dd id="brief-agent-count">—</dd>
                 </div>
                 <div>
-                  <dt>Reported outcomes</dt>
+                  <dt>Tokens</dt>
                   <dd id="brief-outcome-count">—</dd>
                 </div>
                 <div>
-                  <dt>Latest activity</dt>
+                  <dt>Dollars</dt>
                   <dd id="brief-latest-activity">—</dd>
                 </div>
               </dl>
-            </section>
-
-            <section
-              class="transcript-overview"
-              aria-labelledby="transcript-overview-heading"
-            >
-              <div class="brief-section-heading">
-                <div>
-                  <p class="eyebrow">Encrypted local transcripts</p>
-                  <h2 id="transcript-overview-heading">Transcript coverage</h2>
-                </div>
-                <p
-                  class="transcript-refresh-status"
-                  id="transcript-refresh-status"
-                  role="status"
-                  aria-live="polite"
-                >
-                  Loading…
-                </p>
-              </div>
-              <p class="transcript-privacy-copy">
-                Full local transcripts are retained encrypted on this device.
-                Nothing is uploaded.
-              </p>
-              <dl class="transcript-coverage-counts">
-                <div>
-                  <dt>With transcript</dt>
-                  <dd id="transcript-with-count">—</dd>
-                </div>
-                <div>
-                  <dt>Partial</dt>
-                  <dd id="transcript-partial-count">—</dd>
-                </div>
-                <div>
-                  <dt>Without transcript</dt>
-                  <dd id="transcript-without-count">—</dd>
-                </div>
-                <div>
-                  <dt>Transcript only</dt>
-                  <dd id="transcript-only-count">—</dd>
-                </div>
-              </dl>
               <div
-                class="transcript-session-list"
-                id="transcript-session-list"
-                aria-live="polite"
+                class="report-sparkline"
+                id="report-sparkline"
+                role="img"
+                aria-label="Weekly session usage"
               ></div>
-              <p class="transcript-empty" id="transcript-empty" hidden>
-                No live or recent transcript sessions yet.
-              </p>
             </section>
 
             <div class="brief-loading" id="brief-loading">
               <span class="spinner" aria-hidden="true"></span>
-              <p id="brief-loading-text">Preparing your local brief…</p>
+              <p id="brief-loading-text">Preparing your report…</p>
             </div>
 
             <div class="brief-error" id="brief-error" role="alert" hidden>
-              <h2 id="brief-error-title">Brief unavailable</h2>
+              <h2 id="brief-error-title">Report unavailable</h2>
               <p id="brief-error-detail">
-                Belay could not prepare the brief. Attention and Sessions remain available.
+                Belay could not prepare the report. Attention and Sessions remain available.
               </p>
               <button class="secondary-button" id="brief-retry" type="button">
                 Try again
@@ -188,64 +144,115 @@
               <section class="brief-section" aria-labelledby="brief-actions-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Decisions</p>
-                    <h2 id="brief-actions-heading">What to review now</h2>
+                    <p class="eyebrow">Cost-ranked across sessions</p>
+                    <h2 id="brief-actions-heading">What keeps going wrong</h2>
                   </div>
                   <button
                     class="text-button"
                     id="brief-open-attention"
                     type="button"
                   >
-                    Open Attention
+                    Open all issues
                   </button>
                 </div>
                 <div class="brief-card-grid" id="brief-action-list"></div>
                 <div class="brief-empty" id="brief-actions-empty" hidden>
-                  <p id="brief-actions-empty-title"></p>
-                  <small id="brief-actions-empty-detail"></small>
+                  <p id="brief-actions-empty-title">No recurring issues detected yet</p>
+                  <small id="brief-actions-empty-detail">
+                    Belay keeps analyzing encrypted local transcripts as sessions arrive.
+                  </small>
                 </div>
               </section>
 
               <section class="brief-section" aria-labelledby="brief-recent-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Recent activity</p>
-                    <h2 id="brief-recent-heading">Recent work</h2>
+                    <p class="eyebrow">Applied and proposed</p>
+                    <h2 id="brief-recent-heading">Fixes</h2>
                   </div>
                   <button
                     class="text-button"
                     id="brief-open-sessions"
                     type="button"
                   >
-                    Open Sessions
+                    Open history
                   </button>
                 </div>
                 <div class="brief-recent-list" id="brief-recent-list"></div>
                 <div class="brief-empty" id="brief-recent-empty" hidden>
                   <p id="brief-recent-empty-title">
-                    No recorded agent activity in the last 24 hours
+                    No fixes recorded yet
                   </p>
                   <small id="brief-recent-empty-detail">
-                    Older stored sessions remain available in Sessions.
+                    Use /belay from Claude Code or Codex to review the top issue.
                   </small>
                 </div>
               </section>
 
-              <section class="brief-section" aria-labelledby="brief-agents-heading">
+              <section class="brief-section report-waste" aria-labelledby="brief-agents-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Activity mix</p>
-                    <h2 id="brief-agents-heading">Across agents</h2>
+                    <p class="eyebrow">Attributed spend</p>
+                    <h2 id="brief-agents-heading">Waste</h2>
                   </div>
                 </div>
                 <div class="brief-agent-summary" id="brief-agent-summary"></div>
               </section>
 
               <details class="brief-coverage" id="brief-coverage">
-                <summary>Coverage and limitations</summary>
+                <summary>About this data</summary>
                 <p id="brief-coverage-summary"></p>
                 <ul id="brief-limitations"></ul>
                 <dl id="brief-sources"></dl>
+                <section
+                  class="transcript-overview"
+                  aria-labelledby="transcript-overview-heading"
+                >
+                  <div class="brief-section-heading">
+                    <div>
+                      <p class="eyebrow">Encrypted local transcripts</p>
+                      <h2 id="transcript-overview-heading">Transcript coverage</h2>
+                    </div>
+                    <p
+                      class="transcript-refresh-status"
+                      id="transcript-refresh-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      Loading…
+                    </p>
+                  </div>
+                  <p class="transcript-privacy-copy">
+                    Full local transcripts are retained encrypted on this device.
+                    Nothing is uploaded.
+                  </p>
+                  <dl class="transcript-coverage-counts">
+                    <div>
+                      <dt>With transcript</dt>
+                      <dd id="transcript-with-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Partial</dt>
+                      <dd id="transcript-partial-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Without transcript</dt>
+                      <dd id="transcript-without-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Transcript only</dt>
+                      <dd id="transcript-only-count">—</dd>
+                    </div>
+                  </dl>
+                  <div
+                    class="transcript-session-list"
+                    id="transcript-session-list"
+                    aria-live="polite"
+                  ></div>
+                  <p class="transcript-empty" id="transcript-empty" hidden>
+                    No live or recent transcript sessions yet.
+                  </p>
+                </section>
               </details>
             </div>
           </div>
