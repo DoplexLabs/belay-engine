@@ -14,6 +14,7 @@
   });
   const mutationRequestDeadlineMilliseconds = 15_000;
   const initializationPollMilliseconds = 2_000;
+  const transcriptPollMilliseconds = 2_000;
   const runtimeSchemaVersion = "belay.local-runtime.v1";
   const experienceCopy = Object.freeze({
     current: Object.freeze({
@@ -264,6 +265,11 @@
     initializationRequestInFlight: false,
     initializationPollGeneration: 0,
     initializationPollTimer: 0,
+    transcriptStatus: null,
+    transcriptStatusStale: false,
+    transcriptRequestInFlight: false,
+    transcriptPollGeneration: 0,
+    transcriptPollTimer: 0,
     developerBrief: null,
     briefStatus: "idle",
     briefError: "",
@@ -387,6 +393,21 @@
     briefAgentCount: document.querySelector("#brief-agent-count"),
     briefOutcomeCount: document.querySelector("#brief-outcome-count"),
     briefLatestActivity: document.querySelector("#brief-latest-activity"),
+    transcriptRefreshStatus: document.querySelector(
+      "#transcript-refresh-status",
+    ),
+    transcriptWithCount: document.querySelector("#transcript-with-count"),
+    transcriptPartialCount: document.querySelector(
+      "#transcript-partial-count",
+    ),
+    transcriptWithoutCount: document.querySelector(
+      "#transcript-without-count",
+    ),
+    transcriptOnlyCount: document.querySelector("#transcript-only-count"),
+    transcriptSessionList: document.querySelector(
+      "#transcript-session-list",
+    ),
+    transcriptEmpty: document.querySelector("#transcript-empty"),
     briefLoading: document.querySelector("#brief-loading"),
     briefLoadingText: document.querySelector("#brief-loading-text"),
     briefError: document.querySelector("#brief-error"),
@@ -811,6 +832,12 @@
     await requestInitializationStatus();
     await refreshActiveViewForInitialization(false);
     scheduleInitializationPoll();
+    void startTranscriptPolling();
+  }
+
+  async function startTranscriptPolling() {
+    await requestTranscriptStatus();
+    scheduleTranscriptPoll();
   }
 
   async function loadRuntimeExperience() {
@@ -924,6 +951,129 @@
     } finally {
       state.initializationRequestInFlight = false;
     }
+  }
+
+  async function requestTranscriptStatus() {
+    if (state.transcriptRequestInFlight) return false;
+    state.transcriptRequestInFlight = true;
+    const generation = ++state.transcriptPollGeneration;
+    try {
+      const response = await apiGet("/v1/transcript-status");
+      if (generation !== state.transcriptPollGeneration) return false;
+      state.transcriptStatus = requireTranscriptStatus(response);
+      state.transcriptStatusStale = false;
+      renderTranscriptStatus();
+      return true;
+    } catch {
+      if (generation !== state.transcriptPollGeneration) return false;
+      state.transcriptStatusStale = true;
+      renderTranscriptStatus();
+      return false;
+    } finally {
+      state.transcriptRequestInFlight = false;
+    }
+  }
+
+  function requireTranscriptStatus(response) {
+    const coverage = isRecord(response) ? response.coverage : null;
+    const sessions = isRecord(response) && Array.isArray(response.sessions)
+      ? response.sessions
+      : null;
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== "belay.transcript-status.v1" ||
+      !isRecord(coverage) ||
+      sessions === null ||
+      sessions.length > 10
+    ) {
+      throw new Error("Local API returned an invalid transcript status.");
+    }
+    const counts = {
+      with_transcript: toOptionalCount(coverage.with_transcript),
+      partial: toOptionalCount(coverage.partial),
+      without_transcript: toOptionalCount(coverage.without_transcript),
+      transcript_only: toOptionalCount(coverage.transcript_only),
+    };
+    if (Object.values(counts).some((value) => value === null)) {
+      throw new Error("Local API returned invalid transcript coverage.");
+    }
+    return {
+      coverage: counts,
+      sessions: sessions.map((session) => ({
+        session_key: readText(session && session.session_key),
+        agent: readText(session && session.agent),
+        project: readText(session && session.project),
+        last_activity_at: readText(session && session.last_activity_at),
+        coverage: readText(session && session.coverage),
+        turn_count: toOptionalCount(session && session.turn_count),
+        active: session && session.active === true,
+      })),
+    };
+  }
+
+  function renderTranscriptStatus() {
+    const status = state.transcriptStatus;
+    if (!status) {
+      elements.transcriptRefreshStatus.textContent =
+        "Transcript status unavailable · retrying every 2 seconds";
+      elements.transcriptRefreshStatus.dataset.state = "unavailable";
+      return;
+    }
+    const coverage = status.coverage;
+    elements.transcriptWithCount.textContent = formatNumber(
+      coverage.with_transcript,
+    );
+    elements.transcriptPartialCount.textContent = formatNumber(
+      coverage.partial,
+    );
+    elements.transcriptWithoutCount.textContent = formatNumber(
+      coverage.without_transcript,
+    );
+    elements.transcriptOnlyCount.textContent = formatNumber(
+      coverage.transcript_only,
+    );
+    elements.transcriptRefreshStatus.textContent = state.transcriptStatusStale
+      ? "Last transcript status is stale · retrying every 2 seconds"
+      : "Updates every 2 seconds";
+    elements.transcriptRefreshStatus.dataset.state =
+      state.transcriptStatusStale ? "stale" : "current";
+    elements.transcriptSessionList.replaceChildren();
+    status.sessions.forEach((session) => {
+      const row = document.createElement("div");
+      row.className = "transcript-session-row";
+      row.dataset.active = session.active ? "true" : "false";
+      const project = document.createElement("strong");
+      project.textContent =
+        session.project ||
+        displayHarness(session.agent) ||
+        "Local agent session";
+      const detail = document.createElement("span");
+      const activity = formatRelativeTime(session.last_activity_at);
+      const turns = session.turn_count === null
+        ? "turn count unavailable"
+        : `${formatNumber(session.turn_count)} ${
+            session.turn_count === 1 ? "turn" : "turns"
+          }`;
+      detail.textContent = `${
+        session.active ? "Live" : readableLabel(session.coverage, "Recent")
+      } · ${turns} · ${activity}`;
+      row.append(project, detail);
+      elements.transcriptSessionList.append(row);
+    });
+    elements.transcriptEmpty.hidden = status.sessions.length !== 0;
+  }
+
+  function scheduleTranscriptPoll() {
+    if (state.transcriptRequestInFlight || state.transcriptPollTimer) return;
+    state.transcriptPollTimer = globalThis.setTimeout(() => {
+      state.transcriptPollTimer = 0;
+      void pollTranscriptStatus();
+    }, transcriptPollMilliseconds);
+  }
+
+  async function pollTranscriptStatus() {
+    await requestTranscriptStatus();
+    scheduleTranscriptPoll();
   }
 
   function requireInitializationStatus(response) {

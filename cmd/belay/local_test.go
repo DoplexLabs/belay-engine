@@ -24,6 +24,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 func TestPrepareRuntimeBootstrapsVerifiedPackagedSiblingPin(t *testing.T) {
@@ -403,11 +404,17 @@ func TestRunLocalLaunchRejectsInvalidExperienceBeforeRuntimePreparation(t *testi
 
 func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	previousScan := discoverAndScan
+	previousTranscriptScan := scanTranscripts
+	previousHistoricalTranscriptScan := scanHistoricalTranscripts
+	previousRecentTranscriptImport := importRecentTranscriptsOnce
 	previousStartServer := startLocalHTTPServer
 	previousOpenStore := openLocalCommandStore
 	previousOpenBrowser := openBrowser
 	t.Cleanup(func() {
 		discoverAndScan = previousScan
+		scanTranscripts = previousTranscriptScan
+		scanHistoricalTranscripts = previousHistoricalTranscriptScan
+		importRecentTranscriptsOnce = previousRecentTranscriptImport
 		startLocalHTTPServer = previousStartServer
 		openLocalCommandStore = previousOpenStore
 		openBrowser = previousOpenBrowser
@@ -424,6 +431,36 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 		close(scanStarted)
 		<-releaseScan
 		return numbat.Inventory{}, nil, errors.New("private scan failure")
+	}
+	fullTranscriptScanCalls := make(chan struct{}, 1)
+	historicalTranscriptScanCalls := make(chan struct{}, 1)
+	recentTranscriptImportCalls := make(chan struct{}, 8)
+	scanTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		fullTranscriptScanCalls <- struct{}{}
+		return nil
+	}
+	scanHistoricalTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		historicalTranscriptScanCalls <- struct{}{}
+		return nil
+	}
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		select {
+		case recentTranscriptImportCalls <- struct{}{}:
+		default:
+		}
+		return nil
 	}
 	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
 	openLocalCommandStore = func(path string) (*local.Store, error) {
@@ -536,6 +573,21 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	if strings.Contains(stderr.String(), "private scan failure") {
 		t.Fatalf("quickstart scan warning leaked error payload: %q", stderr.String())
 	}
+	if len(fullTranscriptScanCalls) != 0 {
+		t.Fatalf(
+			"quickstart used full transcript scanner: scan=%d",
+			len(fullTranscriptScanCalls),
+		)
+	}
+	if len(historicalTranscriptScanCalls) != 1 {
+		t.Fatalf(
+			"historical transcript scans = %d, want 1",
+			len(historicalTranscriptScanCalls),
+		)
+	}
+	if len(recentTranscriptImportCalls) == 0 {
+		t.Fatal("recent transcript tailer did not run")
+	}
 }
 
 type fakeRunningLocalServer struct {
@@ -566,7 +618,8 @@ func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {
 		"monitor-only hooks",
 		"Codex and Claude Code",
 		"loopback-only",
-		"No prompts, completions, file contents, or telemetry",
+		"Full local transcripts are retained encrypted on-device",
+		"Nothing is uploaded",
 		"read-only user-scoped MCP registration",
 		"--no-mcp",
 		"--allow-codex-mcp-add",
@@ -677,6 +730,8 @@ exit 8`)
 }
 
 func TestScanAgentsAndDoctorInventoryProjectionIsPayloadFree(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	const inventoryJSON = `[
 		{
 			"agent":"codex",
@@ -807,6 +862,120 @@ func TestDoctorAnalysisStatusExposesCatalogAndCoverage(t *testing.T) {
 		!status.Coverage.Complete ||
 		status.Coverage.CurrentSessions != 0 {
 		t.Fatalf("doctor analysis status = %+v", status)
+	}
+}
+
+type fakeDoctorTranscriptRepository struct {
+	coverage transcript.CoverageCounts
+	err      error
+}
+
+func (repository fakeDoctorTranscriptRepository) TranscriptCoverage(
+	context.Context,
+) (transcript.CoverageCounts, error) {
+	return repository.coverage, repository.err
+}
+
+func TestDoctorTranscriptCoverageExposesCompletePartialAndWithoutCounts(
+	t *testing.T,
+) {
+	want := transcript.CoverageCounts{
+		CanonicalSessions:  8,
+		TranscriptSessions: 6,
+		WithTranscript:     5,
+		WithoutTranscript:  3,
+		Complete:           3,
+		Partial:            2,
+		Live:               1,
+	}
+	got, err := loadDoctorTranscriptCoverage(
+		context.Background(),
+		fakeDoctorTranscriptRepository{coverage: want},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("doctor transcript coverage = %+v, want %+v", got, want)
+	}
+}
+
+func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
+	previousImport := importRecentTranscriptsOnce
+	t.Cleanup(func() {
+		importRecentTranscriptsOnce = previousImport
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan struct{}, 2)
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		calls <- struct{}{}
+		return errors.New("private transcript payload")
+	}
+	warnings := 0
+	pollTranscripts(
+		ctx,
+		localapp.Paths{},
+		nil,
+		time.Millisecond,
+		func() {
+			warnings++
+			if warnings == 2 {
+				cancel()
+			}
+		},
+	)
+	if len(calls) != 2 {
+		t.Fatalf("transcript import calls = %d, want 2", len(calls))
+	}
+	if warnings != 2 {
+		t.Fatalf("transcript polling warnings = %d, want 2", warnings)
+	}
+}
+
+func TestRunScanImportsTranscripts(t *testing.T) {
+	previousScan := scanTranscripts
+	previousOpen := openLocalCommandStore
+	t.Cleanup(func() {
+		scanTranscripts = previousScan
+		openLocalCommandStore = previousOpen
+	})
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+	transcriptScans := 0
+	scanTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		transcriptScans++
+		return nil
+	}
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.OpenWithOptions(path, local.OpenOptions{
+			KeyProvider: keyProvider,
+		})
+	}
+	binary := writeInventoryNumbat(t, "[]")
+	var stdout, stderr bytes.Buffer
+	if err := runScan(
+		context.Background(),
+		[]string{
+			"--home", t.TempDir(),
+			"--numbat", binary,
+			"--allow-unverified-numbat",
+		},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatalf("runScan() error = %v stderr=%s", err, stderr.String())
+	}
+	if transcriptScans != 1 {
+		t.Fatalf("transcript scans = %d, want 1", transcriptScans)
 	}
 }
 

@@ -244,8 +244,7 @@ Commands:
 
 belay quickstart changes only local Belay state and detected Codex/Claude hook
 and user-scoped MCP configuration. Hooks are monitor-only, MCP is read-only,
-and neither blocks agent actions. Belay Local keeps minimized evidence
-on-device and does not send prompts, completions, file contents, or product
-telemetry. Use --no-mcp to skip MCP registration and --no-open to print the
-loopback URL without opening a browser.`)
+and neither blocks agent actions. Belay Local retains full local transcripts
+encrypted on-device. Nothing is uploaded. Use --no-mcp to skip MCP registration
+and --no-open to print the loopback URL without opening a browser.`)
 }

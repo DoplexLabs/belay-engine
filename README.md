@@ -250,8 +250,11 @@ Exact Codex and Claude Code configuration examples are in
   according to that product's privacy policy and the user's configuration.
 - Prompt bodies, transcripts, file contents, raw endpoint identity, and raw
   evidence paths are excluded from canonical events.
+- Belay Local separately retains secret-scrubbed transcript turns in encrypted
+  on-device storage for loopback-only local analysis. Belay does not upload
+  this content.
 - Minimized envelope/index fields remain plaintext in SQLite; canonical event
-  JSON and finding citations are encrypted.
+  JSON, finding citations, and transcript payloads are encrypted.
 - Command summaries may retain the executable name and bounded option names.
   File resources retain a project-relative path or basename, and network
   resources retain scheme plus host. Minimized evidence may also include

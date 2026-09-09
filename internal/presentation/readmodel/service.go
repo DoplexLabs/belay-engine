@@ -111,6 +111,7 @@ type Service struct {
 	attentionFamilyRepository AttentionFamilyRepository
 	issueCursorCodec          IssueCursorCodec
 	fixMonitoringRepository   FixMonitoringRepository
+	transcriptRepository      TranscriptRepository
 	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }

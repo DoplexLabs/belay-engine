@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 func TestEncryptedEventAndFindingRoundTripAndDatabaseCanaryAbsence(t *testing.T) {
@@ -149,6 +150,63 @@ func TestEncryptedStoreFailsClosedWithMissingOrWrongKey(t *testing.T) {
 		t.Fatal("Open() with wrong key unexpectedly succeeded")
 	} else if !strings.Contains(err.Error(), "does not unlock this store") {
 		t.Fatalf("wrong-key error = %v", err)
+	}
+}
+
+func TestTranscriptPayloadEncodingParticipatesInStartupValidation(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "transcript-encoding.sqlite")
+	provider := newMemoryKeyProvider()
+	store, err := Open(path, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := transcriptTestSession(
+		"ses_transcript_encoding_validation",
+		transcript.CoverageComplete,
+	)
+	turn := transcriptTestTurn(
+		"turn-transcript-encoding-validation",
+		"source-transcript-encoding-validation",
+		session.SessionKey,
+		0,
+		time.Date(2026, 9, 9, 11, 30, 0, 0, time.UTC),
+		transcript.RoleSystem,
+		transcript.Payload{JSONLByteOffset: 0},
+	)
+	if _, err := store.AppendTranscriptBatch(ctx, session, []transcript.Turn{turn}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withMutationTx(ctx, tx, mutationTranscriptIngestion, func() error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE transcript_turns
+			SET payload_encoding = 'unsupported.test'
+			WHERE turn_id = ?`,
+			turn.TurnID,
+		)
+		return err
+	}); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path, provider); err == nil {
+		t.Fatal("Open() accepted unsupported transcript payload encoding")
+	} else if !strings.Contains(err.Error(), "unsupported payload encoding") {
+		t.Fatalf("Open() error = %v", err)
 	}
 }
 

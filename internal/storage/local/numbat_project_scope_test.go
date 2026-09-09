@@ -30,8 +30,8 @@ func TestMigration007FreshStorePersistsAndQueriesOpaqueFindingScope(t *testing.T
 	).Scan(&migrationCount); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrationCount != 13 {
-		t.Fatalf("migration count = %d, want 13", migrationCount)
+	if migrationCount != 14 {
+		t.Fatalf("migration count = %d, want 14", migrationCount)
 	}
 	if err := store.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)

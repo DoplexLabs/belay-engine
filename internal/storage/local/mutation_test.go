@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 func TestMutationGuardsRemainValidAcrossStoresAndConcurrentWrites(t *testing.T) {
@@ -124,8 +126,8 @@ func TestMutationGuardsAreInstalledOnEveryPooledConnection(t *testing.T) {
 		).Scan(&triggerCount); err != nil {
 			t.Fatalf("connection %d inspect guards: %v", index, err)
 		}
-		if triggerCount != 39 {
-			t.Fatalf("connection %d guard count = %d, want 39", index, triggerCount)
+		if triggerCount != 43 {
+			t.Fatalf("connection %d guard count = %d, want 43", index, triggerCount)
 		}
 		if _, err := connection.ExecContext(ctx,
 			"UPDATE events SET action = 'unauthorized' WHERE event_id = ?",
@@ -167,5 +169,67 @@ func TestMigrationDropsLegacyPersistentMutationTriggers(t *testing.T) {
 	}
 	if persistent != 0 {
 		t.Fatalf("persistent mutation trigger count = %d, want 0", persistent)
+	}
+}
+
+func TestTranscriptMutationGuardsRequireTranscriptPurpose(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	session := transcriptTestSession(
+		"ses_transcript_mutation_guards",
+		transcript.CoverageLive,
+	)
+	turn := transcriptTestTurn(
+		"turn-transcript-mutation-guards",
+		"source-transcript-mutation-guards",
+		session.SessionKey,
+		0,
+		time.Date(2026, 9, 9, 19, 30, 0, 0, time.UTC),
+		transcript.RoleSystem,
+		transcript.Payload{JSONLByteOffset: 0},
+	)
+	if _, err := store.AppendTranscriptBatch(ctx, session, []transcript.Turn{turn}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, statement := range []string{
+		"UPDATE transcript_turns SET turn_index = turn_index + 1",
+		"DELETE FROM transcript_turns",
+		"UPDATE transcript_sessions SET turn_count = 0",
+		"DELETE FROM transcript_sessions",
+	} {
+		if _, err := store.db.ExecContext(ctx, statement); err == nil {
+			t.Fatalf("unauthorized transcript mutation succeeded: %s", statement)
+		}
+	}
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withMutationTx(ctx, tx, mutationTranscriptRetention, func() error {
+		_, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM transcript_sessions WHERE session_key = ?",
+			session.SessionKey,
+		)
+		return err
+	}); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var sessions, turns int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM transcript_sessions),
+			(SELECT COUNT(*) FROM transcript_turns)`,
+	).Scan(&sessions, &turns); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 || turns != 0 {
+		t.Fatalf("retention delete left sessions/turns = %d/%d", sessions, turns)
 	}
 }

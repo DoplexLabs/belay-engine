@@ -9,7 +9,8 @@ import (
 
 // RetentionPolicy has no implicit defaults. At least one positive bound must be
 // supplied by the caller. MaxPayloadBytes covers encrypted event, finding,
-// enrichment, and issue-projection payload blobs, not indexes or page overhead.
+// enrichment, issue-projection, and transcript-turn payload blobs, not indexes
+// or page overhead.
 type RetentionPolicy struct {
 	MaxAge          time.Duration `json:"max_age"`
 	MaxEventCount   int           `json:"max_event_count"`
@@ -17,27 +18,35 @@ type RetentionPolicy struct {
 }
 
 type RetentionDiagnostics struct {
-	Policy               RetentionPolicy `json:"policy"`
-	CurrentEventCount    int             `json:"current_event_count"`
-	CurrentFindingCount  int             `json:"current_finding_count"`
-	CurrentPayloadBytes  int64           `json:"current_payload_bytes"`
-	EligibleEventCount   int             `json:"eligible_event_count"`
-	EligibleFindingCount int             `json:"eligible_finding_count"`
-	EligiblePayloadBytes int64           `json:"eligible_payload_bytes"`
-	OldestPayloadAt      *time.Time      `json:"oldest_payload_at,omitempty"`
-	NewestPayloadAt      *time.Time      `json:"newest_payload_at,omitempty"`
-	EvaluatedAt          time.Time       `json:"evaluated_at"`
+	Policy                         RetentionPolicy `json:"policy"`
+	CurrentEventCount              int             `json:"current_event_count"`
+	CurrentFindingCount            int             `json:"current_finding_count"`
+	CurrentTranscriptTurnCount     int             `json:"current_transcript_turn_count"`
+	CurrentPayloadBytes            int64           `json:"current_payload_bytes"`
+	CurrentTranscriptPayloadBytes  int64           `json:"current_transcript_payload_bytes"`
+	EligibleEventCount             int             `json:"eligible_event_count"`
+	EligibleFindingCount           int             `json:"eligible_finding_count"`
+	EligibleTranscriptTurnCount    int             `json:"eligible_transcript_turn_count"`
+	EligiblePayloadBytes           int64           `json:"eligible_payload_bytes"`
+	EligibleTranscriptPayloadBytes int64           `json:"eligible_transcript_payload_bytes"`
+	OldestPayloadAt                *time.Time      `json:"oldest_payload_at,omitempty"`
+	NewestPayloadAt                *time.Time      `json:"newest_payload_at,omitempty"`
+	EvaluatedAt                    time.Time       `json:"evaluated_at"`
 }
 
 type PruneResult struct {
-	Before             RetentionDiagnostics `json:"before"`
-	PrunedEventCount   int                  `json:"pruned_event_count"`
-	PrunedFindingCount int                  `json:"pruned_finding_count"`
-	PrunedPayloadBytes int64                `json:"pruned_payload_bytes"`
-	AfterEventCount    int                  `json:"after_event_count"`
-	AfterFindingCount  int                  `json:"after_finding_count"`
-	AfterPayloadBytes  int64                `json:"after_payload_bytes"`
-	Maintenance        MaintenanceResult    `json:"maintenance"`
+	Before                       RetentionDiagnostics `json:"before"`
+	PrunedEventCount             int                  `json:"pruned_event_count"`
+	PrunedFindingCount           int                  `json:"pruned_finding_count"`
+	PrunedTranscriptTurnCount    int                  `json:"pruned_transcript_turn_count"`
+	PrunedPayloadBytes           int64                `json:"pruned_payload_bytes"`
+	PrunedTranscriptPayloadBytes int64                `json:"pruned_transcript_payload_bytes"`
+	AfterEventCount              int                  `json:"after_event_count"`
+	AfterFindingCount            int                  `json:"after_finding_count"`
+	AfterTranscriptTurnCount     int                  `json:"after_transcript_turn_count"`
+	AfterPayloadBytes            int64                `json:"after_payload_bytes"`
+	AfterTranscriptPayloadBytes  int64                `json:"after_transcript_payload_bytes"`
+	Maintenance                  MaintenanceResult    `json:"maintenance"`
 }
 
 type MaintenanceResult struct {
@@ -175,6 +184,91 @@ func (s *Store) Prune(
 				result.PrunedPayloadBytes += item.bytes
 			}
 		}
+		transcriptSessions, err := affectedTranscriptRetentionSessions(
+			ctx,
+			tx,
+			items,
+		)
+		if err != nil {
+			return err
+		}
+		if len(transcriptSessions) > 0 {
+			if err := withMutationTx(
+				ctx,
+				tx,
+				mutationTranscriptRetention,
+				func() error {
+					for _, item := range items {
+						if !item.selected || item.recordType != "transcript_turn" {
+							continue
+						}
+						deleted, err := tx.ExecContext(
+							ctx,
+							"DELETE FROM transcript_turns WHERE turn_id = ?",
+							item.recordID,
+						)
+						if err != nil {
+							return errors.New("delete retained transcript turn")
+						}
+						count, err := deleted.RowsAffected()
+						if err != nil || count != 1 {
+							return errors.New(
+								"transcript turn changed during retention prune",
+							)
+						}
+						result.PrunedTranscriptTurnCount++
+						result.PrunedTranscriptPayloadBytes += item.bytes
+						result.PrunedPayloadBytes += item.bytes
+					}
+					for sessionKey := range transcriptSessions {
+						var retainedTurns int
+						if err := tx.QueryRowContext(ctx, `
+							SELECT COUNT(*)
+							FROM transcript_turns
+							WHERE session_key = ?`,
+							sessionKey,
+						).Scan(&retainedTurns); err != nil {
+							return errors.New("count retained transcript turns")
+						}
+						if retainedTurns == 0 {
+							deleted, err := tx.ExecContext(ctx, `
+								DELETE FROM transcript_sessions
+								WHERE session_key = ?`,
+								sessionKey,
+							)
+							if err != nil {
+								return errors.New("delete empty transcript session")
+							}
+							count, err := deleted.RowsAffected()
+							if err != nil || count != 1 {
+								return errors.New(
+									"transcript session changed during retention prune",
+								)
+							}
+							continue
+						}
+						if err := reindexTranscriptSessionTx(
+							ctx,
+							tx,
+							sessionKey,
+						); err != nil {
+							return err
+						}
+						if err := recomputeTranscriptSessionTx(
+							ctx,
+							tx,
+							sessionKey,
+							formatProjectionTime(now),
+						); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM session_scopes
 			WHERE NOT EXISTS (
@@ -241,7 +335,7 @@ func (s *Store) Prune(
 		relevantPrune := issueRevisionDeleted ||
 			removedAnalysisRevisions > 0 ||
 			removedJobCount > 0 ||
-			hasSelectedRetentionItem(items)
+			hasSelectedCanonicalRetentionItem(items)
 		finalProjectionChange := issueRevisionDeleted ||
 			removedAnalysisRevisions > 0 ||
 			hasSelectedRetentionRecordType(items, "event")
@@ -292,14 +386,18 @@ func (s *Store) Prune(
 	}
 	result.AfterEventCount = before.CurrentEventCount - result.PrunedEventCount
 	result.AfterFindingCount = before.CurrentFindingCount - result.PrunedFindingCount
+	result.AfterTranscriptTurnCount = before.CurrentTranscriptTurnCount -
+		result.PrunedTranscriptTurnCount
 	result.AfterPayloadBytes = before.CurrentPayloadBytes - result.PrunedPayloadBytes
+	result.AfterTranscriptPayloadBytes = before.CurrentTranscriptPayloadBytes -
+		result.PrunedTranscriptPayloadBytes
 	result.Maintenance = s.runPostPruneMaintenance(ctx)
 	return result, nil
 }
 
-func hasSelectedRetentionItem(items []retentionItem) bool {
+func hasSelectedCanonicalRetentionItem(items []retentionItem) bool {
 	for _, item := range items {
-		if item.selected {
+		if item.selected && item.recordType != "transcript_turn" {
 			return true
 		}
 	}
@@ -396,6 +494,16 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 						AND frj.state <> 'complete'
 				) AS pinned
 			FROM issue_occurrences
+			UNION ALL
+			SELECT
+				'transcript_turn' AS record_type,
+				turn_id AS record_id,
+				occurred_at,
+				turn_index AS source_sequence,
+				LENGTH(payload) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM transcript_turns
 		)
 		ORDER BY occurred_at ASC, source_sequence ASC, record_id ASC, record_type ASC`)
 	if err != nil {
@@ -458,11 +566,16 @@ func evaluateRetention(
 	recordIndexes := make(map[string]int)
 	for index, item := range items {
 		diagnostics.CurrentPayloadBytes += item.bytes
-		recordIndexes[item.recordID] = index
+		if item.recordType != "transcript_turn" {
+			recordIndexes[item.recordID] = index
+		}
 		if item.recordType == "event" {
 			diagnostics.CurrentEventCount++
 		} else if item.recordType == "finding" {
 			diagnostics.CurrentFindingCount++
+		} else if item.recordType == "transcript_turn" {
+			diagnostics.CurrentTranscriptTurnCount++
+			diagnostics.CurrentTranscriptPayloadBytes += item.bytes
 		}
 	}
 
@@ -542,9 +655,36 @@ func evaluateRetention(
 			diagnostics.EligibleEventCount++
 		} else if item.recordType == "finding" {
 			diagnostics.EligibleFindingCount++
+		} else if item.recordType == "transcript_turn" {
+			diagnostics.EligibleTranscriptTurnCount++
+			diagnostics.EligibleTranscriptPayloadBytes += item.bytes
 		}
 	}
 	return diagnostics
+}
+
+func affectedTranscriptRetentionSessions(
+	ctx context.Context,
+	tx *sql.Tx,
+	items []retentionItem,
+) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+	for _, item := range items {
+		if !item.selected || item.recordType != "transcript_turn" {
+			continue
+		}
+		var sessionKey string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT session_key
+			FROM transcript_turns
+			WHERE turn_id = ?`,
+			item.recordID,
+		).Scan(&sessionKey); err != nil {
+			return nil, errors.New("resolve retained transcript session")
+		}
+		result[sessionKey] = struct{}{}
+	}
+	return result, nil
 }
 
 func affectedRetentionSessions(

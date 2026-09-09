@@ -18,8 +18,12 @@ preserve its endpoint-first, privacy-minimized, fail-open design.
 - Do not add write-capable MCP, enforcement, remediation, or agent-action
   dependencies.
 - Do not add Local product telemetry or hosted model calls.
-- Do not persist prompt bodies, transcripts, reasoning text, file contents, raw
-  endpoint identity, or raw evidence paths in canonical Belay events.
+- Keep canonical Belay events minimized. Prompt bodies, transcripts, reasoning
+  text, file contents, raw endpoint identity, and raw evidence paths do not
+  belong in canonical events.
+- Transcript content may be retained only in the encrypted Local transcript
+  sidecar, after secret scrubbing, and must never be exposed on a network
+  surface.
 - Do not include real customer data, credentials, personal paths, or transcripts
   in tests, issues, or pull requests.
 - Agent actions must remain usable when Belay or Numbat fails.

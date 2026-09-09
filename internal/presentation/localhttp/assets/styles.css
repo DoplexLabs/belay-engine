@@ -350,6 +350,98 @@ select:focus-visible {
   font-weight: 700;
 }
 
+.transcript-overview {
+  margin: 0 0 34px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(17, 20, 25, 0.74);
+}
+
+.transcript-overview .brief-section-heading {
+  margin-bottom: 8px;
+}
+
+.transcript-refresh-status,
+.transcript-privacy-copy,
+.transcript-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.transcript-coverage-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.transcript-coverage-counts div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(11, 13, 16, 0.44);
+}
+
+.transcript-coverage-counts dt {
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.transcript-coverage-counts dd {
+  margin: 7px 0 0;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.transcript-session-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.transcript-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(11, 13, 16, 0.44);
+}
+
+.transcript-session-row strong,
+.transcript-session-row span {
+  overflow-wrap: anywhere;
+}
+
+.transcript-session-row span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.transcript-session-row[data-active="true"] strong::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
+}
+
+.transcript-empty {
+  margin-top: 14px;
+}
+
 .brief-loading,
 .brief-error,
 .brief-empty {
@@ -3317,6 +3409,10 @@ h1 {
   }
 
   .brief-summary dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transcript-coverage-counts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

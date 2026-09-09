@@ -54,9 +54,12 @@
           </button>
         </nav>
 
-        <div class="privacy-note" title="Belay Local keeps this view on your machine">
+        <div
+          class="privacy-note"
+          title="Full transcripts are encrypted on this machine and never uploaded"
+        >
           <span class="privacy-dot" aria-hidden="true"></span>
-          On-device
+          Encrypted on-device
         </div>
 
         <button class="icon-button" id="refresh-button" type="button">
@@ -114,6 +117,56 @@
                   <dd id="brief-latest-activity">—</dd>
                 </div>
               </dl>
+            </section>
+
+            <section
+              class="transcript-overview"
+              aria-labelledby="transcript-overview-heading"
+            >
+              <div class="brief-section-heading">
+                <div>
+                  <p class="eyebrow">Encrypted local transcripts</p>
+                  <h2 id="transcript-overview-heading">Transcript coverage</h2>
+                </div>
+                <p
+                  class="transcript-refresh-status"
+                  id="transcript-refresh-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  Loading…
+                </p>
+              </div>
+              <p class="transcript-privacy-copy">
+                Full local transcripts are retained encrypted on this device.
+                Nothing is uploaded.
+              </p>
+              <dl class="transcript-coverage-counts">
+                <div>
+                  <dt>With transcript</dt>
+                  <dd id="transcript-with-count">—</dd>
+                </div>
+                <div>
+                  <dt>Partial</dt>
+                  <dd id="transcript-partial-count">—</dd>
+                </div>
+                <div>
+                  <dt>Without transcript</dt>
+                  <dd id="transcript-without-count">—</dd>
+                </div>
+                <div>
+                  <dt>Transcript only</dt>
+                  <dd id="transcript-only-count">—</dd>
+                </div>
+              </dl>
+              <div
+                class="transcript-session-list"
+                id="transcript-session-list"
+                aria-live="polite"
+              ></div>
+              <p class="transcript-empty" id="transcript-empty" hidden>
+                No live or recent transcript sessions yet.
+              </p>
             </section>
 
             <div class="brief-loading" id="brief-loading">
@@ -976,8 +1029,9 @@
             <p class="eyebrow">Your agents, one timeline</p>
             <h2>Select a session to inspect its activity</h2>
             <p>
-              Belay shows minimized events from your local agent activity
-              without showing prompt text, response text, or file contents.
+              The timeline shows minimized canonical events. Encrypted
+              transcripts stay on this device and are used only for Belay
+              Local intelligence over loopback.
             </p>
           </div>
 
@@ -1122,7 +1176,7 @@
                 >
                   All loaded events
                 </button>
-                <span class="privacy-label">Minimized metadata</span>
+                <span class="privacy-label">Minimized canonical events</span>
               </div>
             </div>
             <p class="timeline-scope" id="timeline-scope"></p>

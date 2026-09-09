@@ -40,7 +40,8 @@ Belay Local:
 - runs as the logged-in user without root;
 - uses an unmodified checksum-pinned Numbat executable;
 - minimizes data before canonical persistence;
-- encrypts canonical payloads using a macOS Keychain-backed key;
+- encrypts canonical payloads and scrubbed local transcript payloads using a
+  macOS Keychain-backed key;
 - binds its browser API to loopback and requires a per-launch token;
 - exposes read-only stdio MCP tools;
 - sends no Local product telemetry.

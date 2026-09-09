@@ -23,6 +23,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localmcp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 // Set these at build time for packaged distributions:
@@ -68,8 +69,29 @@ type runningLocalServer interface {
 }
 
 var (
-	launchLocal          = runLocalLaunch
-	discoverAndScan      = localapp.DiscoverAndScan
+	launchLocal                 = runLocalLaunch
+	discoverAndScan             = localapp.DiscoverAndScan
+	importRecentTranscriptsOnce = func(
+		ctx context.Context,
+		paths localapp.Paths,
+		store *local.Store,
+	) error {
+		return localapp.ImportRecentTranscriptsOnce(ctx, paths, store)
+	}
+	scanTranscripts = func(
+		ctx context.Context,
+		paths localapp.Paths,
+		store *local.Store,
+	) error {
+		return localapp.ScanTranscripts(ctx, paths, store)
+	}
+	scanHistoricalTranscripts = func(
+		ctx context.Context,
+		paths localapp.Paths,
+		store *local.Store,
+	) error {
+		return localapp.ScanHistoricalTranscripts(ctx, paths, store)
+	}
 	startLocalHTTPServer = func(
 		ctx context.Context,
 		store *local.Store,
@@ -273,8 +295,8 @@ func runQuickstart(ctx context.Context, args []string, stdout, stderr io.Writer)
 Explicitly initializes private Belay Local state, verifies packaged Numbat,
 installs monitor-only hooks for detected Codex and Claude Code installations,
 installs read-only user-scoped MCP registration for detected CLIs, imports
-minimized local activity, scans local history, and opens a loopback-only
-browser. No prompts, completions, file contents, or telemetry are sent to Belay.
+local activity, scans local history, and opens a loopback-only browser.
+Full local transcripts are retained encrypted on-device. Nothing is uploaded.
 Use --no-mcp to opt out only from MCP registration.
 Codex MCP add is disabled by default because its CLI can replace duplicate
 names non-atomically. --allow-codex-mcp-add accepts that behavior after Belay
@@ -412,6 +434,23 @@ func runLocalLaunch(
 			fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
 		})
 	}()
+	transcriptDone := make(chan struct{})
+	go func() {
+		defer close(transcriptDone)
+		pollTranscripts(
+			runtimeCtx,
+			runtime.paths,
+			store,
+			2*time.Second,
+			func() {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: transcript import retry pending\n",
+					options.commandName,
+				)
+			},
+		)
+	}()
 	scanDone := closedSignal()
 	if options.historicalScan {
 		scanDone = localapp.StartHistoricalInitialization(
@@ -438,6 +477,7 @@ func runLocalLaunch(
 	stopRuntime()
 	<-scanDone
 	<-liveDone
+	<-transcriptDone
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
@@ -457,13 +497,27 @@ func runHistoricalScan(
 	label string,
 	stderr io.Writer,
 ) error {
-	_, _, scanErr := discoverAndScan(
-		ctx,
-		runtime.client,
-		store,
-		runtime.config,
-	)
-	if scanErr != nil && ctx.Err() == nil {
+	numbatDone := make(chan error, 1)
+	transcriptDone := make(chan error, 1)
+	go func() {
+		_, _, err := discoverAndScan(
+			ctx,
+			runtime.client,
+			store,
+			runtime.config,
+		)
+		numbatDone <- err
+	}()
+	go func() {
+		transcriptDone <- scanHistoricalTranscripts(
+			ctx,
+			runtime.paths,
+			store,
+		)
+	}()
+	numbatErr := <-numbatDone
+	transcriptErr := <-transcriptDone
+	if numbatErr != nil && ctx.Err() == nil {
 		fmt.Fprintf(
 			stderr,
 			"belay %s: %s incomplete; Local will continue\n",
@@ -471,7 +525,45 @@ func runHistoricalScan(
 			label,
 		)
 	}
-	return scanErr
+	if transcriptErr != nil && ctx.Err() == nil {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: transcript scan incomplete; Local will continue\n",
+			commandName,
+		)
+	}
+	return errors.Join(numbatErr, transcriptErr)
+}
+
+func pollTranscripts(
+	ctx context.Context,
+	paths localapp.Paths,
+	store *local.Store,
+	interval time.Duration,
+	onError func(),
+) {
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	run := func() {
+		if err := importRecentTranscriptsOnce(ctx, paths, store); err != nil &&
+			!errors.Is(err, context.Canceled) &&
+			ctx.Err() == nil &&
+			onError != nil {
+			onError()
+		}
+	}
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
 }
 
 func newLocalHTTPServer(
@@ -488,6 +580,7 @@ func newLocalHTTPServer(
 		readmodel.WithIssueRepository(store),
 		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithFixMonitoringRepository(store),
+		readmodel.WithTranscriptRepository(store),
 	}
 	if len(providers) > 0 && providers[0] != nil {
 		readOptions = append(
@@ -633,13 +726,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	defer store.Close()
 	inventory, reports, err := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
+	transcriptErr := scanTranscripts(ctx, runtime.paths, store)
 	if writeErr := writeJSON(stdout, map[string]any{
 		"inventory": projectCLIInventory(inventory),
 		"scans":     reports,
 	}); writeErr != nil {
 		return writeErr
 	}
-	return err
+	return errors.Join(err, transcriptErr)
 }
 
 func runAgents(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -878,6 +972,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	defer cancel()
 	inventory, command, discoverErr := runtime.client.Discover(discoveryCtx)
 	analysisStatus, analysisErr := loadDoctorAnalysis(ctx, store)
+	transcriptCoverage, transcriptErr := loadDoctorTranscriptCoverage(ctx, store)
 	status := map[string]any{
 		"config":            "ok",
 		"encrypted_storage": "ok",
@@ -890,6 +985,11 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	} else {
 		status["analysis"] = analysisStatus
 	}
+	if transcriptErr != nil {
+		status["transcript_coverage"] = "failed"
+	} else {
+		status["transcript_coverage"] = transcriptCoverage
+	}
 	if discoverErr != nil {
 		status["discovery"] = "failed"
 		status["numbat_exit_code"] = command.ExitCode
@@ -899,7 +999,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := writeJSON(stdout, status); err != nil {
 		return err
 	}
-	return errors.Join(discoverErr, analysisErr)
+	return errors.Join(discoverErr, analysisErr, transcriptErr)
 }
 
 type doctorAnalysisStatus struct {
@@ -919,4 +1019,15 @@ func loadDoctorAnalysis(
 		CatalogVersion: detection.CatalogVersion,
 		Coverage:       page.Analysis,
 	}, nil
+}
+
+type doctorTranscriptRepository interface {
+	TranscriptCoverage(context.Context) (transcript.CoverageCounts, error)
+}
+
+func loadDoctorTranscriptCoverage(
+	ctx context.Context,
+	repository doctorTranscriptRepository,
+) (transcript.CoverageCounts, error) {
+	return repository.TranscriptCoverage(ctx)
 }

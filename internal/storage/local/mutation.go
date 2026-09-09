@@ -14,11 +14,13 @@ import (
 type mutationPurpose string
 
 const (
-	mutationPayloadUpgrade    mutationPurpose = "payload_upgrade"
-	mutationRetentionPrune    mutationPurpose = "retention_prune"
-	mutationProjectionRebuild mutationPurpose = "projection_rebuild"
-	mutationRecurrenceWorker  mutationPurpose = "recurrence_worker"
-	guardedSQLiteDriverName                   = "belay_local_sqlite"
+	mutationPayloadUpgrade      mutationPurpose = "payload_upgrade"
+	mutationRetentionPrune      mutationPurpose = "retention_prune"
+	mutationProjectionRebuild   mutationPurpose = "projection_rebuild"
+	mutationRecurrenceWorker    mutationPurpose = "recurrence_worker"
+	mutationTranscriptIngestion mutationPurpose = "transcript_ingestion"
+	mutationTranscriptRetention mutationPurpose = "transcript_retention"
+	guardedSQLiteDriverName                     = "belay_local_sqlite"
 )
 
 var registerGuardedSQLiteDriver sync.Once
@@ -78,6 +80,15 @@ func initializeMutationConnection(
 	if summaryReady {
 		if _, err := connection.ExecContext(ctx, issueSummaryMutationTriggerSQL, nil); err != nil {
 			return errors.New("install connection-local issue summary mutation guards")
+		}
+	}
+	transcriptReady, err := transcriptMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if transcriptReady {
+		if _, err := connection.ExecContext(ctx, transcriptMutationTriggerSQL, nil); err != nil {
+			return errors.New("install connection-local transcript mutation guards")
 		}
 	}
 	return nil
@@ -214,6 +225,32 @@ func issueSummaryMutationTablesReady(
 	return count == 6, nil
 }
 
+func transcriptMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name IN ('transcript_sessions', 'transcript_turns')`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect local transcript mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect local transcript mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect local transcript mutation schema")
+	}
+	return count == 2, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -234,6 +271,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, issueSummaryMutationTriggerSQL); err != nil {
 		return errors.New("install connection-local issue summary mutation guards")
+	}
+	if _, err := connection.ExecContext(ctx, transcriptMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local transcript mutation guards")
 	}
 	return nil
 }
@@ -274,7 +314,9 @@ const mutationAuthorizationTableSQL = `
 					'payload_upgrade',
 					'retention_prune',
 					'projection_rebuild',
-					'recurrence_worker'
+					'recurrence_worker',
+					'transcript_ingestion',
+					'transcript_retention'
 				)
 			)
 	) WITHOUT ROWID;
@@ -383,6 +425,47 @@ const mutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'analysis diagnostic mutation is not authorized');
+	END;`
+
+const transcriptMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_turns_update
+	BEFORE UPDATE ON main.transcript_turns
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('transcript_ingestion', 'transcript_retention')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript turn mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_turns_delete
+	BEFORE DELETE ON main.transcript_turns
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('transcript_ingestion', 'transcript_retention')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript turn deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_sessions_update
+	BEFORE UPDATE ON main.transcript_sessions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('transcript_ingestion', 'transcript_retention')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript session mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_sessions_delete
+	BEFORE DELETE ON main.transcript_sessions
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('transcript_ingestion', 'transcript_retention')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript session deletion is not authorized');
 	END;`
 
 const fixMutationTriggerSQL = `
