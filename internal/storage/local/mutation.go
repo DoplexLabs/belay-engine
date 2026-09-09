@@ -20,6 +20,7 @@ const (
 	mutationRecurrenceWorker    mutationPurpose = "recurrence_worker"
 	mutationTranscriptIngestion mutationPurpose = "transcript_ingestion"
 	mutationTranscriptRetention mutationPurpose = "transcript_retention"
+	mutationCostIssueAnalysis   mutationPurpose = "cost_issue_analysis"
 	guardedSQLiteDriverName                     = "belay_local_sqlite"
 )
 
@@ -89,6 +90,15 @@ func initializeMutationConnection(
 	if transcriptReady {
 		if _, err := connection.ExecContext(ctx, transcriptMutationTriggerSQL, nil); err != nil {
 			return errors.New("install connection-local transcript mutation guards")
+		}
+	}
+	costIssueReady, err := costIssueMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if costIssueReady {
+		if _, err := connection.ExecContext(ctx, costIssueMutationTriggerSQL, nil); err != nil {
+			return errors.New("install connection-local cost issue mutation guards")
 		}
 	}
 	return nil
@@ -251,6 +261,36 @@ func transcriptMutationTablesReady(
 	return count == 2, nil
 }
 
+func costIssueMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name IN (
+				'transcript_project_analysis_state',
+				'cost_issues',
+				'correction_candidates'
+			)`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect local cost issue mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect local cost issue mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect local cost issue mutation schema")
+	}
+	return count == 3, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -274,6 +314,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, transcriptMutationTriggerSQL); err != nil {
 		return errors.New("install connection-local transcript mutation guards")
+	}
+	if _, err := connection.ExecContext(ctx, costIssueMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local cost issue mutation guards")
 	}
 	return nil
 }
@@ -316,7 +359,8 @@ const mutationAuthorizationTableSQL = `
 					'projection_rebuild',
 					'recurrence_worker',
 					'transcript_ingestion',
-					'transcript_retention'
+					'transcript_retention',
+					'cost_issue_analysis'
 				)
 			)
 	) WITHOUT ROWID;
@@ -466,6 +510,97 @@ const transcriptMutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'transcript session deletion is not authorized');
+	END;`
+
+const costIssueMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_cost_issues_insert
+	BEFORE INSERT ON main.cost_issues
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'cost issue insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_cost_issues_update
+	BEFORE UPDATE ON main.cost_issues
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'cost issue mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_cost_issues_delete
+	BEFORE DELETE ON main.cost_issues
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('cost_issue_analysis', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'cost issue deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_correction_candidates_insert
+	BEFORE INSERT ON main.correction_candidates
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'correction candidate insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_correction_candidates_update
+	BEFORE UPDATE ON main.correction_candidates
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'correction candidate mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_correction_candidates_delete
+	BEFORE DELETE ON main.correction_candidates
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('cost_issue_analysis', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'correction candidate deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_project_state_insert
+	BEFORE INSERT ON main.transcript_project_analysis_state
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('transcript_ingestion', 'transcript_retention')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript project state insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_project_state_update
+	BEFORE UPDATE ON main.transcript_project_analysis_state
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN (
+			'transcript_ingestion',
+			'transcript_retention',
+			'cost_issue_analysis'
+		)
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript project state mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_project_state_delete
+	BEFORE DELETE ON main.transcript_project_analysis_state
+	BEGIN
+		SELECT RAISE(ABORT, 'transcript project state is durable');
 	END;`
 
 const fixMutationTriggerSQL = `

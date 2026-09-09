@@ -451,6 +451,22 @@ func runLocalLaunch(
 			},
 		)
 	}()
+	issueAnalysisDone := make(chan struct{})
+	go func() {
+		defer close(issueAnalysisDone)
+		localapp.PollTranscriptIssueAnalysis(
+			runtimeCtx,
+			store,
+			2*time.Second,
+			func(error) {
+				fmt.Fprintf(
+					stderr,
+					"belay %s: cost issue analysis retry pending\n",
+					options.commandName,
+				)
+			},
+		)
+	}()
 	scanDone := closedSignal()
 	if options.historicalScan {
 		scanDone = localapp.StartHistoricalInitialization(
@@ -478,6 +494,7 @@ func runLocalLaunch(
 	<-scanDone
 	<-liveDone
 	<-transcriptDone
+	<-issueAnalysisDone
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
@@ -581,6 +598,7 @@ func newLocalHTTPServer(
 		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithFixMonitoringRepository(store),
 		readmodel.WithTranscriptRepository(store),
+		readmodel.WithCostIssueRepository(store),
 	}
 	if len(providers) > 0 && providers[0] != nil {
 		readOptions = append(

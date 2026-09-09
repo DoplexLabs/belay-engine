@@ -664,6 +664,14 @@ select:focus-visible {
   grid-template-columns: minmax(350px, 440px) minmax(0, 1fr);
 }
 
+.attention-workspace.cost-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.attention-workspace.cost-mode .attention-panel {
+  border-right: 0;
+}
+
 .attention-panel {
   display: flex;
   min-height: 0;
@@ -674,6 +682,29 @@ select:focus-visible {
 
 .attention-heading {
   padding-bottom: 14px;
+}
+
+.attention-mode-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 12px;
+}
+
+.attention-mode-tabs button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.attention-mode-tabs button[aria-selected="true"] {
+  border-color: rgba(124, 182, 255, 0.4);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .coverage-panel {
@@ -941,6 +972,153 @@ select:focus-visible {
   flex: 1;
   overflow-y: auto;
   padding: 0 9px 16px;
+}
+
+.cost-issues-section {
+  max-width: 1040px;
+  width: 100%;
+  margin: 9px auto 0;
+  padding: 0 14px 20px;
+}
+
+.cost-issues-section > .attention-section-heading,
+.cost-issues-section > .section-disclosure {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.cost-issue-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.cost-issue-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(11, 13, 16, 0.56);
+}
+
+.cost-issue-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cost-issue-card h3 {
+  margin: 5px 0 0;
+  font-size: 19px;
+  line-height: 1.35;
+  letter-spacing: -0.03em;
+}
+
+.cost-issue-rank {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cost-issue-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.cost-issue-metrics div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cost-issue-metrics dt {
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cost-issue-metrics dd {
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-issue-excerpt {
+  padding: 12px 14px;
+  border-left: 3px solid var(--line-strong);
+  background: rgba(17, 20, 25, 0.68);
+}
+
+.cost-issue-citation,
+.cost-issue-trend {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.cost-issue-excerpt blockquote {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.cost-issue-trend {
+  margin-top: 12px;
+}
+
+.cost-issue-fix {
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(113, 224, 161, 0.2);
+  border-radius: var(--radius-md);
+  background: var(--success-soft);
+}
+
+.cost-issue-fix h4 {
+  margin: 5px 0;
+  font-size: 13px;
+}
+
+.cost-issue-fix p:last-child {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.cost-issue-evidence {
+  margin-top: 12px;
+}
+
+.cost-issue-evidence > summary {
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.cost-issue-evidence-list {
+  display: grid;
+  gap: 8px;
+}
+
+.safety-content {
+  display: grid;
+  gap: 0;
 }
 
 .attention-disclosure {
@@ -3311,6 +3489,14 @@ h1 {
     grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   }
 
+  .attention-workspace.cost-mode {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cost-issue-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .attention-filter-row,
   .advanced-filter-grid,
   .monitoring-filters {
@@ -3419,6 +3605,14 @@ h1 {
   .brief-agent-summary,
   .session-diagnosis-actions {
     grid-template-columns: 1fr;
+  }
+
+  .cost-issue-card {
+    padding: 15px;
+  }
+
+  .cost-issue-metrics {
+    grid-template-columns: 1fr 1fr;
   }
 
   .session-panel,

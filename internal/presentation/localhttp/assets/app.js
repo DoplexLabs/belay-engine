@@ -275,6 +275,11 @@
     briefError: "",
     briefRequestGeneration: 0,
     briefSelectionID: "",
+    attentionMode: "issues",
+    costIssues: [],
+    costIssueStatus: "idle",
+    costIssueError: "",
+    costIssueRequestGeneration: 0,
     issues: createAttentionFamilyBucket(),
     evidenceGaps: createIssueBucket("evidence_gap"),
     issueFilters: {
@@ -442,11 +447,21 @@
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
     attentionListPane: document.querySelector("#attention-list-pane"),
+    attentionModeIssues: document.querySelector("#attention-mode-issues"),
+    attentionModeSafety: document.querySelector("#attention-mode-safety"),
     attentionEyebrow: document.querySelector("#attention-eyebrow"),
     attentionHeading: document.querySelector("#attention-heading"),
     attentionStatusLabel: document.querySelector("#attention-status-label"),
     attentionDetailPane: document.querySelector("#attention-detail-pane"),
     attentionScroll: document.querySelector(".attention-scroll"),
+    costIssuesSection: document.querySelector("#cost-issues-section"),
+    costIssueCount: document.querySelector("#cost-issue-count"),
+    costIssueList: document.querySelector("#cost-issue-list"),
+    costIssuesLoading: document.querySelector("#cost-issues-loading"),
+    costIssuesEmpty: document.querySelector("#cost-issues-empty"),
+    costIssuesError: document.querySelector("#cost-issues-error"),
+    costIssuesRetry: document.querySelector("#cost-issues-retry"),
+    safetyContent: null,
     stableIssuesSection: document.querySelector("#stable-issues-section"),
     evidenceGapsSection: document.querySelector("#evidence-gaps-section"),
     fixMonitoringSection: document.querySelector("#fix-monitoring-section"),
@@ -1775,13 +1790,20 @@
       ),
       elements.attentionFilters,
     );
-    elements.attentionScroll.replaceChildren(
+    elements.safetyContent = createElement("div", "safety-content");
+    elements.safetyContent.id = "safety-content";
+    elements.safetyContent.append(
       elements.stableIssuesSection,
       elements.evidenceGapsSection,
       elements.fixMonitoringSection,
       analysisDisclosure,
       filterDisclosure,
     );
+    elements.attentionScroll.replaceChildren(
+      elements.costIssuesSection,
+      elements.safetyContent,
+    );
+    setAttentionMode("issues");
   }
 
   function bindEvents() {
@@ -1796,7 +1818,7 @@
     });
     elements.navAttention.addEventListener("click", () => {
       setActiveView("attention", true);
-      if (state.issues.status === "idle") refreshAttention(false);
+      if (state.costIssueStatus === "idle") void loadCostIssues();
     });
     elements.navSessions.addEventListener("click", () => {
       setActiveView("sessions", true);
@@ -1807,7 +1829,18 @@
     });
     elements.briefOpenAttention.addEventListener("click", () => {
       setActiveView("attention", true);
+      if (state.costIssueStatus === "idle") void loadCostIssues();
+    });
+    elements.attentionModeIssues.addEventListener("click", () => {
+      setAttentionMode("issues");
+      if (state.costIssueStatus === "idle") void loadCostIssues();
+    });
+    elements.attentionModeSafety.addEventListener("click", () => {
+      setAttentionMode("safety");
       if (state.issues.status === "idle") void refreshAttention(false);
+    });
+    elements.costIssuesRetry.addEventListener("click", () => {
+      void loadCostIssues();
     });
     elements.briefOpenSessions.addEventListener("click", () => {
       setActiveView("sessions", true);
@@ -2056,13 +2089,279 @@
         return;
       }
       if (state.activeView === "attention") {
-        await refreshAttention(preserveSelection);
+        if (state.attentionMode === "safety") {
+          await refreshAttention(preserveSelection);
+        } else {
+          await loadCostIssues();
+        }
         return;
       }
       await refreshSessions(preserveSelection);
     } finally {
       elements.refreshButton.disabled = false;
     }
+  }
+
+  function setAttentionMode(mode) {
+    const selected = mode === "safety" ? "safety" : "issues";
+    state.attentionMode = selected;
+    const issuesActive = selected === "issues";
+    elements.attentionModeIssues.setAttribute(
+      "aria-selected",
+      issuesActive ? "true" : "false",
+    );
+    elements.attentionModeSafety.setAttribute(
+      "aria-selected",
+      issuesActive ? "false" : "true",
+    );
+    elements.costIssuesSection.hidden = !issuesActive;
+    if (elements.safetyContent) {
+      elements.safetyContent.hidden = issuesActive;
+    }
+    elements.attentionDetailPane.hidden = issuesActive;
+    elements.attentionView.classList.toggle("cost-mode", issuesActive);
+    renderAttentionTotals();
+  }
+
+  async function loadCostIssues() {
+    const generation = ++state.costIssueRequestGeneration;
+    state.costIssueStatus = "loading";
+    state.costIssueError = "";
+    renderCostIssues();
+    try {
+      const response = await apiGet("/v1/cost-issues?limit=5");
+      if (generation !== state.costIssueRequestGeneration) return false;
+      if (
+        !isRecord(response) ||
+        readText(response.schema_version) !== "belay.cost-issues.v1" ||
+        !Array.isArray(response.data)
+      ) {
+        throw new Error("Local API returned invalid cost-ranked issues.");
+      }
+      state.costIssues = response.data
+        .slice(0, 5)
+        .map(requireCostIssue);
+      state.costIssueStatus = "ready";
+      renderCostIssues();
+      return true;
+    } catch (error) {
+      if (generation !== state.costIssueRequestGeneration) return false;
+      state.costIssueStatus = "error";
+      state.costIssueError =
+        error instanceof Error ? error.message : "Cost issue read failed.";
+      renderCostIssues();
+      return false;
+    }
+  }
+
+  function requireCostIssue(issue) {
+    if (
+      !isRecord(issue) ||
+      !readText(issue.issue_id) ||
+      !readText(issue.detector_id) ||
+      !readText(issue.headline) ||
+      !isRecord(issue.cost) ||
+      !Array.isArray(issue.sessions) ||
+      !Array.isArray(issue.trend) ||
+      !Array.isArray(issue.excerpts) ||
+      !isRecord(issue.project) ||
+      !isRecord(issue.suggested_fix)
+    ) {
+      throw new Error("Local API returned an invalid cost issue.");
+    }
+    return issue;
+  }
+
+  function renderCostIssues() {
+    const loading = state.costIssueStatus === "loading";
+    const failed = state.costIssueStatus === "error";
+    const empty =
+      state.costIssueStatus === "ready" && state.costIssues.length === 0;
+    elements.costIssuesLoading.hidden = !loading;
+    elements.costIssuesError.hidden = !failed;
+    elements.costIssuesEmpty.hidden = !empty;
+    elements.costIssueList.hidden = loading || failed || empty;
+    elements.costIssueCount.textContent =
+      state.costIssueStatus === "ready"
+        ? String(state.costIssues.length)
+        : "—";
+    if (loading || failed || empty) {
+      elements.costIssueList.replaceChildren();
+      renderAttentionTotals();
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    state.costIssues.forEach((issue, index) => {
+      fragment.append(createCostIssueCard(issue, index));
+    });
+    elements.costIssueList.replaceChildren(fragment);
+    renderAttentionTotals();
+  }
+
+  function createCostIssueCard(issue, index) {
+    const card = createElement("article", "cost-issue-card");
+    const header = createElement("header", "cost-issue-card-header");
+    const heading = createElement("div");
+    heading.append(
+      createElement(
+        "p",
+        "eyebrow",
+        `${projectDisplayName(issue.project)} · ${readableLabel(issue.detector_id)}`,
+      ),
+      createElement("h3", "", readText(issue.headline)),
+    );
+    header.append(
+      heading,
+      createElement("span", "cost-issue-rank", `#${index + 1}`),
+    );
+    card.append(header);
+
+    const metrics = createElement("dl", "cost-issue-metrics");
+    appendCostMetric(
+      metrics,
+      "Attributed cost",
+      formatIssueDollarCost(issue.cost),
+    );
+    appendCostMetric(
+      metrics,
+      "Time",
+      formatIssueMinutes(issue.cost),
+    );
+    appendCostMetric(
+      metrics,
+      "Tokens",
+      formatNumber(issue.cost.wasted_tokens),
+    );
+    const sessions = Math.max(
+      toFiniteNumber(issue.session_count),
+      issue.sessions.length,
+    );
+    appendCostMetric(
+      metrics,
+      "Sessions",
+      `${formatNumber(sessions)} ${sessions === 1 ? "session" : "sessions"}`,
+    );
+    card.append(metrics);
+
+    if (issue.excerpts.length) {
+      card.append(createCostIssueExcerpt(issue.excerpts[0], true));
+    }
+    const trend = issue.trend
+      .slice(-8)
+      .map((week) => formatNumber(week && week.count))
+      .join(" · ");
+    if (trend) {
+      card.append(
+        createElement(
+          "p",
+          "cost-issue-trend",
+          `Weekly occurrences, oldest to newest: ${trend}`,
+        ),
+      );
+    }
+
+    const fix = createElement("section", "cost-issue-fix");
+    fix.append(
+      createElement("p", "eyebrow", "Suggested fix"),
+      createElement(
+        "h4",
+        "",
+        readText(issue.suggested_fix.target_file) || "Agent instructions",
+      ),
+      createElement(
+        "p",
+        "",
+        readText(issue.suggested_fix.rationale) ||
+          "Add a concrete project rule that prevents this pattern.",
+      ),
+    );
+    card.append(fix);
+
+    const evidence = createElement("details", "cost-issue-evidence");
+    evidence.append(
+      createElement(
+        "summary",
+        "",
+        `Show evidence (${formatNumber(issue.excerpts.length)})`,
+      ),
+    );
+    const evidenceList = createElement("div", "cost-issue-evidence-list");
+    issue.excerpts.forEach((excerpt) => {
+      evidenceList.append(createCostIssueExcerpt(excerpt, false));
+    });
+    evidence.append(evidenceList);
+    card.append(evidence);
+    return card;
+  }
+
+  function appendCostMetric(list, label, value) {
+    const item = createElement("div");
+    item.append(
+      createElement("dt", "", label),
+      createElement("dd", "", value),
+    );
+    list.append(item);
+  }
+
+  function createCostIssueExcerpt(excerpt, preview) {
+    const wrapper = createElement(
+      "div",
+      preview ? "cost-issue-excerpt preview" : "cost-issue-excerpt",
+    );
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = compactID(citation.session_key);
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "turn unavailable";
+    wrapper.append(
+      createElement(
+        "p",
+        "cost-issue-citation",
+        [role, tool, session, turn].filter(Boolean).join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        readText(excerpt && excerpt.text) || "Excerpt unavailable",
+      ),
+    );
+    return wrapper;
+  }
+
+  function formatIssueDollarCost(cost) {
+    const value = cost && cost.wasted_usd;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return cost && cost.lower_bound
+        ? "At least the known token cost"
+        : "Unknown model price";
+    }
+    const formatted = new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Math.max(0, value));
+    return cost.lower_bound ? `At least ${formatted}` : formatted;
+  }
+
+  function formatIssueMinutes(cost) {
+    const minutes = Math.max(0, toFiniteNumber(cost && cost.wasted_minutes));
+    const formatted =
+      minutes >= 10 ? Math.round(minutes).toString() : minutes.toFixed(1);
+    return `${cost && cost.lower_bound ? "At least " : ""}${formatted} min`;
+  }
+
+  function projectDisplayName(project) {
+    const identity = readText(project && project.identity);
+    const path = readText(project && project.path);
+    const candidate = identity || path;
+    if (!candidate) return "Project unavailable";
+    const parts = candidate.split(/[/:\\]/).filter(Boolean);
+    return (parts[parts.length - 1] || candidate).replace(/\.git$/i, "");
   }
 
   async function refreshSessions(preserveSelection) {
@@ -3334,6 +3633,14 @@
   }
 
   function renderAttentionTotals() {
+    if (state.attentionMode === "issues") {
+      const total = state.costIssues.length;
+      elements.attentionCount.textContent =
+        state.costIssueStatus === "ready" ? String(total) : "—";
+      elements.attentionNavCount.hidden = total === 0;
+      elements.attentionNavCount.textContent = String(total);
+      return;
+    }
     const total = state.issues.data.length;
     elements.attentionCount.textContent = state.issues.hasMore
       ? `${total}+`

@@ -73,6 +73,14 @@ func (s *Store) AppendTranscriptBatch(
 
 	inserted := 0
 	err = withMutationTx(ctx, tx, mutationTranscriptIngestion, func() error {
+		existing, existed, err := transcriptSessionMetadataTx(
+			ctx,
+			tx,
+			session.SessionKey,
+		)
+		if err != nil {
+			return err
+		}
 		if err := upsertTranscriptSessionMetadataTx(ctx, tx, session, now); err != nil {
 			return err
 		}
@@ -130,7 +138,35 @@ func (s *Store) AppendTranscriptBatch(
 		if err := reindexTranscriptSessionTx(ctx, tx, session.SessionKey); err != nil {
 			return err
 		}
-		return recomputeTranscriptSessionTx(ctx, tx, session.SessionKey, now)
+		if err := recomputeTranscriptSessionTx(
+			ctx,
+			tx,
+			session.SessionKey,
+			now,
+		); err != nil {
+			return err
+		}
+		changed := !existed ||
+			transcriptSessionMetadataChanged(existing, session) ||
+			inserted > 0
+		if !changed {
+			return nil
+		}
+		projects := map[string]struct{}{session.ProjectIdentity: {}}
+		if existed && existing.ProjectIdentity != session.ProjectIdentity {
+			projects[existing.ProjectIdentity] = struct{}{}
+		}
+		for projectIdentity := range projects {
+			if err := markTranscriptProjectDirtyTx(
+				ctx,
+				tx,
+				projectIdentity,
+				now,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, err
@@ -139,6 +175,38 @@ func (s *Store) AppendTranscriptBatch(
 		return 0, errors.New("commit transcript batch persistence")
 	}
 	return inserted, nil
+}
+
+func transcriptSessionMetadataTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionKey string,
+) (transcript.Session, bool, error) {
+	var result transcript.Session
+	err := tx.QueryRowContext(ctx, `
+		SELECT session_key, agent, native_session_id, project_path,
+			git_remote_url, project_identity, coverage
+		FROM transcript_sessions
+		WHERE session_key = ?`,
+		sessionKey,
+	).Scan(
+		&result.SessionKey,
+		&result.Agent,
+		&result.NativeSessionID,
+		&result.ProjectPath,
+		&result.GitRemoteURL,
+		&result.ProjectIdentity,
+		&result.Coverage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return transcript.Session{}, false, nil
+	}
+	if err != nil {
+		return transcript.Session{}, false, errors.New(
+			"read transcript session metadata",
+		)
+	}
+	return result, true, nil
 }
 
 func (s *Store) QueryTranscriptTurns(

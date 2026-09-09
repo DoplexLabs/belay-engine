@@ -269,6 +269,77 @@
               <span class="count-pill" id="attention-count">—</span>
             </div>
 
+            <div
+              class="attention-mode-tabs"
+              role="tablist"
+              aria-label="Attention views"
+            >
+              <button
+                id="attention-mode-issues"
+                type="button"
+                role="tab"
+                aria-selected="true"
+              >
+                What keeps going wrong
+              </button>
+              <button
+                id="attention-mode-safety"
+                type="button"
+                role="tab"
+                aria-selected="false"
+              >
+                Safety
+              </button>
+            </div>
+
+            <section
+              class="cost-issues-section"
+              id="cost-issues-section"
+              aria-labelledby="cost-issues-heading"
+            >
+              <div class="attention-section-heading">
+                <div>
+                  <p class="eyebrow">Cost-ranked across sessions</p>
+                  <h2 id="cost-issues-heading">What keeps going wrong</h2>
+                </div>
+                <span class="count-pill" id="cost-issue-count">—</span>
+              </div>
+              <p class="section-disclosure">
+                Ranked by attributable dollars, then the number of sessions.
+                Every issue links to retained transcript evidence.
+              </p>
+              <div
+                class="cost-issue-list"
+                id="cost-issue-list"
+                aria-live="polite"
+              ></div>
+              <div class="panel-state compact-state" id="cost-issues-loading">
+                <span class="spinner" aria-hidden="true"></span>
+                <p>Analyzing recurring problems…</p>
+              </div>
+              <div
+                class="panel-state compact-state"
+                id="cost-issues-empty"
+                hidden
+              >
+                <span class="empty-glyph" aria-hidden="true">◇</span>
+                <p>No recurring cost issues detected yet</p>
+                <small>
+                  Belay continues analyzing encrypted local transcripts as
+                  sessions arrive.
+                </small>
+              </div>
+              <div
+                class="panel-state compact-state"
+                id="cost-issues-error"
+                role="alert"
+                hidden
+              >
+                <p>Cost-ranked issues are temporarily unavailable.</p>
+                <button id="cost-issues-retry" type="button">Try again</button>
+              </div>
+            </section>
+
             <section
               class="coverage-panel"
               id="coverage-panel"

@@ -184,6 +184,29 @@ func (s *Store) Prune(
 				result.PrunedPayloadBytes += item.bytes
 			}
 		}
+		for _, item := range items {
+			if !item.selected {
+				continue
+			}
+			var statement string
+			switch item.recordType {
+			case "cost_issue":
+				statement = "DELETE FROM cost_issues WHERE issue_id = ?"
+			case "correction_candidate":
+				statement = "DELETE FROM correction_candidates WHERE candidate_id = ?"
+			default:
+				continue
+			}
+			deleted, err := tx.ExecContext(ctx, statement, item.recordID)
+			if err != nil {
+				return errors.New("delete retained cost issue payload")
+			}
+			count, err := deleted.RowsAffected()
+			if err != nil || count != 1 {
+				return errors.New("cost issue payload changed during prune")
+			}
+			result.PrunedPayloadBytes += item.bytes
+		}
 		transcriptSessions, err := affectedTranscriptRetentionSessions(
 			ctx,
 			tx,
@@ -193,6 +216,19 @@ func (s *Store) Prune(
 			return err
 		}
 		if len(transcriptSessions) > 0 {
+			transcriptProjects := make(map[string]struct{})
+			for sessionKey := range transcriptSessions {
+				var projectIdentity string
+				if err := tx.QueryRowContext(ctx, `
+					SELECT project_identity
+					FROM transcript_sessions
+					WHERE session_key = ?`,
+					sessionKey,
+				).Scan(&projectIdentity); err != nil {
+					return errors.New("resolve retained transcript project")
+				}
+				transcriptProjects[projectIdentity] = struct{}{}
+			}
 			if err := withMutationTx(
 				ctx,
 				tx,
@@ -258,6 +294,16 @@ func (s *Store) Prune(
 							ctx,
 							tx,
 							sessionKey,
+							formatProjectionTime(now),
+						); err != nil {
+							return err
+						}
+					}
+					for projectIdentity := range transcriptProjects {
+						if err := markTranscriptProjectDirtyTx(
+							ctx,
+							tx,
+							projectIdentity,
 							formatProjectionTime(now),
 						); err != nil {
 							return err
@@ -397,7 +443,10 @@ func (s *Store) Prune(
 
 func hasSelectedCanonicalRetentionItem(items []retentionItem) bool {
 	for _, item := range items {
-		if item.selected && item.recordType != "transcript_turn" {
+		if item.selected &&
+			(item.recordType == "event" ||
+				item.recordType == "finding" ||
+				item.recordType == "issue") {
 			return true
 		}
 	}
@@ -504,6 +553,26 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 				NULL AS protection_base,
 				0 AS pinned
 			FROM transcript_turns
+			UNION ALL
+			SELECT
+				'cost_issue' AS record_type,
+				issue_id AS record_id,
+				last_seen AS occurred_at,
+				0 AS source_sequence,
+				LENGTH(payload) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM cost_issues
+			UNION ALL
+			SELECT
+				'correction_candidate' AS record_type,
+				candidate_id AS record_id,
+				occurred_at,
+				0 AS source_sequence,
+				LENGTH(payload) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM correction_candidates
 		)
 		ORDER BY occurred_at ASC, source_sequence ASC, record_id ASC, record_type ASC`)
 	if err != nil {
@@ -566,7 +635,9 @@ func evaluateRetention(
 	recordIndexes := make(map[string]int)
 	for index, item := range items {
 		diagnostics.CurrentPayloadBytes += item.bytes
-		if item.recordType != "transcript_turn" {
+		if item.recordType == "event" ||
+			item.recordType == "finding" ||
+			item.recordType == "issue" {
 			recordIndexes[item.recordID] = index
 		}
 		if item.recordType == "event" {

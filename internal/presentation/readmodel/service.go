@@ -112,6 +112,7 @@ type Service struct {
 	issueCursorCodec          IssueCursorCodec
 	fixMonitoringRepository   FixMonitoringRepository
 	transcriptRepository      TranscriptRepository
+	costIssueRepository       CostIssueRepository
 	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }

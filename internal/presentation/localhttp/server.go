@@ -103,6 +103,8 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/runtime", s.authorize(http.HandlerFunc(s.getRuntime)))
 	mux.Handle("GET /v1/transcript-status", s.authorize(http.HandlerFunc(s.getTranscriptStatus)))
 	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
+	mux.Handle("GET /v1/cost-issues", s.authorize(http.HandlerFunc(s.listCostIssues)))
+	mux.Handle("GET /v1/cost-issues/{id}", s.authorize(http.HandlerFunc(s.getCostIssue)))
 	mux.Handle("GET /v1/sessions", s.authorize(http.HandlerFunc(s.listSessions)))
 	mux.Handle("GET /v1/sessions/{id}", s.authorize(http.HandlerFunc(s.getSession)))
 	mux.Handle("GET /v1/sessions/{id}/events", s.authorize(http.HandlerFunc(s.getTimeline)))
