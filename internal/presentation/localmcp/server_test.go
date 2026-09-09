@@ -13,6 +13,7 @@ import (
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/initialization"
+	"github.com/DoplexLabs/belay-engine/internal/issueintel"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -36,6 +37,103 @@ type testRepository struct {
 	sessions         []model.SessionSummary
 	issueSummary     *model.IssueSummary
 	issueOccurrence  *model.IssueOccurrence
+	costIssues       []issueintel.Issue
+}
+
+type testCostIssueFixService struct {
+	proposed issueintel.FixRecord
+	applied  issueintel.FixRecord
+	status   issueintel.FixStatus
+}
+
+func (s *testCostIssueFixService) ProposeFix(
+	_ context.Context,
+	issueID, kind, targetFile string,
+) (issueintel.FixRecord, error) {
+	if s.proposed.FixID != "" {
+		return s.proposed, nil
+	}
+	return issueintel.FixRecord{
+		FixID:      "fix_test",
+		IssueID:    issueID,
+		Kind:       kind,
+		TargetFile: targetFile,
+		State:      "proposed",
+	}, nil
+}
+
+func (s *testCostIssueFixService) RecordApplied(
+	_ context.Context,
+	fixID, filePath, contentSHA256, gitCommit string,
+) (issueintel.FixRecord, error) {
+	if s.applied.FixID != "" {
+		return s.applied, nil
+	}
+	return issueintel.FixRecord{
+		FixID:         fixID,
+		AppliedPath:   filePath,
+		ContentSHA256: contentSHA256,
+		GitCommit:     gitCommit,
+		State:         "applied",
+	}, nil
+}
+
+func (s *testCostIssueFixService) Status(
+	_ context.Context,
+	fixID string,
+) (issueintel.FixStatus, error) {
+	if s.status.Fix.FixID != "" {
+		return s.status, nil
+	}
+	return issueintel.FixStatus{
+		Fix: issueintel.FixRecord{
+			FixID: fixID,
+			State: "proposed",
+		},
+		VerificationState: "deferred",
+	}, nil
+}
+
+func (r *testRepository) QueryCostIssues(
+	_ context.Context,
+	query issueintel.Query,
+) ([]issueintel.Issue, error) {
+	values := r.costIssues
+	if values == nil {
+		usd := 2.5
+		values = []issueintel.Issue{{
+			IssueID:      "csi_test",
+			DetectorID:   issueintel.DetectorRetryLoop,
+			Headline:     "Tests failed repeatedly.",
+			Cost:         issueintel.Cost{WastedUSD: &usd},
+			SessionCount: 1,
+			Excerpts: []issueintel.Excerpt{
+				{Text: "go test ./..."},
+				{Text: "FAIL package/example"},
+			},
+			SuggestedFix: issueintel.SuggestedFix{
+				TargetFile: "AGENTS.md",
+				Rationale:  "Stop after two identical failures.",
+			},
+		}}
+	}
+	if len(values) > query.Limit && query.Limit > 0 {
+		values = values[:query.Limit]
+	}
+	return append([]issueintel.Issue(nil), values...), nil
+}
+
+func (r *testRepository) GetCostIssue(
+	ctx context.Context,
+	issueID string,
+) (issueintel.Issue, error) {
+	values, _ := r.QueryCostIssues(ctx, issueintel.Query{Limit: 5})
+	for _, issue := range values {
+		if issue.IssueID == issueID {
+			return issue, nil
+		}
+	}
+	return issueintel.Issue{}, readmodel.ErrNotFound
 }
 
 func (r *testRepository) QuerySessions(_ context.Context, query model.SessionQuery) (model.SessionPage, error) {
@@ -241,10 +339,10 @@ func (r *testRepository) VisitSessionEvents(
 	}, nil
 }
 
-func TestServerListsExactlyNineReadOnlyTools(t *testing.T) {
+func TestServerListsExistingAndCostIssueReadOnlyTools(t *testing.T) {
 	session := newTestClient(t, &testRepository{})
-	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.2.0" {
-		t.Fatalf("server info = %#v, want version 1.2.0", info)
+	if info := session.InitializeResult().ServerInfo; info == nil || info.Version != "1.6.0" {
+		t.Fatalf("server info = %#v, want version 1.6.0", info)
 	}
 	capabilities := session.InitializeResult().Capabilities
 	if capabilities == nil || capabilities.Tools == nil {
@@ -262,8 +360,18 @@ func TestServerListsExactlyNineReadOnlyTools(t *testing.T) {
 	got := make([]string, 0, len(result.Tools))
 	for _, tool := range result.Tools {
 		got = append(got, tool.Name)
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Fatalf("tool %q is not marked read-only", tool.Name)
+		if tool.Annotations == nil {
+			t.Fatalf("tool %q has no annotations", tool.Name)
+		}
+		wantReadOnly := tool.Name != "propose_fix" &&
+			tool.Name != "record_fix_applied"
+		if tool.Annotations.ReadOnlyHint != wantReadOnly {
+			t.Fatalf(
+				"tool %q read-only = %v, want %v",
+				tool.Name,
+				tool.Annotations.ReadOnlyHint,
+				wantReadOnly,
+			)
 		}
 		if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 			t.Fatalf("tool %q is not marked non-destructive", tool.Name)
@@ -274,15 +382,20 @@ func TestServerListsExactlyNineReadOnlyTools(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
+		"get_fix_status",
 		"get_issue",
+		"get_issue_excerpts",
 		"get_session",
 		"get_session_timeline",
 		"get_stats",
+		"get_top_issues",
 		"list_findings",
 		"list_issues",
 		"list_sessions",
 		"lookup_session_events",
+		"propose_fix",
 		"query_activity",
+		"record_fix_applied",
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
@@ -629,6 +742,20 @@ func newTestClient(
 	repository readmodel.Repository,
 	options ...readmodel.Option,
 ) *mcp.ClientSession {
+	return newTestClientWithFixService(
+		t,
+		repository,
+		&testCostIssueFixService{},
+		options...,
+	)
+}
+
+func newTestClientWithFixService(
+	t *testing.T,
+	repository readmodel.Repository,
+	fixService CostIssueFixService,
+	options ...readmodel.Option,
+) *mcp.ClientSession {
 	t.Helper()
 	issueRepository, ok := repository.(readmodel.IssueRepository)
 	if !ok {
@@ -639,8 +766,17 @@ func newTestClient(
 		readmodel.WithIssueCursorCodec(testIssueCursorCodec{}),
 		readmodel.WithClock(testTime),
 	}
+	if costRepository, ok := repository.(readmodel.CostIssueRepository); ok {
+		readOptions = append(
+			readOptions,
+			readmodel.WithCostIssueRepository(costRepository),
+		)
+	}
 	readOptions = append(readOptions, options...)
-	server, err := New(readmodel.New(repository, readOptions...))
+	server, err := New(
+		readmodel.New(repository, readOptions...),
+		WithCostIssueFixService(fixService),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,8 +22,10 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/detection"
 	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 func TestPrepareRuntimeBootstrapsVerifiedPackagedSiblingPin(t *testing.T) {
@@ -226,6 +229,16 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	if len(captured) != 6 {
 		t.Fatalf("captured launches = %d, want 6", len(captured))
 	}
+	for index, options := range captured {
+		if options.experience != localhttp.ExperienceCurrent {
+			t.Fatalf(
+				"launch %d experience = %q, want %q",
+				index,
+				options.experience,
+				localhttp.ExperienceCurrent,
+			)
+		}
+	}
 	if !captured[0].installHooks || !captured[0].historicalScan ||
 		!captured[0].installMCP || !captured[0].openBrowser ||
 		captured[0].allowCodexMCPAdd ||
@@ -262,13 +275,147 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	}
 }
 
+func TestLocalCommandsPropagateValueFirstExperience(t *testing.T) {
+	original := launchLocal
+	t.Cleanup(func() { launchLocal = original })
+	var captured []localLaunchOptions
+	launchLocal = func(
+		_ context.Context,
+		options localLaunchOptions,
+		_, _ io.Writer,
+	) error {
+		captured = append(captured, options)
+		return nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runLocal(
+		context.Background(),
+		[]string{"--experience", "value-first"},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := runQuickstart(
+		context.Background(),
+		[]string{"--experience=value-first"},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured launches = %d, want 2", len(captured))
+	}
+	for index, options := range captured {
+		if options.experience != localhttp.ExperienceValueFirst {
+			t.Fatalf(
+				"launch %d experience = %q, want %q",
+				index,
+				options.experience,
+				localhttp.ExperienceValueFirst,
+			)
+		}
+	}
+}
+
+func TestLocalCommandsRejectInvalidExperienceBeforeLaunch(t *testing.T) {
+	original := launchLocal
+	t.Cleanup(func() { launchLocal = original })
+	launches := 0
+	launchLocal = func(
+		_ context.Context,
+		_ localLaunchOptions,
+		_, _ io.Writer,
+	) error {
+		launches++
+		return nil
+	}
+
+	tests := []struct {
+		name string
+		run  func(context.Context, []string, io.Writer, io.Writer) error
+		args []string
+	}{
+		{
+			name: "local invalid",
+			run:  runLocal,
+			args: []string{"--experience=PRIVATE_MODE_CANARY"},
+		},
+		{
+			name: "local empty",
+			run:  runLocal,
+			args: []string{"--experience="},
+		},
+		{
+			name: "quickstart invalid",
+			run:  runQuickstart,
+			args: []string{"--experience=PRIVATE_MODE_CANARY"},
+		},
+		{
+			name: "quickstart empty",
+			run:  runQuickstart,
+			args: []string{"--experience="},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := test.run(
+				context.Background(),
+				test.args,
+				&stdout,
+				&stderr,
+			)
+			if !errors.Is(err, localhttp.ErrInvalidExperience) {
+				t.Fatalf("error = %v, want fixed invalid-experience error", err)
+			}
+			if err.Error() != "invalid Local experience" {
+				t.Fatalf("error text = %q", err.Error())
+			}
+			if strings.Contains(err.Error(), "PRIVATE_MODE_CANARY") ||
+				strings.Contains(stderr.String(), "PRIVATE_MODE_CANARY") {
+				t.Fatalf(
+					"invalid experience reflected input: err=%q stderr=%q",
+					err,
+					stderr.String(),
+				)
+			}
+		})
+	}
+	if launches != 0 {
+		t.Fatalf("invalid experience launched Local %d times", launches)
+	}
+}
+
+func TestRunLocalLaunchRejectsInvalidExperienceBeforeRuntimePreparation(t *testing.T) {
+	err := runLocalLaunch(
+		context.Background(),
+		localLaunchOptions{
+			experience: localhttp.Experience("PRIVATE_MODE_CANARY"),
+		},
+		io.Discard,
+		io.Discard,
+	)
+	if !errors.Is(err, localhttp.ErrInvalidExperience) {
+		t.Fatalf("runLocalLaunch() error = %v, want invalid experience", err)
+	}
+}
+
 func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	previousScan := discoverAndScan
+	previousTranscriptScan := scanTranscripts
+	previousHistoricalTranscriptScan := scanHistoricalTranscripts
+	previousRecentTranscriptImport := importRecentTranscriptsOnce
 	previousStartServer := startLocalHTTPServer
 	previousOpenStore := openLocalCommandStore
 	previousOpenBrowser := openBrowser
 	t.Cleanup(func() {
 		discoverAndScan = previousScan
+		scanTranscripts = previousTranscriptScan
+		scanHistoricalTranscripts = previousHistoricalTranscriptScan
+		importRecentTranscriptsOnce = previousRecentTranscriptImport
 		startLocalHTTPServer = previousStartServer
 		openLocalCommandStore = previousOpenStore
 		openBrowser = previousOpenBrowser
@@ -286,6 +433,36 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 		<-releaseScan
 		return numbat.Inventory{}, nil, errors.New("private scan failure")
 	}
+	fullTranscriptScanCalls := make(chan struct{}, 1)
+	historicalTranscriptScanCalls := make(chan struct{}, 1)
+	recentTranscriptImportCalls := make(chan struct{}, 8)
+	scanTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		fullTranscriptScanCalls <- struct{}{}
+		return nil
+	}
+	scanHistoricalTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		historicalTranscriptScanCalls <- struct{}{}
+		return nil
+	}
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		select {
+		case recentTranscriptImportCalls <- struct{}{}:
+		default:
+		}
+		return nil
+	}
 	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
 	openLocalCommandStore = func(path string) (*local.Store, error) {
 		return local.OpenWithOptions(path, local.OpenOptions{KeyProvider: keyProvider})
@@ -295,14 +472,17 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	t.Cleanup(cancel)
 	serverStarted := make(chan struct{})
 	var provider initialization.Provider
+	var experience localhttp.Experience
 	startLocalHTTPServer = func(
 		serverCtx context.Context,
 		_ *local.Store,
 		_ string,
 		_ string,
 		initializationProvider initialization.Provider,
+		launchExperience localhttp.Experience,
 	) (runningLocalServer, error) {
 		provider = initializationProvider
+		experience = launchExperience
 		close(serverStarted)
 		return fakeRunningLocalServer{
 			url: "http://127.0.0.1:12345/#token=test",
@@ -331,6 +511,7 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 			localLaunchOptions{
 				runtime:        testRuntimeFlags(home, binary, "", "", true),
 				listen:         "127.0.0.1:0",
+				experience:     localhttp.ExperienceValueFirst,
 				historicalScan: true,
 				openBrowser:    true,
 				commandName:    "quickstart",
@@ -357,6 +538,9 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("Local server did not receive initialization provider")
+	}
+	if experience != localhttp.ExperienceValueFirst {
+		t.Fatalf("Local server experience = %q", experience)
 	}
 	if status := provider.InitializationStatus(); status.State != initialization.StateInitializing {
 		t.Fatalf("blocked scan status = %+v", status)
@@ -390,6 +574,243 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	if strings.Contains(stderr.String(), "private scan failure") {
 		t.Fatalf("quickstart scan warning leaked error payload: %q", stderr.String())
 	}
+	if len(fullTranscriptScanCalls) != 0 {
+		t.Fatalf(
+			"quickstart used full transcript scanner: scan=%d",
+			len(fullTranscriptScanCalls),
+		)
+	}
+	if len(historicalTranscriptScanCalls) != 1 {
+		t.Fatalf(
+			"historical transcript scans = %d, want 1",
+			len(historicalTranscriptScanCalls),
+		)
+	}
+	if len(recentTranscriptImportCalls) == 0 {
+		t.Fatal("recent transcript tailer did not run")
+	}
+}
+
+func TestLocalBackgroundWorkersNeverReuseHTTPReadStore(t *testing.T) {
+	previousOpen := openLocalCommandStore
+	previousStartServer := startLocalHTTPServer
+	previousIntelligence := startIntelligenceRuntime
+	previousWorkerLoops := runIntelligenceWorkerLoops
+	previousRecoveryWorker := startMCPRecoveryWorker
+	previousPollLive := pollLive
+	previousDiscoverAndScan := discoverAndScan
+	previousHistoricalTranscripts := scanHistoricalTranscripts
+	previousSemantic := runQuickstartSemanticAnalysisWorker
+	t.Cleanup(func() {
+		openLocalCommandStore = previousOpen
+		startLocalHTTPServer = previousStartServer
+		startIntelligenceRuntime = previousIntelligence
+		runIntelligenceWorkerLoops = previousWorkerLoops
+		startMCPRecoveryWorker = previousRecoveryWorker
+		pollLive = previousPollLive
+		discoverAndScan = previousDiscoverAndScan
+		scanHistoricalTranscripts = previousHistoricalTranscripts
+		runQuickstartSemanticAnalysisWorker = previousSemantic
+	})
+
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	stores := make([]*local.Store, 0, 5)
+	for index := 0; index < 5; index++ {
+		store, err := local.OpenWithOptions(
+			filepath.Join(
+				t.TempDir(),
+				fmt.Sprintf("role-%d.sqlite", index),
+			),
+			local.OpenOptions{KeyProvider: keyProvider},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores = append(stores, store)
+	}
+	readStore := stores[0]
+	openCalls := 0
+	var openMu sync.Mutex
+	openLocalCommandStore = func(string) (*local.Store, error) {
+		openMu.Lock()
+		defer openMu.Unlock()
+		openCalls++
+		if openCalls > len(stores) {
+			return nil, errors.New("unexpected store open")
+		}
+		return stores[openCalls-1], nil
+	}
+	var serverStore *local.Store
+	var provider initialization.Provider
+	recoveryStoreCh := make(chan *local.Store, 1)
+	liveStoreCh := make(chan *local.Store, 1)
+	intelligenceStoreCh := make(chan *local.Store, 1)
+	historicalNumbatStoreCh := make(chan *local.Store, 1)
+	historicalTranscriptStoreCh := make(chan *local.Store, 1)
+	semanticStoreCh := make(chan *local.Store, 1)
+	var recoveryStore *local.Store
+	var liveStore *local.Store
+	var intelligenceStore *local.Store
+	var historicalNumbatStore *local.Store
+	var historicalTranscriptStore *local.Store
+	var semanticStore *local.Store
+	startLocalHTTPServer = func(
+		_ context.Context,
+		store *local.Store,
+		_ string,
+		_ string,
+		initializationProvider initialization.Provider,
+		_ localhttp.Experience,
+	) (runningLocalServer, error) {
+		serverStore = store
+		provider = initializationProvider
+		return fakeRunningLocalServer{
+			url: "http://127.0.0.1:12345/#token=test",
+			wait: func() error {
+				receive := func(worker <-chan *local.Store) *local.Store {
+					select {
+					case store := <-worker:
+						return store
+					case <-time.After(2 * time.Second):
+						t.Fatal("background worker did not start")
+						return nil
+					}
+				}
+				recoveryStore = receive(recoveryStoreCh)
+				liveStore = receive(liveStoreCh)
+				intelligenceStore = receive(intelligenceStoreCh)
+				historicalNumbatStore = receive(historicalNumbatStoreCh)
+				historicalTranscriptStore = receive(
+					historicalTranscriptStoreCh,
+				)
+				semanticStore = receive(semanticStoreCh)
+				deadline := time.Now().Add(2 * time.Second)
+				for provider.InitializationStatus().State ==
+					initialization.StateInitializing &&
+					time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+				return nil
+			},
+		}, nil
+	}
+	startMCPRecoveryWorker = func(
+		_ context.Context,
+		store *local.Store,
+		_ func(),
+		_ func(),
+	) (context.CancelFunc, <-chan struct{}) {
+		recoveryStoreCh <- store
+		return func() {}, closedSignal()
+	}
+	pollLive = func(
+		_ context.Context,
+		_ localapp.Paths,
+		store *local.Store,
+		_ localapp.Config,
+		_ time.Duration,
+		_ func(error),
+	) {
+		liveStoreCh <- store
+	}
+	startIntelligenceRuntime = func(
+		ctx context.Context,
+		_ string,
+		options localapp.IntelligenceRuntimeOptions,
+	) (context.CancelFunc, <-chan struct{}) {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = options.RunOwner(ctx)
+		}()
+		return func() {}, done
+	}
+	runIntelligenceWorkerLoops = func(
+		_ context.Context,
+		_ localapp.Paths,
+		store *local.Store,
+		_ string,
+		_ io.Writer,
+	) error {
+		intelligenceStoreCh <- store
+		return nil
+	}
+	discoverAndScan = func(
+		_ context.Context,
+		_ *numbat.Client,
+		store *local.Store,
+		_ localapp.Config,
+	) (numbat.Inventory, []localapp.HarnessScan, error) {
+		historicalNumbatStoreCh <- store
+		return numbat.Inventory{}, nil, nil
+	}
+	scanHistoricalTranscripts = func(
+		_ context.Context,
+		_ localapp.Paths,
+		store *local.Store,
+	) error {
+		historicalTranscriptStoreCh <- store
+		return nil
+	}
+	runQuickstartSemanticAnalysisWorker = func(
+		_ context.Context,
+		_ preparedRuntime,
+		store *local.Store,
+		_ string,
+		_ io.Writer,
+	) error {
+		semanticStoreCh <- store
+		return nil
+	}
+
+	binary := filepath.Join(t.TempDir(), "numbat")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLocalLaunch(
+		context.Background(),
+		localLaunchOptions{
+			runtime:        testRuntimeFlags(t.TempDir(), binary, "", "", true),
+			commandName:    "quickstart",
+			openBrowser:    false,
+			historicalScan: true,
+			analyze:        true,
+		},
+		io.Discard,
+		io.Discard,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if openCalls != 5 {
+		t.Fatalf("store opens = %d, want one read and four worker stores", openCalls)
+	}
+	if serverStore != readStore {
+		t.Fatal("Local HTTP server did not receive the read store")
+	}
+	if provider == nil {
+		t.Fatal("Local HTTP server did not receive initialization tracking")
+	}
+	if status := provider.InitializationStatus(); status.State != initialization.StateReady {
+		t.Fatalf("initialization status = %+v", status)
+	}
+	if historicalTranscriptStore != historicalNumbatStore ||
+		semanticStore != historicalNumbatStore {
+		t.Fatal("historical scan and semantic analysis did not share their dedicated initialization store")
+	}
+	roles := map[string]*local.Store{
+		"http":         serverStore,
+		"recovery":     recoveryStore,
+		"live":         liveStore,
+		"intelligence": intelligenceStore,
+		"historical":   historicalNumbatStore,
+	}
+	seen := make(map[*local.Store]string)
+	for role, store := range roles {
+		if previous, exists := seen[store]; exists {
+			t.Fatalf("%s and %s reused the same store", previous, role)
+		}
+		seen[store] = role
+	}
 }
 
 type fakeRunningLocalServer struct {
@@ -420,8 +841,9 @@ func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {
 		"monitor-only hooks",
 		"Codex and Claude Code",
 		"loopback-only",
-		"No prompts, completions, file contents, or telemetry",
-		"read-only user-scoped MCP registration",
+		"Full local transcripts are retained encrypted on-device",
+		"Nothing is uploaded",
+		"user-scoped Local MCP registration",
 		"--no-mcp",
 		"--allow-codex-mcp-add",
 		"non-atomic",
@@ -531,6 +953,8 @@ exit 8`)
 }
 
 func TestScanAgentsAndDoctorInventoryProjectionIsPayloadFree(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	const inventoryJSON = `[
 		{
 			"agent":"codex",
@@ -615,12 +1039,22 @@ func TestScanAgentsAndDoctorInventoryProjectionIsPayloadFree(t *testing.T) {
 				}
 			} else {
 				var envelope struct {
-					Inventory cliInventory `json:"inventory"`
+					Inventory             cliInventory                   `json:"inventory"`
+					IntelligenceFreshness localapp.IntelligenceReadiness `json:"intelligence_freshness"`
 				}
 				if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 					t.Fatalf("decode %s output: %v", command.name, err)
 				}
 				projected = envelope.Inventory
+				if command.name == "doctor" &&
+					(envelope.IntelligenceFreshness.Lease != "available" ||
+						envelope.IntelligenceFreshness.Ownership != "not_reported" ||
+						len(envelope.IntelligenceFreshness.Workers) != 2) {
+					t.Fatalf(
+						"doctor intelligence readiness = %+v",
+						envelope.IntelligenceFreshness,
+					)
+				}
 			}
 			if len(projected.Rows) != 2 ||
 				projected.Rows[0] != (cliInventoryRow{
@@ -664,6 +1098,120 @@ func TestDoctorAnalysisStatusExposesCatalogAndCoverage(t *testing.T) {
 	}
 }
 
+type fakeDoctorTranscriptRepository struct {
+	coverage transcript.CoverageCounts
+	err      error
+}
+
+func (repository fakeDoctorTranscriptRepository) TranscriptCoverage(
+	context.Context,
+) (transcript.CoverageCounts, error) {
+	return repository.coverage, repository.err
+}
+
+func TestDoctorTranscriptCoverageExposesCompletePartialAndWithoutCounts(
+	t *testing.T,
+) {
+	want := transcript.CoverageCounts{
+		CanonicalSessions:  8,
+		TranscriptSessions: 6,
+		WithTranscript:     5,
+		WithoutTranscript:  3,
+		Complete:           3,
+		Partial:            2,
+		Live:               1,
+	}
+	got, err := loadDoctorTranscriptCoverage(
+		context.Background(),
+		fakeDoctorTranscriptRepository{coverage: want},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("doctor transcript coverage = %+v, want %+v", got, want)
+	}
+}
+
+func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
+	previousImport := importRecentTranscriptsOnce
+	t.Cleanup(func() {
+		importRecentTranscriptsOnce = previousImport
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan struct{}, 2)
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		calls <- struct{}{}
+		return errors.New("private transcript payload")
+	}
+	warnings := 0
+	pollTranscripts(
+		ctx,
+		localapp.Paths{},
+		nil,
+		time.Millisecond,
+		func() {
+			warnings++
+			if warnings == 2 {
+				cancel()
+			}
+		},
+	)
+	if len(calls) != 2 {
+		t.Fatalf("transcript import calls = %d, want 2", len(calls))
+	}
+	if warnings != 2 {
+		t.Fatalf("transcript polling warnings = %d, want 2", warnings)
+	}
+}
+
+func TestRunScanImportsTranscripts(t *testing.T) {
+	previousScan := scanTranscripts
+	previousOpen := openLocalCommandStore
+	t.Cleanup(func() {
+		scanTranscripts = previousScan
+		openLocalCommandStore = previousOpen
+	})
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+	transcriptScans := 0
+	scanTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		transcriptScans++
+		return nil
+	}
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.OpenWithOptions(path, local.OpenOptions{
+			KeyProvider: keyProvider,
+		})
+	}
+	binary := writeInventoryNumbat(t, "[]")
+	var stdout, stderr bytes.Buffer
+	if err := runScan(
+		context.Background(),
+		[]string{
+			"--home", t.TempDir(),
+			"--numbat", binary,
+			"--allow-unverified-numbat",
+		},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatalf("runScan() error = %v stderr=%s", err, stderr.String())
+	}
+	if transcriptScans != 1 {
+		t.Fatalf("transcript scans = %d, want 1", transcriptScans)
+	}
+}
+
 func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
 	store, err := local.OpenWithOptions(
 		filepath.Join(t.TempDir(), "belay.sqlite"),
@@ -675,7 +1223,11 @@ func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server, err := newLocalHTTPServer(store, "launch-secret")
+	server, err := newLocalHTTPServer(
+		store,
+		"launch-secret",
+		localhttp.ExperienceCurrent,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,8 +1389,295 @@ func TestRunLocalRecoveryBoundsRepeatedDrainWarnings(t *testing.T) {
 	}
 }
 
+func TestRunMCPUsesSeparateReadAndRecoveryStores(t *testing.T) {
+	previousOpen := openLocalCommandStore
+	previousServer := newLocalMCPCommandServer
+	previousRecovery := startMCPRecoveryWorker
+	previousIntelligence := startIntelligenceRuntime
+	t.Cleanup(func() {
+		openLocalCommandStore = previousOpen
+		newLocalMCPCommandServer = previousServer
+		startMCPRecoveryWorker = previousRecovery
+		startIntelligenceRuntime = previousIntelligence
+	})
+	startIntelligenceRuntime = func(
+		context.Context,
+		string,
+		localapp.IntelligenceRuntimeOptions,
+	) (context.CancelFunc, <-chan struct{}) {
+		return func() {}, closedSignal()
+	}
+
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	readStore, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "read.sqlite"),
+		local.OpenOptions{KeyProvider: keyProvider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryStore, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "recovery.sqlite"),
+		local.OpenOptions{KeyProvider: keyProvider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	openCalls := 0
+	var openedPaths []string
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		openCalls++
+		openedPaths = append(openedPaths, path)
+		switch openCalls {
+		case 1:
+			return readStore, nil
+		case 2:
+			return recoveryStore, nil
+		default:
+			return nil, errors.New("unexpected store open")
+		}
+	}
+	recoveryStarted := make(chan struct{})
+	var serverStore *local.Store
+	newLocalMCPCommandServer = func(
+		store *local.Store,
+	) (localMCPCommandServer, error) {
+		serverStore = store
+		return fakeLocalMCPCommandServer{
+			run: func(context.Context) error {
+				<-recoveryStarted
+				return nil
+			},
+		}, nil
+	}
+	var workerStore *local.Store
+	startMCPRecoveryWorker = func(
+		_ context.Context,
+		store *local.Store,
+		_ func(),
+		_ func(),
+	) (context.CancelFunc, <-chan struct{}) {
+		workerStore = store
+		close(recoveryStarted)
+		return func() {}, closedSignal()
+	}
+
+	if err := runMCP(
+		context.Background(),
+		[]string{"--home", t.TempDir()},
+		io.Discard,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if openCalls != 2 {
+		t.Fatalf("store opens = %d, want 2", openCalls)
+	}
+	if openedPaths[0] != openedPaths[1] {
+		t.Fatalf("store paths = %q, want the same database", openedPaths)
+	}
+	if serverStore != readStore {
+		t.Fatal("MCP server did not receive the read store")
+	}
+	if workerStore != recoveryStore {
+		t.Fatal("recovery worker did not receive the recovery store")
+	}
+	if serverStore == workerStore {
+		t.Fatal("MCP reads and recovery share one store")
+	}
+}
+
+func TestRunMCPServesReadsWhenRecoveryStoreOpenFails(t *testing.T) {
+	previousOpen := openLocalCommandStore
+	previousServer := newLocalMCPCommandServer
+	previousRecovery := startMCPRecoveryWorker
+	previousIntelligence := startIntelligenceRuntime
+	t.Cleanup(func() {
+		openLocalCommandStore = previousOpen
+		newLocalMCPCommandServer = previousServer
+		startMCPRecoveryWorker = previousRecovery
+		startIntelligenceRuntime = previousIntelligence
+	})
+	startIntelligenceRuntime = func(
+		context.Context,
+		string,
+		localapp.IntelligenceRuntimeOptions,
+	) (context.CancelFunc, <-chan struct{}) {
+		return func() {}, closedSignal()
+	}
+
+	readStore, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "read.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryOpenAttempted := make(chan struct{})
+	openCalls := 0
+	openLocalCommandStore = func(string) (*local.Store, error) {
+		openCalls++
+		if openCalls == 1 {
+			return readStore, nil
+		}
+		close(recoveryOpenAttempted)
+		return nil, errors.New("PRIVATE_RECOVERY_OPEN_CANARY")
+	}
+	newLocalMCPCommandServer = func(
+		*local.Store,
+	) (localMCPCommandServer, error) {
+		return fakeLocalMCPCommandServer{
+			run: func(context.Context) error {
+				<-recoveryOpenAttempted
+				return nil
+			},
+		}, nil
+	}
+	startMCPRecoveryWorker = func(
+		context.Context,
+		*local.Store,
+		func(),
+		func(),
+	) (context.CancelFunc, <-chan struct{}) {
+		t.Fatal("recovery worker started without a recovery store")
+		return nil, nil
+	}
+
+	var stderr bytes.Buffer
+	if err := runMCP(
+		context.Background(),
+		[]string{"--home", t.TempDir()},
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if openCalls != 2 {
+		t.Fatalf("store opens = %d, want 2", openCalls)
+	}
+	if stderr.String() != mcpRecoveryPendingMessage+"\n" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "PRIVATE_RECOVERY_OPEN_CANARY") {
+		t.Fatal("recovery store error leaked to stderr")
+	}
+}
+
+func TestRunMCPServesReadsWhileIntelligenceLeaseIsContended(t *testing.T) {
+	previousOpen := openLocalCommandStore
+	previousServer := newLocalMCPCommandServer
+	previousRecovery := startMCPRecoveryWorker
+	t.Cleanup(func() {
+		openLocalCommandStore = previousOpen
+		newLocalMCPCommandServer = previousServer
+		startMCPRecoveryWorker = previousRecovery
+	})
+
+	home := t.TempDir()
+	ownerStarted := make(chan struct{})
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	stopOwner, ownerDone := localapp.StartIntelligenceRuntime(
+		ownerCtx,
+		home,
+		localapp.IntelligenceRuntimeOptions{
+			RetryInterval: 10 * time.Millisecond,
+			RunOwner: func(ctx context.Context) error {
+				close(ownerStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		},
+	)
+	t.Cleanup(func() {
+		cancelOwner()
+		stopOwner()
+		<-ownerDone
+	})
+	select {
+	case <-ownerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("lease owner did not start")
+	}
+
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	readStore, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "read.sqlite"),
+		local.OpenOptions{KeyProvider: keyProvider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryStore, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "recovery.sqlite"),
+		local.OpenOptions{KeyProvider: keyProvider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openCalls := 0
+	openLocalCommandStore = func(string) (*local.Store, error) {
+		openCalls++
+		switch openCalls {
+		case 1:
+			return readStore, nil
+		case 2:
+			return recoveryStore, nil
+		default:
+			return nil, errors.New("intelligence store opened without lease")
+		}
+	}
+	readsAvailable := make(chan struct{})
+	newLocalMCPCommandServer = func(
+		*local.Store,
+	) (localMCPCommandServer, error) {
+		return fakeLocalMCPCommandServer{
+			run: func(context.Context) error {
+				close(readsAvailable)
+				return nil
+			},
+		}, nil
+	}
+	startMCPRecoveryWorker = func(
+		context.Context,
+		*local.Store,
+		func(),
+		func(),
+	) (context.CancelFunc, <-chan struct{}) {
+		return func() {}, closedSignal()
+	}
+
+	started := time.Now()
+	if err := runMCP(
+		context.Background(),
+		[]string{"--home", home},
+		io.Discard,
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-readsAvailable:
+	default:
+		t.Fatal("MCP reads were not made available")
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("contended intelligence lease blocked MCP startup")
+	}
+	if openCalls != 2 {
+		t.Fatalf("store opens = %d, want read and recovery only", openCalls)
+	}
+}
+
 type doctorKeyProvider struct {
 	keys map[string][]byte
+}
+
+type fakeLocalMCPCommandServer struct {
+	run func(context.Context) error
+}
+
+func (s fakeLocalMCPCommandServer) RunStdio(ctx context.Context) error {
+	return s.run(ctx)
 }
 
 func (provider *doctorKeyProvider) Load(

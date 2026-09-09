@@ -65,6 +65,50 @@ func TestMigration011FreshSchemaAndCompletedBackfill(t *testing.T) {
 	}
 }
 
+func TestMigration011CompletedBackfillDoesNotBlockOpenOnActiveWriter(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "completed-backfill.sqlite")
+	provider := newMemoryKeyProvider()
+	first, err := Open(path, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	var completed int
+	if err := first.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM local_migration_progress
+		WHERE migration_version = 11 AND complete = 1`,
+	).Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 4 {
+		t.Fatalf("completed migration phases = %d, want 4", completed)
+	}
+
+	tx, err := first.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := withMutationTx(ctx, tx, mutationRecurrenceWorker, func() error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE fix_monitoring_metadata
+			SET updated_at = updated_at
+			WHERE singleton = 1`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(path, provider)
+	if err != nil {
+		t.Fatalf("Open() with completed recurrence migration blocked on active writer: %v", err)
+	}
+	defer second.Close()
+}
+
 func TestMigration011ResumesNormalizedEventBackfillBeforeOpenReturns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "resume.sqlite")

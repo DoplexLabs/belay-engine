@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
 func TestAppendOnlyEnforcementOutsideControlledPrune(t *testing.T) {
@@ -237,6 +238,220 @@ func TestRetentionAgeAndByteBoundsCoverEventsAndFindings(t *testing.T) {
 			t.Fatalf("byte prune = %+v", result)
 		}
 	})
+}
+
+func TestRetentionAgePrunesTranscriptTurnsAndRefreshesSessions(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Date(2026, 9, 9, 15, 0, 0, 0, time.UTC)
+	session := transcriptTestSession(
+		"ses_retention_transcript_age",
+		transcript.CoverageComplete,
+	)
+	oldTokens := int64(10)
+	recentTokens := int64(20)
+	old := transcriptTestTurn(
+		"turn-retention-age-old",
+		"source-retention-age-old",
+		session.SessionKey,
+		0,
+		now.Add(-48*time.Hour),
+		transcript.RoleUser,
+		transcript.Payload{
+			Text:            "old retained transcript payload",
+			JSONLByteOffset: 10,
+		},
+	)
+	old.InputTokens = &oldTokens
+	recent := transcriptTestTurn(
+		"turn-retention-age-recent",
+		"source-retention-age-recent",
+		session.SessionKey,
+		1,
+		now.Add(-time.Hour),
+		transcript.RoleAssistant,
+		transcript.Payload{
+			Text:            "recent retained transcript payload",
+			JSONLByteOffset: 20,
+		},
+	)
+	recent.OutputTokens = &recentTokens
+	if _, err := store.AppendTranscriptBatch(
+		ctx,
+		session,
+		[]transcript.Turn{old, recent},
+	); err != nil {
+		t.Fatal(err)
+	}
+	emptyAfterPrune := transcriptTestSession(
+		"ses_retention_transcript_empty",
+		transcript.CoveragePartial,
+	)
+	onlyOld := transcriptTestTurn(
+		"turn-retention-age-only-old",
+		"source-retention-age-only-old",
+		emptyAfterPrune.SessionKey,
+		0,
+		now.Add(-72*time.Hour),
+		transcript.RoleSystem,
+		transcript.Payload{
+			Text:            "entire session should be removed",
+			JSONLByteOffset: 30,
+		},
+	)
+	if _, err := store.AppendTranscriptBatch(
+		ctx,
+		emptyAfterPrune,
+		[]transcript.Turn{onlyOld},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	countOnly, err := store.RetentionDiagnostics(
+		ctx,
+		RetentionPolicy{MaxEventCount: 1},
+		now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countOnly.EligibleTranscriptTurnCount != 0 {
+		t.Fatalf("MaxEventCount selected transcript turns: %+v", countOnly)
+	}
+
+	policy := RetentionPolicy{MaxAge: 24 * time.Hour}
+	diagnostics, err := store.RetentionDiagnostics(ctx, policy, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.CurrentTranscriptTurnCount != 3 ||
+		diagnostics.EligibleTranscriptTurnCount != 2 ||
+		diagnostics.CurrentTranscriptPayloadBytes <= 0 ||
+		diagnostics.EligibleTranscriptPayloadBytes <= 0 ||
+		diagnostics.CurrentPayloadBytes !=
+			diagnostics.CurrentTranscriptPayloadBytes ||
+		diagnostics.EligiblePayloadBytes !=
+			diagnostics.EligibleTranscriptPayloadBytes {
+		t.Fatalf("transcript age diagnostics = %+v", diagnostics)
+	}
+
+	result, err := store.Prune(ctx, policy, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PrunedTranscriptTurnCount != 2 ||
+		result.AfterTranscriptTurnCount != 1 ||
+		result.PrunedTranscriptPayloadBytes !=
+			diagnostics.EligibleTranscriptPayloadBytes ||
+		result.AfterTranscriptPayloadBytes !=
+			diagnostics.CurrentTranscriptPayloadBytes-
+				diagnostics.EligibleTranscriptPayloadBytes ||
+		result.PrunedPayloadBytes != result.PrunedTranscriptPayloadBytes {
+		t.Fatalf("transcript age prune = %+v", result)
+	}
+	turns, err := store.QueryTranscriptTurns(ctx, session.SessionKey, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 ||
+		turns[0].TurnID != recent.TurnID ||
+		turns[0].TurnIndex != 0 {
+		t.Fatalf("retained transcript turns = %+v", turns)
+	}
+	gotSession, err := store.GetTranscriptSession(ctx, session.SessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSession.TurnCount != 1 ||
+		gotSession.TotalTokens == nil ||
+		*gotSession.TotalTokens != recentTokens ||
+		!gotSession.StartedAt.Equal(recent.OccurredAt) ||
+		!gotSession.EndedAt.Equal(recent.OccurredAt) {
+		t.Fatalf("retained transcript session = %+v", gotSession)
+	}
+	if _, err := store.GetTranscriptSession(
+		ctx,
+		emptyAfterPrune.SessionKey,
+	); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("empty transcript session error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestRetentionPayloadByteBoundCountsTranscriptCiphertext(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	now := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	session := transcriptTestSession(
+		"ses_retention_transcript_bytes",
+		transcript.CoverageLive,
+	)
+	turns := []transcript.Turn{
+		transcriptTestTurn(
+			"turn-retention-bytes-old",
+			"source-retention-bytes-old",
+			session.SessionKey,
+			0,
+			now.Add(-time.Hour),
+			transcript.RoleUser,
+			transcript.Payload{
+				Text:            "old transcript payload with enough content to encrypt",
+				JSONLByteOffset: 10,
+			},
+		),
+		transcriptTestTurn(
+			"turn-retention-bytes-new",
+			"source-retention-bytes-new",
+			session.SessionKey,
+			1,
+			now,
+			transcript.RoleAssistant,
+			transcript.Payload{
+				Text:            "new transcript payload with enough content to encrypt",
+				JSONLByteOffset: 20,
+			},
+		),
+	}
+	if _, err := store.AppendTranscriptBatch(ctx, session, turns); err != nil {
+		t.Fatal(err)
+	}
+	items, err := readRetentionItems(ctx, store.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total, oldestBytes int64
+	for _, item := range items {
+		if item.recordType != "transcript_turn" {
+			continue
+		}
+		total += item.bytes
+		if item.recordID == turns[0].TurnID {
+			oldestBytes = item.bytes
+		}
+	}
+	if total <= 0 || oldestBytes <= 0 {
+		t.Fatalf("transcript ciphertext bytes = total %d, oldest %d", total, oldestBytes)
+	}
+	policy := RetentionPolicy{MaxPayloadBytes: total - oldestBytes}
+	result, err := store.Prune(ctx, policy, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PrunedTranscriptTurnCount != 1 ||
+		result.PrunedEventCount != 0 ||
+		result.AfterTranscriptTurnCount != 1 ||
+		result.AfterTranscriptPayloadBytes > policy.MaxPayloadBytes ||
+		result.AfterPayloadBytes > policy.MaxPayloadBytes {
+		t.Fatalf("transcript byte prune = %+v", result)
+	}
+	retained, err := store.QueryTranscriptTurns(ctx, session.SessionKey, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) != 1 ||
+		retained[0].TurnID != turns[1].TurnID ||
+		retained[0].TurnIndex != 0 {
+		t.Fatalf("retained byte-bound transcript turns = %+v", retained)
+	}
 }
 
 func TestRetentionByteBoundAccountsForImmediateFindingCascade(t *testing.T) {

@@ -14,6 +14,56 @@
   });
   const mutationRequestDeadlineMilliseconds = 15_000;
   const initializationPollMilliseconds = 2_000;
+  const transcriptPollMilliseconds = 2_000;
+  const runtimeSchemaVersion = "belay.local-runtime.v1";
+  const experienceCopy = Object.freeze({
+    current: Object.freeze({
+      navBrief: "Report",
+      navAttention: "Attention",
+      navSessions: "Sessions",
+      briefEyebrow: "Belay Report",
+      briefLoading: "Preparing your report…",
+      briefErrorTitle: "Report unavailable",
+      briefErrorDetail:
+        "Belay could not prepare the report. Attention and Sessions remain available.",
+      briefOpenAttention: "Open all issues",
+      briefOpenSessions: "Open history",
+      briefRecentEmptyDetail:
+        "Use /belay from Claude Code or Codex to review the top issue.",
+      attentionAriaLabel: "Attention inbox",
+      attentionEyebrow: "Findings",
+      attentionHeading: "Attention",
+      attentionStatus: "Attention status",
+      attentionBackLabel: "Back to Attention list",
+      attentionEmptyDetail:
+        "Refresh Attention before relying on this result.",
+      attentionFilterSummary: "Filter Attention",
+      sessionsHeading: "Sessions",
+    }),
+    "value-first": Object.freeze({
+      navBrief: "Report",
+      navAttention: "Review",
+      navSessions: "History",
+      briefEyebrow: "Belay Report",
+      briefLoading: "Preparing your report…",
+      briefErrorTitle: "Report unavailable",
+      briefErrorDetail:
+        "Belay could not prepare the report. Review and History remain available.",
+      briefOpenAttention: "Open all issues",
+      briefOpenSessions: "Open history",
+      briefRecentEmptyDetail:
+        "Use /belay from Claude Code or Codex to review the top issue.",
+      attentionAriaLabel: "Review findings",
+      attentionEyebrow: "Findings and evidence gaps",
+      attentionHeading: "Review",
+      attentionStatus: "Review status",
+      attentionBackLabel: "Back to Review list",
+      attentionEmptyDetail:
+        "Refresh Review before relying on this result.",
+      attentionFilterSummary: "Filter Review",
+      sessionsHeading: "History",
+    }),
+  });
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
   const issueCatalog = Object.freeze({
     "issue.explicit_command_failure": Object.freeze({
@@ -209,16 +259,33 @@
   const state = {
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
+    experience: "current",
     activeView: "brief",
     initialization: null,
     initializationRequestInFlight: false,
     initializationPollGeneration: 0,
     initializationPollTimer: 0,
+    transcriptStatus: null,
+    transcriptStatusStale: false,
+    transcriptRequestInFlight: false,
+    transcriptPollGeneration: 0,
+    transcriptPollTimer: 0,
     developerBrief: null,
     briefStatus: "idle",
     briefError: "",
     briefRequestGeneration: 0,
     briefSelectionID: "",
+    missionPackRequestGeneration: 0,
+    missionPackCacheGeneration: 0,
+    missionPackRequestController: null,
+    missionPackIssue: null,
+    missionPack: null,
+    reportEvidenceIssueID: "",
+    attentionMode: "issues",
+    costIssues: [],
+    costIssueStatus: "idle",
+    costIssueError: "",
+    costIssueRequestGeneration: 0,
     issues: createAttentionFamilyBucket(),
     evidenceGaps: createIssueBucket("evidence_gap"),
     issueFilters: {
@@ -323,9 +390,13 @@
     appShell: document.querySelector("#app-shell"),
     initializationBanner: document.querySelector("#initialization-banner"),
     navBrief: document.querySelector("#nav-brief"),
+    navBriefLabel: document.querySelector("#nav-brief-label"),
     navAttention: document.querySelector("#nav-attention"),
+    navAttentionLabel: document.querySelector("#nav-attention-label"),
     navSessions: document.querySelector("#nav-sessions"),
+    navSessionsLabel: document.querySelector("#nav-sessions-label"),
     briefView: document.querySelector("#brief-view"),
+    briefEyebrow: document.querySelector("#brief-eyebrow"),
     briefHeading: document.querySelector("#brief-heading"),
     briefWindow: document.querySelector("#brief-window"),
     briefStatus: document.querySelector("#brief-status"),
@@ -333,8 +404,26 @@
     briefAgentCount: document.querySelector("#brief-agent-count"),
     briefOutcomeCount: document.querySelector("#brief-outcome-count"),
     briefLatestActivity: document.querySelector("#brief-latest-activity"),
+    reportSparkline: document.querySelector("#report-sparkline"),
+    transcriptRefreshStatus: document.querySelector(
+      "#transcript-refresh-status",
+    ),
+    transcriptWithCount: document.querySelector("#transcript-with-count"),
+    transcriptPartialCount: document.querySelector(
+      "#transcript-partial-count",
+    ),
+    transcriptWithoutCount: document.querySelector(
+      "#transcript-without-count",
+    ),
+    transcriptOnlyCount: document.querySelector("#transcript-only-count"),
+    transcriptSessionList: document.querySelector(
+      "#transcript-session-list",
+    ),
+    transcriptEmpty: document.querySelector("#transcript-empty"),
     briefLoading: document.querySelector("#brief-loading"),
+    briefLoadingText: document.querySelector("#brief-loading-text"),
     briefError: document.querySelector("#brief-error"),
+    briefErrorTitle: document.querySelector("#brief-error-title"),
     briefErrorDetail: document.querySelector("#brief-error-detail"),
     briefRetry: document.querySelector("#brief-retry"),
     briefContent: document.querySelector("#brief-content"),
@@ -361,12 +450,62 @@
     briefSources: document.querySelector("#brief-sources"),
     briefOpenAttention: document.querySelector("#brief-open-attention"),
     briefOpenSessions: document.querySelector("#brief-open-sessions"),
+    missionPackModalLayer: document.querySelector(
+      "#mission-pack-modal-layer",
+    ),
+    missionPackDialog: document.querySelector("#mission-pack-dialog"),
+    missionPackTitle: document.querySelector("#mission-pack-dialog-title"),
+    missionPackClose: document.querySelector("#mission-pack-close"),
+    missionPackDone: document.querySelector("#mission-pack-done"),
+    missionPackLoading: document.querySelector("#mission-pack-loading"),
+    missionPackError: document.querySelector("#mission-pack-error"),
+    missionPackErrorDetail: document.querySelector(
+      "#mission-pack-error-detail",
+    ),
+    missionPackRetry: document.querySelector("#mission-pack-retry"),
+    missionPackContent: document.querySelector("#mission-pack-content"),
+    missionPackMetadata: document.querySelector("#mission-pack-metadata"),
+    missionPackSections: document.querySelector("#mission-pack-sections"),
+    missionPackSize: document.querySelector("#mission-pack-size"),
+    missionPackCopy: document.querySelector("#mission-pack-copy"),
+    missionPackShowEvidence: document.querySelector(
+      "#mission-pack-show-evidence",
+    ),
+    reportEvidenceModalLayer: document.querySelector(
+      "#report-evidence-modal-layer",
+    ),
+    reportEvidenceDialog: document.querySelector("#report-evidence-dialog"),
+    reportEvidenceTitle: document.querySelector(
+      "#report-evidence-dialog-title",
+    ),
+    reportEvidenceClose: document.querySelector("#report-evidence-close"),
+    reportEvidenceDone: document.querySelector("#report-evidence-done"),
+    reportEvidenceFixCommand: document.querySelector(
+      "#report-evidence-fix-command",
+    ),
+    reportEvidenceExcerpts: document.querySelector(
+      "#report-evidence-excerpts",
+    ),
+    reportEvidenceFix: document.querySelector("#report-evidence-fix"),
     attentionNavCount: document.querySelector("#attention-nav-count"),
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
     attentionListPane: document.querySelector("#attention-list-pane"),
+    attentionModeIssues: document.querySelector("#attention-mode-issues"),
+    attentionModeSafety: document.querySelector("#attention-mode-safety"),
+    attentionEyebrow: document.querySelector("#attention-eyebrow"),
+    attentionHeading: document.querySelector("#attention-heading"),
+    attentionStatusLabel: document.querySelector("#attention-status-label"),
     attentionDetailPane: document.querySelector("#attention-detail-pane"),
     attentionScroll: document.querySelector(".attention-scroll"),
+    costIssuesSection: document.querySelector("#cost-issues-section"),
+    costIssueCount: document.querySelector("#cost-issue-count"),
+    costIssueList: document.querySelector("#cost-issue-list"),
+    costIssuesLoading: document.querySelector("#cost-issues-loading"),
+    costIssuesEmpty: document.querySelector("#cost-issues-empty"),
+    costIssuesError: document.querySelector("#cost-issues-error"),
+    costIssuesRetry: document.querySelector("#cost-issues-retry"),
+    safetyContent: null,
     stableIssuesSection: document.querySelector("#stable-issues-section"),
     evidenceGapsSection: document.querySelector("#evidence-gaps-section"),
     fixMonitoringSection: document.querySelector("#fix-monitoring-section"),
@@ -483,6 +622,9 @@
     familyMemberList: document.querySelector("#family-member-list"),
     familyMembersLoading: document.querySelector("#family-members-loading"),
     familyMembersEmpty: document.querySelector("#family-members-empty"),
+    familyMembersEmptyDetail: document.querySelector(
+      "#family-members-empty-detail",
+    ),
     familyMembersPagination: document.querySelector(
       "#family-members-pagination",
     ),
@@ -565,6 +707,7 @@
     sessionsPagination: document.querySelector("#sessions-pagination"),
     sessionsPageStatus: document.querySelector("#sessions-page-status"),
     sessionsLoadMore: document.querySelector("#sessions-load-more"),
+    sessionsHeading: document.querySelector("#sessions-heading"),
     sessionsLoading: document.querySelector("#sessions-loading"),
     sessionsEmpty: document.querySelector("#sessions-empty"),
     welcomeState: document.querySelector("#welcome-state"),
@@ -657,6 +800,8 @@
 
   const focusRegistry = {
     briefActions: new Map(),
+    missionPackTriggers: new Map(),
+    reportEvidenceTriggers: new Map(),
     briefSessions: new Map(),
     diagnosisActions: new Map(),
     monitoringCards: new Map(),
@@ -673,9 +818,12 @@
   const fixDrafts = new Map();
   const fixRetractionDrafts = new Map();
   const fixObservationPages = new Map();
+  const missionPackCacheByID = new Map();
+  const missionPackIDByIssue = new Map();
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
+  const runtimeReady = loadRuntimeExperience();
   prepareValueFirstAttentionLayout();
   renderFixDialogChoices();
   renderFixMonitoringFilters();
@@ -743,9 +891,98 @@
   }
 
   async function startProgressiveInitialization() {
+    await runtimeReady;
     await requestInitializationStatus();
     await refreshActiveViewForInitialization(false);
     scheduleInitializationPoll();
+    void startTranscriptPolling();
+  }
+
+  async function startTranscriptPolling() {
+    await requestTranscriptStatus();
+    scheduleTranscriptPoll();
+  }
+
+  async function loadRuntimeExperience() {
+    let experience = "current";
+    try {
+      const response = await apiGet("/v1/runtime");
+      experience = requireRuntimeExperience(response);
+    } catch {
+      experience = "current";
+    }
+    applyExperience(experience);
+    return experience;
+  }
+
+  function requireRuntimeExperience(response) {
+    const experience = readText(response && response.experience);
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== runtimeSchemaVersion ||
+      !["current", "value-first"].includes(experience)
+    ) {
+      throw new Error("Local API returned an invalid runtime experience.");
+    }
+    return experience;
+  }
+
+  function applyExperience(experience) {
+    const selected = experience === "value-first" ? experience : "current";
+    const copy = experienceCopy[selected];
+    state.experience = selected;
+    document.body.dataset.experience = selected;
+    elements.appShell.dataset.experience = selected;
+    elements.navBriefLabel.textContent = copy.navBrief;
+    elements.navAttentionLabel.textContent = copy.navAttention;
+    elements.navSessionsLabel.textContent = copy.navSessions;
+    elements.briefEyebrow.textContent = copy.briefEyebrow;
+    elements.briefLoadingText.textContent = copy.briefLoading;
+    elements.briefErrorTitle.textContent = copy.briefErrorTitle;
+    elements.briefErrorDetail.textContent = copy.briefErrorDetail;
+    elements.briefOpenAttention.textContent = copy.briefOpenAttention;
+    elements.briefOpenSessions.textContent = copy.briefOpenSessions;
+    elements.briefRecentEmptyDetail.textContent = copy.briefRecentEmptyDetail;
+    elements.attentionListPane.setAttribute(
+      "aria-label",
+      copy.attentionAriaLabel,
+    );
+    elements.attentionEyebrow.textContent = copy.attentionEyebrow;
+    elements.attentionHeading.textContent = copy.attentionHeading;
+    elements.attentionStatusLabel.textContent = copy.attentionStatus;
+    elements.familyBackButton.setAttribute(
+      "aria-label",
+      copy.attentionBackLabel,
+    );
+    elements.issueBackButton.setAttribute(
+      "aria-label",
+      copy.attentionBackLabel,
+    );
+    elements.familyMembersEmptyDetail.textContent =
+      copy.attentionEmptyDetail;
+    elements.sessionsHeading.textContent = copy.sessionsHeading;
+    const filterSummary = document.querySelector(
+      "#attention-filter-disclosure > summary",
+    );
+    if (filterSummary) {
+      filterSummary.textContent = copy.attentionFilterSummary;
+    }
+  }
+
+  // Only pass fixed, locally authored UI copy here. This rewrites nav terms
+  // unconditionally, so event-, catalog-, API-error-, and provider-derived text
+  // must render verbatim and never flow through this function.
+  function experiencePageText(value) {
+    const text = readText(value);
+    if (state.experience !== "value-first") return text;
+    return text
+      .replaceAll("Developer Brief", "Home")
+      .replaceAll("Brief", "Home")
+      .replaceAll("The brief", "Home")
+      .replaceAll("the brief", "Home")
+      .replaceAll("local brief", "Home")
+      .replaceAll("Attention", "Review")
+      .replaceAll("Sessions", "History");
   }
 
   async function requestInitializationStatus() {
@@ -777,6 +1014,129 @@
     } finally {
       state.initializationRequestInFlight = false;
     }
+  }
+
+  async function requestTranscriptStatus() {
+    if (state.transcriptRequestInFlight) return false;
+    state.transcriptRequestInFlight = true;
+    const generation = ++state.transcriptPollGeneration;
+    try {
+      const response = await apiGet("/v1/transcript-status");
+      if (generation !== state.transcriptPollGeneration) return false;
+      state.transcriptStatus = requireTranscriptStatus(response);
+      state.transcriptStatusStale = false;
+      renderTranscriptStatus();
+      return true;
+    } catch {
+      if (generation !== state.transcriptPollGeneration) return false;
+      state.transcriptStatusStale = true;
+      renderTranscriptStatus();
+      return false;
+    } finally {
+      state.transcriptRequestInFlight = false;
+    }
+  }
+
+  function requireTranscriptStatus(response) {
+    const coverage = isRecord(response) ? response.coverage : null;
+    const sessions = isRecord(response) && Array.isArray(response.sessions)
+      ? response.sessions
+      : null;
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== "belay.transcript-status.v1" ||
+      !isRecord(coverage) ||
+      sessions === null ||
+      sessions.length > 10
+    ) {
+      throw new Error("Local API returned an invalid transcript status.");
+    }
+    const counts = {
+      with_transcript: toOptionalCount(coverage.with_transcript),
+      partial: toOptionalCount(coverage.partial),
+      without_transcript: toOptionalCount(coverage.without_transcript),
+      transcript_only: toOptionalCount(coverage.transcript_only),
+    };
+    if (Object.values(counts).some((value) => value === null)) {
+      throw new Error("Local API returned invalid transcript coverage.");
+    }
+    return {
+      coverage: counts,
+      sessions: sessions.map((session) => ({
+        session_key: readText(session && session.session_key),
+        agent: readText(session && session.agent),
+        project: readText(session && session.project),
+        last_activity_at: readText(session && session.last_activity_at),
+        coverage: readText(session && session.coverage),
+        turn_count: toOptionalCount(session && session.turn_count),
+        active: session && session.active === true,
+      })),
+    };
+  }
+
+  function renderTranscriptStatus() {
+    const status = state.transcriptStatus;
+    if (!status) {
+      elements.transcriptRefreshStatus.textContent =
+        "Transcript status unavailable · retrying every 2 seconds";
+      elements.transcriptRefreshStatus.dataset.state = "unavailable";
+      return;
+    }
+    const coverage = status.coverage;
+    elements.transcriptWithCount.textContent = formatNumber(
+      coverage.with_transcript,
+    );
+    elements.transcriptPartialCount.textContent = formatNumber(
+      coverage.partial,
+    );
+    elements.transcriptWithoutCount.textContent = formatNumber(
+      coverage.without_transcript,
+    );
+    elements.transcriptOnlyCount.textContent = formatNumber(
+      coverage.transcript_only,
+    );
+    elements.transcriptRefreshStatus.textContent = state.transcriptStatusStale
+      ? "Last transcript status is stale · retrying every 2 seconds"
+      : "Updates every 2 seconds";
+    elements.transcriptRefreshStatus.dataset.state =
+      state.transcriptStatusStale ? "stale" : "current";
+    elements.transcriptSessionList.replaceChildren();
+    status.sessions.forEach((session) => {
+      const row = document.createElement("div");
+      row.className = "transcript-session-row";
+      row.dataset.active = session.active ? "true" : "false";
+      const project = document.createElement("strong");
+      project.textContent =
+        session.project ||
+        displayHarness(session.agent) ||
+        "Local agent session";
+      const detail = document.createElement("span");
+      const activity = formatRelativeTime(session.last_activity_at);
+      const turns = session.turn_count === null
+        ? "turn count unavailable"
+        : `${formatNumber(session.turn_count)} ${
+            session.turn_count === 1 ? "turn" : "turns"
+          }`;
+      detail.textContent = `${
+        session.active ? "Live" : readableLabel(session.coverage, "Recent")
+      } · ${turns} · ${activity}`;
+      row.append(project, detail);
+      elements.transcriptSessionList.append(row);
+    });
+    elements.transcriptEmpty.hidden = status.sessions.length !== 0;
+  }
+
+  function scheduleTranscriptPoll() {
+    if (state.transcriptRequestInFlight || state.transcriptPollTimer) return;
+    state.transcriptPollTimer = globalThis.setTimeout(() => {
+      state.transcriptPollTimer = 0;
+      void pollTranscriptStatus();
+    }, transcriptPollMilliseconds);
+  }
+
+  async function pollTranscriptStatus() {
+    await requestTranscriptStatus();
+    scheduleTranscriptPoll();
   }
 
   function requireInitializationStatus(response) {
@@ -875,6 +1235,7 @@
   }
 
   async function loadDeveloperBrief(preserveCurrent = false) {
+    clearMissionPackCache();
     const generation = ++state.briefRequestGeneration;
     const priorBrief = state.developerBrief;
     const priorStatus = state.briefStatus;
@@ -886,7 +1247,7 @@
       renderDeveloperBrief();
     }
     try {
-      const response = await apiGet("/v1/developer-brief");
+      const response = await apiGet("/v1/report");
       if (generation !== state.briefRequestGeneration) return false;
       state.developerBrief = requireDeveloperBrief(response);
       state.briefStatus = "ready";
@@ -905,7 +1266,7 @@
       state.briefStatus = "error";
       state.briefError = customerErrorMessage(
         error,
-        "Belay could not prepare the brief. Attention and Sessions remain available.",
+        experienceCopy[state.experience].briefErrorDetail,
       );
       renderDeveloperBrief();
       return false;
@@ -913,26 +1274,23 @@
   }
 
   function requireDeveloperBrief(response) {
-    const brief =
-      isRecord(response && response.data) &&
-      readText(response.data.projection_version) ===
-        "belay.developer-brief.v1"
-        ? response.data
-        : response;
+    const brief = isRecord(response && response.data)
+      ? response.data
+      : response;
     if (
       !isRecord(brief) ||
-      readText(brief.projection_version) !== "belay.developer-brief.v1" ||
-      !["ready", "limited"].includes(readText(brief.status)) ||
-      !isRecord(brief.window) ||
-      !isRecord(brief.recent_summary) ||
-      !Array.isArray(brief.action_cards) ||
-      !Array.isArray(brief.recent_work) ||
-      !isRecord(brief.coverage) ||
-      !Array.isArray(brief.coverage.sources) ||
-      !Array.isArray(brief.coverage.limitations)
+      readText(brief.projection_version) !== "belay.report.v1" ||
+      !isRecord(brief.totals) ||
+      !Array.isArray(brief.weeks) ||
+      !Array.isArray(brief.top_issues) ||
+      !Array.isArray(brief.fixes) ||
+      !isRecord(brief.waste) ||
+      !isRecord(brief.about) ||
+      !Array.isArray(brief.about.notes)
     ) {
-      throw new Error("Local API returned an invalid developer brief.");
+      throw new Error("Local API returned an invalid report.");
     }
+    brief.top_issues = brief.top_issues.slice(0, 5).map(requireCostIssue);
     return brief;
   }
 
@@ -944,34 +1302,691 @@
     elements.briefError.hidden = !failed;
     elements.briefContent.hidden = !brief || loading || failed;
     elements.briefErrorDetail.textContent =
-      state.briefError ||
-      "Belay could not prepare the brief. Attention and Sessions remain available.";
+      state.briefError || experienceCopy[state.experience].briefErrorDetail;
     if (!brief) {
       if (loading) {
         elements.briefWindow.textContent =
           "Loading the latest recorded activity…";
         elements.briefStatus.textContent = "";
       }
+      elements.reportSparkline.replaceChildren();
+      elements.reportSparkline.hidden = true;
       renderBriefSummary(null);
       return;
     }
-    const start = parseDate(brief.window.started_at);
-    const end = parseDate(brief.window.ended_at);
-    elements.briefWindow.textContent =
-      start && end
-        ? `${formatFullDate(start)} to ${formatFullDate(end)}`
-        : "Rolling 24-hour window";
-    elements.briefStatus.textContent =
-      initializationInProgress()
-        ? "Initial import is still in progress; these values are partial."
-        : readText(brief.status) === "limited"
-        ? "Brief is limited. Review the coverage notes before relying on it."
-        : "Based on the activity Belay could evaluate.";
-    renderBriefSummary(brief.recent_summary);
-    renderBriefActions(brief);
-    renderBriefRecentWork(brief);
-    renderBriefAcrossAgents(brief.recent_summary);
-    renderBriefCoverage(brief);
+    const harnesses = Array.isArray(brief.totals.harnesses)
+      ? brief.totals.harnesses.map(displayHarness).filter(Boolean)
+      : [];
+    elements.briefWindow.textContent = harnesses.length
+      ? `All retained activity across ${harnesses.join(" and ")}`
+      : "All retained activity across supported harnesses";
+    elements.briefStatus.textContent = initializationInProgress()
+      ? "Initial import is still in progress; these values are partial."
+      : `Updated ${formatRelativeTime(brief.generated_at) || "just now"}`;
+    renderReportTotals(brief);
+    renderReportIssues(brief.top_issues);
+    renderReportFixes(brief.fixes);
+    renderReportWaste(brief.waste);
+    renderReportAbout(brief.about);
+  }
+
+  function renderReportTotals(report) {
+    const totals = report.totals;
+    elements.briefSessionCount.textContent = formatNumber(totals.sessions);
+    elements.briefAgentCount.textContent =
+      `${totals.hours_lower_bound === true ? "≥" : ""}${formatNumber(totals.hours)} h`;
+    elements.briefOutcomeCount.textContent =
+      `${totals.tokens_lower_bound === true ? "≥" : ""}${formatNumber(totals.tokens)}`;
+    elements.briefLatestActivity.textContent =
+      `${totals.dollars_lower_bound === true ? "≥" : ""}${formatReportDollars(totals.dollars)}`;
+    const weeks = report.weeks.slice(-12);
+    const maximum = Math.max(
+      1,
+      ...weeks.map((week) => toFiniteNumber(week && week.session_count)),
+    );
+    const fragment = document.createDocumentFragment();
+    weeks.forEach((week) => {
+      const sessions = toFiniteNumber(week && week.session_count);
+      const bar = createElement("span", "report-spark-bar");
+      bar.style.height =
+        sessions === 0
+          ? "0"
+          : `${Math.max(8, (sessions / maximum) * 100)}%`;
+      bar.title = `${formatFullDate(parseDate(week && week.week_start)) || "Week"} · ${formatNumber(sessions)} ${sessions === 1 ? "session" : "sessions"} · ${week && week.cost_lower_bound === true ? "at least " : ""}${formatReportDollars(week && week.total_cost_usd)}`;
+      fragment.append(bar);
+    });
+    elements.reportSparkline.replaceChildren(fragment);
+    elements.reportSparkline.hidden = weeks.length === 0;
+  }
+
+  function renderReportIssues(issues) {
+    focusRegistry.missionPackTriggers.clear();
+    focusRegistry.reportEvidenceTriggers.clear();
+    const fragment = document.createDocumentFragment();
+    issues.forEach((issue) => {
+      fragment.append(createReportIssueCard(issue));
+    });
+    elements.briefActionList.replaceChildren(fragment);
+    elements.briefActionsEmpty.hidden = issues.length !== 0;
+  }
+
+  function createReportIssueCard(issue) {
+    const card = createElement("article", "brief-action-card report-issue-card");
+    card.append(
+      createElement("h3", "report-issue-headline", readText(issue.headline)),
+      createElement(
+        "p",
+        "brief-evidence report-issue-metrics",
+        [
+          formatIssueDollarCost(issue.cost),
+          formatIssueMinutes(issue.cost),
+          formatIssueTokens(issue.cost),
+          `${formatNumber(issue.session_count)} ${toFiniteNumber(issue.session_count) === 1 ? "session" : "sessions"}`,
+          reportTrendSummary(issue.trend),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+    );
+    if (issue.excerpts.length) {
+      card.append(createReportIssuePreview(issue.excerpts[0]));
+    }
+    const fix = createElement("div", "report-issue-fix");
+    fix.append(
+      createElement(
+        "strong",
+        "report-issue-fix-target",
+        readText(issue.suggested_fix.target_file) || "Agent instructions",
+      ),
+      createElement(
+        "p",
+        "report-issue-fix-rationale",
+        readText(issue.suggested_fix.rationale) ||
+          "Add a durable project instruction for this pattern.",
+      ),
+    );
+    card.append(fix);
+    const actions = createElement("div", "report-card-actions");
+    const prepareButton = createElement(
+      "button",
+      "primary-button",
+      "Prepare next session",
+    );
+    prepareButton.type = "button";
+    prepareButton.setAttribute("aria-haspopup", "dialog");
+    prepareButton.setAttribute("aria-controls", "mission-pack-dialog");
+    prepareButton.addEventListener("click", () => {
+      openMissionPackDrawer(issue);
+    });
+    const evidenceButton = createElement(
+      "button",
+      "secondary-button",
+      "Show evidence",
+    );
+    evidenceButton.type = "button";
+    evidenceButton.setAttribute("aria-haspopup", "dialog");
+    evidenceButton.setAttribute("aria-controls", "report-evidence-dialog");
+    evidenceButton.addEventListener("click", () => {
+      openReportEvidenceDrawer(issue);
+    });
+    const issueID = readText(issue.issue_id);
+    if (issueID) {
+      focusRegistry.missionPackTriggers.set(issueID, prepareButton);
+      focusRegistry.reportEvidenceTriggers.set(issueID, evidenceButton);
+    }
+    actions.append(prepareButton, evidenceButton);
+    card.append(actions);
+    return card;
+  }
+
+  function createReportIssuePreview(excerpt) {
+    const wrapper = createElement("div", "report-issue-preview");
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = compactID(citation.session_key);
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "";
+    wrapper.append(
+      createElement(
+        "p",
+        "report-issue-preview-citation",
+        [role, tool, session, turn].filter(Boolean).join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        truncateReportPreview(
+          readText(excerpt && excerpt.text) || "Excerpt unavailable",
+        ),
+      ),
+    );
+    return wrapper;
+  }
+
+  function truncateReportPreview(value) {
+    const characters = Array.from(readText(value));
+    if (characters.length <= 220) return characters.join("");
+    const candidate = characters.slice(0, 220).join("");
+    const boundary = candidate.search(/\s+\S*$/);
+    const clipped = boundary >= 160 ? candidate.slice(0, boundary) : candidate;
+    return `${clipped.trimEnd()}…`;
+  }
+
+  function clearMissionPackCache() {
+    state.missionPackCacheGeneration += 1;
+    missionPackCacheByID.clear();
+    missionPackIDByIssue.clear();
+  }
+
+  function openMissionPackDrawer(issue) {
+    const issueID = readText(issue && issue.issue_id);
+    if (!issueID) return;
+    state.dialogReturnFocus = { type: "mission-pack", issueID };
+    state.activeModal = "mission-pack";
+    state.missionPackIssue = issue;
+    state.missionPack = null;
+    elements.missionPackTitle.textContent = "Mission Pack";
+    resetMissionPackDrawer();
+    openModalLayer(
+      elements.missionPackModalLayer,
+      elements.missionPackDialog,
+      elements.missionPackClose,
+    );
+    void loadMissionPack(issueID);
+  }
+
+  function resetMissionPackDrawer() {
+    elements.missionPackLoading.hidden = false;
+    elements.missionPackError.hidden = true;
+    elements.missionPackErrorDetail.textContent = "";
+    elements.missionPackContent.hidden = true;
+    elements.missionPackMetadata.replaceChildren();
+    elements.missionPackSections.replaceChildren();
+    elements.missionPackSize.textContent = "";
+    elements.missionPackCopy.disabled = true;
+    elements.missionPackShowEvidence.disabled = !readText(
+      state.missionPackIssue && state.missionPackIssue.issue_id,
+    );
+  }
+
+  async function loadMissionPack(issueID) {
+    const cachedPackID = missionPackIDByIssue.get(issueID);
+    const cachedPack = cachedPackID
+      ? missionPackCacheByID.get(cachedPackID)
+      : null;
+    if (cachedPack) {
+      state.missionPack = cachedPack;
+      renderMissionPack(cachedPack);
+      return;
+    }
+    if (
+      state.missionPackRequestController &&
+      typeof state.missionPackRequestController.abort === "function"
+    ) {
+      state.missionPackRequestController.abort();
+    }
+    const controller =
+      typeof globalThis.AbortController === "function"
+        ? new globalThis.AbortController()
+        : null;
+    state.missionPackRequestController = controller;
+    const requestGeneration = ++state.missionPackRequestGeneration;
+    const cacheGeneration = state.missionPackCacheGeneration;
+    try {
+      const response = await apiGet(
+        `/v1/mission-pack?issue_id=${encodeURIComponent(issueID)}&intent=general`,
+        controller ? controller.signal : undefined,
+      );
+      if (
+        requestGeneration !== state.missionPackRequestGeneration ||
+        state.activeModal !== "mission-pack" ||
+        readText(state.missionPackIssue && state.missionPackIssue.issue_id) !==
+          issueID
+      ) {
+        return;
+      }
+      const pack = requireMissionPack(response);
+      state.missionPack = pack;
+      if (cacheGeneration === state.missionPackCacheGeneration) {
+        missionPackCacheByID.set(pack.pack_id, pack);
+        missionPackIDByIssue.set(issueID, pack.pack_id);
+      }
+      renderMissionPack(pack);
+    } catch (error) {
+      const aborted = Boolean(controller && controller.signal.aborted);
+      if (
+        aborted ||
+        requestGeneration !== state.missionPackRequestGeneration ||
+        state.activeModal !== "mission-pack"
+      ) {
+        return;
+      }
+      elements.missionPackLoading.hidden = true;
+      elements.missionPackContent.hidden = true;
+      elements.missionPackError.hidden = false;
+      elements.missionPackErrorDetail.textContent = customerErrorMessage(
+        error,
+        "Belay could not prepare this Mission Pack.",
+      );
+    } finally {
+      if (state.missionPackRequestController === controller) {
+        state.missionPackRequestController = null;
+      }
+    }
+  }
+
+  function requireMissionPack(response) {
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== "belay.mission-pack.v1" ||
+      !readText(response.pack_id) ||
+      !isRecord(response.project) ||
+      !isRecord(response.source_state) ||
+      !Array.isArray(response.known_traps) ||
+      !Array.isArray(response.operating_rules) ||
+      !Array.isArray(response.verification) ||
+      !Array.isArray(response.completion_checklist) ||
+      !Array.isArray(response.warnings)
+    ) {
+      throw new Error("Local API returned an invalid Mission Pack.");
+    }
+    return response;
+  }
+
+  function renderMissionPack(pack) {
+    const isEmpty = readText(pack.status).toLowerCase() === "empty";
+    elements.missionPackLoading.hidden = true;
+    elements.missionPackError.hidden = true;
+    elements.missionPackContent.hidden = false;
+    elements.missionPackCopy.disabled = isEmpty;
+    const fragment = document.createDocumentFragment();
+    if (isEmpty) {
+      elements.missionPackTitle.textContent = "Mission Pack";
+      elements.missionPackMetadata.replaceChildren();
+      fragment.append(
+        createElement(
+          "p",
+          "mission-pack-empty",
+          "Belay found no useful guidance for this session.",
+        ),
+      );
+    } else {
+      elements.missionPackTitle.textContent =
+        readText(pack.project.label) || "Mission Pack";
+      renderMissionPackMetadata(pack);
+      if (pack.known_traps.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Known traps",
+          pack.known_traps,
+          createMissionPackTrap,
+          "",
+        );
+      }
+      if (pack.operating_rules.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Operating rules",
+          pack.operating_rules,
+          createMissionPackRule,
+          "",
+        );
+      }
+      if (pack.verification.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Verification",
+          pack.verification,
+          createMissionPackCommand,
+          "",
+        );
+      }
+      if (pack.completion_checklist.length) {
+        appendMissionPackGuidanceSection(
+          fragment,
+          "Completion checklist",
+          pack.completion_checklist,
+          createMissionPackChecklistItem,
+          "",
+        );
+      }
+    }
+    elements.missionPackSections.replaceChildren(fragment);
+    elements.missionPackSize.textContent = "";
+  }
+
+  function renderMissionPackMetadata(pack) {
+    const rows = [];
+    const branch = readText(pack.project.branch);
+    const intent = readText(pack.intent);
+    if (branch) rows.push(["Branch", branch]);
+    if (intent) rows.push(["Intent", readableLabel(intent, "General")]);
+    const fragment = document.createDocumentFragment();
+    rows.forEach(([label, value]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", value),
+      );
+      fragment.append(row);
+    });
+    elements.missionPackMetadata.replaceChildren(fragment);
+  }
+
+  function appendMissionPackGuidanceSection(
+    parent,
+    title,
+    values,
+    itemBuilder,
+    emptyMessage,
+  ) {
+    const section = createElement("section", "mission-pack-section");
+    section.append(createElement("h3", "", title));
+    const list = createElement("div", "mission-pack-list");
+    if (Array.isArray(values) && values.length) {
+      values.forEach((value) => list.append(itemBuilder(value)));
+    } else {
+      list.append(createElement("p", "mission-pack-empty", emptyMessage));
+    }
+    section.append(list);
+    parent.append(section);
+  }
+
+  function createMissionPackTrap(value) {
+    const item = createElement("article", "mission-pack-item");
+    const cost = missionPackCost(value);
+    item.append(
+      createElement("h4", "mission-pack-clamp", readText(value.title)),
+    );
+    if (cost) {
+      item.append(createElement("p", "mission-pack-item-meta", cost));
+    }
+    return item;
+  }
+
+  function missionPackCost(value) {
+    if (typeof value.wasted_usd === "number") {
+      const amount = formatReportDollars(value.wasted_usd);
+      return value.cost_lower_bound === true ? `At least ${amount}` : amount;
+    }
+    if (toFiniteNumber(value.wasted_tokens) > 0) {
+      return `${formatNumber(value.wasted_tokens)} attributed tokens`;
+    }
+    return "";
+  }
+
+  function createMissionPackRule(value) {
+    const item = createElement("article", "mission-pack-item");
+    item.append(createMissionPackExpandableText(readText(value.guidance)));
+    const badges = createElement("div", "mission-pack-badges");
+    if (readText(value.target_file)) {
+      badges.append(
+        createElement(
+          "span",
+          "mission-pack-badge",
+          `Target: ${readText(value.target_file)}`,
+        ),
+      );
+    }
+    if (badges.childNodes.length) item.append(badges);
+    return item;
+  }
+
+  function createMissionPackExpandableText(value) {
+    const text = value || "Rule text unavailable";
+    if (Array.from(text).length <= 220) {
+      return createElement("p", "mission-pack-guidance", text);
+    }
+    const details = createElement("details", "mission-pack-expandable");
+    details.append(
+      createElement("summary", "mission-pack-clamp", text),
+      createElement("p", "mission-pack-guidance", text),
+    );
+    return details;
+  }
+
+  function createMissionPackCommand(value) {
+    const item = createElement("article", "mission-pack-item");
+    item.append(
+      createElement("code", "mission-pack-command", readText(value.command)),
+    );
+    return item;
+  }
+
+  function createMissionPackChecklistItem(value) {
+    const item = createElement("p", "mission-pack-checklist");
+    item.append(
+      createElement("span", "mission-pack-checkbox", "□"),
+      document.createTextNode(readText(value.text) || "Checklist item unavailable"),
+    );
+    return item;
+  }
+
+  function closeMissionPackDrawer(restoreFocus) {
+    if (
+      state.missionPackRequestController &&
+      typeof state.missionPackRequestController.abort === "function"
+    ) {
+      state.missionPackRequestController.abort();
+    }
+    state.missionPackRequestController = null;
+    state.missionPackRequestGeneration += 1;
+    closeModalLayer(
+      "mission-pack",
+      elements.missionPackModalLayer,
+      restoreFocus,
+    );
+    state.missionPackIssue = null;
+    state.missionPack = null;
+    elements.missionPackMetadata.replaceChildren();
+    elements.missionPackSections.replaceChildren();
+  }
+
+  function openReportEvidenceDrawer(issue) {
+    const issueID = readText(issue && issue.issue_id);
+    state.reportEvidenceIssueID = issueID;
+    state.dialogReturnFocus = { type: "report-evidence", issueID };
+    state.activeModal = "report-evidence";
+    elements.reportEvidenceTitle.textContent =
+      readText(issue && issue.headline) || "Issue details";
+    const excerpts = Array.isArray(issue && issue.excerpts)
+      ? issue.excerpts
+      : [];
+    const excerptFragment = document.createDocumentFragment();
+    excerpts.forEach((excerpt) => {
+      excerptFragment.append(createReportEvidenceExcerpt(excerpt));
+    });
+    if (!excerpts.length) {
+      excerptFragment.append(
+        createElement("p", "overview-empty", "No transcript excerpts available."),
+      );
+    }
+    elements.reportEvidenceExcerpts.replaceChildren(excerptFragment);
+    renderReportEvidenceFix(issue && issue.suggested_fix);
+    elements.reportEvidenceFixCommand.disabled = !issueID;
+    openModalLayer(
+      elements.reportEvidenceModalLayer,
+      elements.reportEvidenceDialog,
+      elements.reportEvidenceClose,
+    );
+  }
+
+  function createReportEvidenceExcerpt(excerpt) {
+    const wrapper = createElement("article", "cost-issue-excerpt");
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = readText(citation.session_key) || "session unavailable";
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "turn unavailable";
+    const occurredAt =
+      formatFullDate(parseDate(citation.occurred_at)) || "time unavailable";
+    const source = readText(citation.source_file_id) || "source unavailable";
+    const offset = Number.isFinite(Number(citation.jsonl_byte_offset))
+      ? `byte ${formatNumber(citation.jsonl_byte_offset)}`
+      : "byte offset unavailable";
+    wrapper.append(
+      createElement(
+        "p",
+        "cost-issue-citation report-evidence-citation",
+        [role, tool, session, turn, occurredAt, source, offset]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        readText(excerpt && excerpt.text) || "Excerpt unavailable",
+      ),
+    );
+    return wrapper;
+  }
+
+  function renderReportEvidenceFix(value) {
+    const fix = isRecord(value) ? value : {};
+    const fragment = document.createDocumentFragment();
+    [
+      ["Kind", readableLabel(fix.kind, "Project instruction")],
+      ["Target file", readText(fix.target_file) || "Agent instructions"],
+      [
+        "Rationale",
+        readText(fix.rationale) ||
+          "Add a durable project instruction for this pattern.",
+      ],
+    ].forEach(([label, detail]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", detail),
+      );
+      fragment.append(row);
+    });
+    elements.reportEvidenceFix.replaceChildren(fragment);
+  }
+
+  function closeReportEvidenceDrawer(restoreFocus) {
+    closeModalLayer(
+      "report-evidence",
+      elements.reportEvidenceModalLayer,
+      restoreFocus,
+    );
+    elements.reportEvidenceExcerpts.replaceChildren();
+    elements.reportEvidenceFix.replaceChildren();
+    state.reportEvidenceIssueID = "";
+  }
+
+  function reportTrendSummary(trend) {
+    if (!Array.isArray(trend) || trend.length < 2) return "";
+    const values = trend.slice(-8).map((week) => toFiniteNumber(week && week.count));
+    const latest = values[values.length - 1];
+    const prior = values.slice(0, -1).reduce((sum, value) => sum + value, 0);
+    const average = prior / Math.max(1, values.length - 1);
+    if (latest > average) return "trending up";
+    if (latest < average) return "trending down";
+    return "steady";
+  }
+
+  function renderReportFixes(fixes) {
+    const values = Array.isArray(fixes) ? fixes.slice(0, 20) : [];
+    const fragment = document.createDocumentFragment();
+    values.forEach((status) => {
+      const fix = isRecord(status && status.fix) ? status.fix : {};
+      const card = createElement("article", "brief-session-card report-fix-card");
+      const stateLabel =
+        readText(fix.state) === "applied" ? "Applied" : "Proposed";
+      card.append(
+        createElement(
+          "strong",
+          "",
+          `${stateLabel}: ${readText(fix.target_file) || "configuration"}`,
+        ),
+        createElement(
+          "p",
+          "",
+          readText(fix.rule_text) || "Fix rule unavailable",
+        ),
+        createElement(
+          "small",
+          "",
+          status && status.verification_state === "deferred"
+            ? "Recurrence and cost verification deferred"
+            : "Verification pending",
+        ),
+      );
+      fragment.append(card);
+    });
+    elements.briefRecentList.replaceChildren(fragment);
+    elements.briefRecentEmpty.hidden = values.length !== 0;
+  }
+
+  function renderReportWaste(waste) {
+    const hasShare = waste && typeof waste.share_percent === "number";
+    const share = hasShare
+      ? `${formatNumber(waste.share_percent)}%`
+      : formatReportDollars(waste && waste.attributed_usd);
+    const prefix = waste && waste.lower_bound === true ? "At least " : "";
+    elements.briefAgentSummary.replaceChildren(
+      createElement("strong", "report-waste-number", `${prefix}${share}`),
+      createElement(
+        "p",
+        "",
+        hasShare
+          ? `${formatReportDollars(waste && waste.attributed_usd)} attributed to detected issues`
+          : waste && waste.total_incomplete === true
+            ? "Attributed waste; total spend is incomplete, so no percentage is shown."
+            : waste && waste.overlap_capped === true
+              ? "Attributed costs overlap total spend, so no percentage is shown."
+              : "Attributed to detected issues.",
+      ),
+    );
+  }
+
+  function renderReportAbout(about) {
+    const notes = Array.isArray(about && about.notes) ? about.notes : [];
+    elements.briefCoverage.open = false;
+    elements.briefCoverageSummary.textContent =
+      "Coverage, lower bounds, and calculation notes.";
+    const noteFragment = document.createDocumentFragment();
+    notes.forEach((note) => {
+      noteFragment.append(createElement("li", "", readText(note)));
+    });
+    elements.briefLimitations.replaceChildren(noteFragment);
+    const coverage = isRecord(about && about.transcript_coverage)
+      ? about.transcript_coverage
+      : {};
+    const sourceFragment = document.createDocumentFragment();
+    [
+      ["Sessions with transcript", coverage.with_transcript],
+      ["Partial transcript", coverage.partial],
+      ["Without transcript", coverage.without_transcript],
+      ["Transcript only", coverage.transcript_only],
+    ].forEach(([label, value]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", formatNumber(value)),
+      );
+      sourceFragment.append(row);
+    });
+    elements.briefSources.replaceChildren(sourceFragment);
+  }
+
+  function formatReportDollars(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "$0.00";
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
   }
 
   function renderBriefSummary(summary) {
@@ -1025,16 +2040,17 @@
           : complete
             ? "No reviewed action was identified in the evaluated activity"
             : "No reviewed action is available from the activity evaluated so far";
-      elements.briefActionsEmptyDetail.textContent =
+      elements.briefActionsEmptyDetail.textContent = experiencePageText(
         !sessionsAvailable
           ? "Attention may still contain reviewed findings, and stored activity remains available in Sessions."
           : initializing && sessionCount === 0
             ? "Initial import is still in progress; this result is partial and will update automatically."
-          : sessionCount === 0
-          ? "Older stored sessions remain available in Sessions."
-          : complete
-            ? "This is not a claim that all activity was successful or problem-free."
-            : "The brief is limited; review Coverage and limitations for what was not fully evaluated.";
+            : sessionCount === 0
+              ? "Older stored sessions remain available in Sessions."
+              : complete
+                ? "This is not a claim that all activity was successful or problem-free."
+                : "The brief is limited; review Coverage and limitations for what was not fully evaluated.",
+      );
     }
   }
 
@@ -1139,11 +2155,13 @@
         : initializing
           ? "No recent activity has been imported yet"
           : "No recorded agent activity in the last 24 hours";
-      elements.briefRecentEmptyDetail.textContent = !sessionsAvailable
-        ? "Open Sessions to inspect stored activity directly."
-        : initializing
-          ? "Initial import is still in progress; this result is partial and will update automatically."
-          : "Older stored sessions remain available in Sessions.";
+      elements.briefRecentEmptyDetail.textContent = experiencePageText(
+        !sessionsAvailable
+          ? "Open Sessions to inspect stored activity directly."
+          : initializing
+            ? "Initial import is still in progress; this result is partial and will update automatically."
+            : "Older stored sessions remain available in Sessions.",
+      );
     }
   }
 
@@ -1281,7 +2299,9 @@
       readText(brief.status) === "limited" || coverage.complete !== true;
     elements.briefCoverageSummary.textContent =
       coverage.complete === true
-        ? "All bounded brief sources completed for this view."
+        ? state.experience === "value-first"
+          ? "All bounded Home sources completed for this view."
+          : "All bounded brief sources completed for this view."
         : "Some activity or analysis could not be fully evaluated.";
     const limitationFragment = document.createDocumentFragment();
     limitations.forEach((limitation) => {
@@ -1293,7 +2313,9 @@
         createElement(
           "li",
           "",
-          "Some sources were limited; use Attention or Sessions for the available detail.",
+          experiencePageText(
+            "Some sources were limited; use Attention or Sessions for the available detail.",
+          ),
         ),
       );
     }
@@ -1316,7 +2338,8 @@
 
   function briefSourceLabel(value) {
     const labels = {
-      sessions: "Sessions",
+      sessions:
+        state.experience === "value-first" ? "History" : "Sessions",
       attention_families: "Reviewed findings",
       evidence_gaps: "Evidence gaps",
     };
@@ -1463,16 +2486,27 @@
     );
     filterDisclosure.id = "attention-filter-disclosure";
     filterDisclosure.append(
-      createElement("summary", "", "Filter Attention"),
+      createElement(
+        "summary",
+        "",
+        experienceCopy[state.experience].attentionFilterSummary,
+      ),
       elements.attentionFilters,
     );
-    elements.attentionScroll.replaceChildren(
+    elements.safetyContent = createElement("div", "safety-content");
+    elements.safetyContent.id = "safety-content";
+    elements.safetyContent.append(
       elements.stableIssuesSection,
       elements.evidenceGapsSection,
       elements.fixMonitoringSection,
       analysisDisclosure,
       filterDisclosure,
     );
+    elements.attentionScroll.replaceChildren(
+      elements.costIssuesSection,
+      elements.safetyContent,
+    );
+    setAttentionMode("issues");
   }
 
   function bindEvents() {
@@ -1487,7 +2521,7 @@
     });
     elements.navAttention.addEventListener("click", () => {
       setActiveView("attention", true);
-      if (state.issues.status === "idle") refreshAttention(false);
+      if (state.costIssueStatus === "idle") void loadCostIssues();
     });
     elements.navSessions.addEventListener("click", () => {
       setActiveView("sessions", true);
@@ -1498,12 +2532,74 @@
     });
     elements.briefOpenAttention.addEventListener("click", () => {
       setActiveView("attention", true);
+      if (state.costIssueStatus === "idle") void loadCostIssues();
+    });
+    elements.attentionModeIssues.addEventListener("click", () => {
+      setAttentionMode("issues");
+      if (state.costIssueStatus === "idle") void loadCostIssues();
+    });
+    elements.attentionModeSafety.addEventListener("click", () => {
+      setAttentionMode("safety");
       if (state.issues.status === "idle") void refreshAttention(false);
+    });
+    elements.costIssuesRetry.addEventListener("click", () => {
+      void loadCostIssues();
     });
     elements.briefOpenSessions.addEventListener("click", () => {
       setActiveView("sessions", true);
       if (!state.sessions.length) void refreshSessions(false);
     });
+    elements.missionPackClose.addEventListener("click", () => {
+      closeMissionPackDrawer(true);
+    });
+    elements.missionPackDone.addEventListener("click", () => {
+      closeMissionPackDrawer(true);
+    });
+    elements.missionPackRetry.addEventListener("click", () => {
+      const issueID = readText(
+        state.missionPackIssue && state.missionPackIssue.issue_id,
+      );
+      if (!issueID) return;
+      resetMissionPackDrawer();
+      void loadMissionPack(issueID);
+    });
+    elements.missionPackCopy.addEventListener("click", () => {
+      const issueID = readText(
+        state.missionPackIssue && state.missionPackIssue.issue_id,
+      );
+      void copyText(
+        issueID ? `/belay start --issue ${issueID}` : "",
+        elements.missionPackCopy,
+      );
+    });
+    elements.missionPackShowEvidence.addEventListener("click", () => {
+      const issue = state.missionPackIssue;
+      if (!issue) return;
+      closeMissionPackDrawer(false);
+      openReportEvidenceDrawer(issue);
+    });
+    elements.missionPackModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
+    elements.reportEvidenceClose.addEventListener("click", () => {
+      closeReportEvidenceDrawer(true);
+    });
+    elements.reportEvidenceDone.addEventListener("click", () => {
+      closeReportEvidenceDrawer(true);
+    });
+    elements.reportEvidenceFixCommand.addEventListener("click", () => {
+      void copyText(
+        state.reportEvidenceIssueID
+          ? `/belay ${state.reportEvidenceIssueID}`
+          : "",
+        elements.reportEvidenceFixCommand,
+      );
+    });
+    elements.reportEvidenceModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
     elements.refreshButton.addEventListener("click", () => refreshAll(true));
     elements.issuesLoadMore.addEventListener("click", () => {
       loadIssueBucket(state.issues, true);
@@ -1747,13 +2843,339 @@
         return;
       }
       if (state.activeView === "attention") {
-        await refreshAttention(preserveSelection);
+        if (state.attentionMode === "safety") {
+          await refreshAttention(preserveSelection);
+        } else {
+          await loadCostIssues();
+        }
         return;
       }
       await refreshSessions(preserveSelection);
     } finally {
       elements.refreshButton.disabled = false;
     }
+  }
+
+  function setAttentionMode(mode) {
+    const selected = mode === "safety" ? "safety" : "issues";
+    state.attentionMode = selected;
+    const issuesActive = selected === "issues";
+    elements.attentionModeIssues.setAttribute(
+      "aria-selected",
+      issuesActive ? "true" : "false",
+    );
+    elements.attentionModeSafety.setAttribute(
+      "aria-selected",
+      issuesActive ? "false" : "true",
+    );
+    elements.costIssuesSection.hidden = !issuesActive;
+    if (elements.safetyContent) {
+      elements.safetyContent.hidden = issuesActive;
+    }
+    elements.attentionDetailPane.hidden = issuesActive;
+    elements.attentionView.classList.toggle("cost-mode", issuesActive);
+    renderAttentionTotals();
+  }
+
+  async function loadCostIssues() {
+    const generation = ++state.costIssueRequestGeneration;
+    state.costIssueStatus = "loading";
+    state.costIssueError = "";
+    renderCostIssues();
+    try {
+      const response = await apiGet("/v1/cost-issues?limit=5");
+      if (generation !== state.costIssueRequestGeneration) return false;
+      if (
+        !isRecord(response) ||
+        readText(response.schema_version) !== "belay.cost-issues.v1" ||
+        !Array.isArray(response.data)
+      ) {
+        throw new Error("Local API returned invalid cost-ranked issues.");
+      }
+      state.costIssues = response.data
+        .slice(0, 5)
+        .map(requireCostIssue);
+      state.costIssueStatus = "ready";
+      renderCostIssues();
+      return true;
+    } catch (error) {
+      if (generation !== state.costIssueRequestGeneration) return false;
+      state.costIssueStatus = "error";
+      state.costIssueError =
+        error instanceof Error ? error.message : "Cost issue read failed.";
+      renderCostIssues();
+      return false;
+    }
+  }
+
+  function requireCostIssue(issue) {
+    if (
+      !isRecord(issue) ||
+      !readText(issue.issue_id) ||
+      !readText(issue.detector_id) ||
+      !readText(issue.headline) ||
+      !isRecord(issue.cost) ||
+      !Array.isArray(issue.sessions) ||
+      !Array.isArray(issue.trend) ||
+      !Array.isArray(issue.excerpts) ||
+      !isRecord(issue.project) ||
+      !isRecord(issue.suggested_fix)
+    ) {
+      throw new Error("Local API returned an invalid cost issue.");
+    }
+    return issue;
+  }
+
+  function renderCostIssues() {
+    const loading = state.costIssueStatus === "loading";
+    const failed = state.costIssueStatus === "error";
+    const empty =
+      state.costIssueStatus === "ready" && state.costIssues.length === 0;
+    elements.costIssuesLoading.hidden = !loading;
+    elements.costIssuesError.hidden = !failed;
+    elements.costIssuesEmpty.hidden = !empty;
+    elements.costIssueList.hidden = loading || failed || empty;
+    elements.costIssueCount.textContent =
+      state.costIssueStatus === "ready"
+        ? String(state.costIssues.length)
+        : "—";
+    if (loading || failed || empty) {
+      elements.costIssueList.replaceChildren();
+      renderAttentionTotals();
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    state.costIssues.forEach((issue, index) => {
+      fragment.append(createCostIssueCard(issue, index));
+    });
+    elements.costIssueList.replaceChildren(fragment);
+    renderAttentionTotals();
+  }
+
+  function createCostIssueCard(issue, index) {
+    const card = createElement("article", "cost-issue-card");
+    const header = createElement("header", "cost-issue-card-header");
+    const heading = createElement("div");
+    heading.append(
+      createElement(
+        "p",
+        "eyebrow",
+        `${projectDisplayName(issue.project)} · ${readableLabel(issue.detector_id)}`,
+      ),
+      createElement("h3", "", readText(issue.headline)),
+    );
+    header.append(
+      heading,
+      createElement("span", "cost-issue-rank", `#${index + 1}`),
+    );
+    card.append(header);
+
+    const metrics = createElement("dl", "cost-issue-metrics");
+    appendCostMetric(
+      metrics,
+      "Attributed cost",
+      formatIssueDollarCost(issue.cost),
+    );
+    appendCostMetric(
+      metrics,
+      "Time",
+      formatIssueMinutes(issue.cost),
+    );
+    appendCostMetric(
+      metrics,
+      "Tokens",
+      formatNumber(issue.cost.wasted_tokens),
+    );
+    const sessions = Math.max(
+      toFiniteNumber(issue.session_count),
+      issue.sessions.length,
+    );
+    appendCostMetric(
+      metrics,
+      "Sessions",
+      `${formatNumber(sessions)} ${sessions === 1 ? "session" : "sessions"}`,
+    );
+    card.append(metrics);
+
+    if (issue.excerpts.length) {
+      card.append(createCostIssueExcerpt(issue.excerpts[0], true));
+    }
+    const trend = issue.trend
+      .slice(-8)
+      .map((week) => formatNumber(week && week.count))
+      .join(" · ");
+    if (trend) {
+      card.append(
+        createElement(
+          "p",
+          "cost-issue-trend",
+          `Weekly occurrences, oldest to newest: ${trend}`,
+        ),
+      );
+    }
+
+    const fix = createElement("section", "cost-issue-fix");
+    fix.append(
+      createElement("p", "eyebrow", "Suggested fix"),
+      createElement(
+        "h4",
+        "",
+        readText(issue.suggested_fix.target_file) || "Agent instructions",
+      ),
+      createElement(
+        "p",
+        "",
+        readText(issue.suggested_fix.rationale) ||
+          "Add a concrete project rule that prevents this pattern.",
+      ),
+    );
+    const fixActions = createElement("div", "cost-issue-fix-actions");
+    const prepareButton = createElement(
+      "button",
+      "secondary-button",
+      "Prepare fix",
+    );
+    prepareButton.type = "button";
+    const fixStatus = createElement("p", "cost-issue-fix-status");
+    fixStatus.setAttribute("aria-live", "polite");
+    const diff = createElement("pre", "cost-issue-fix-diff");
+    diff.hidden = true;
+    prepareButton.addEventListener("click", async () => {
+      const issueID = readText(issue.issue_id);
+      const kind = readText(issue.suggested_fix.kind);
+      const targetFile = readText(issue.suggested_fix.target_file);
+      const idempotencyKey = createUUIDv4();
+      if (!issueID || !kind || !targetFile || !idempotencyKey) {
+        fixStatus.textContent = "This fix could not be prepared.";
+        return;
+      }
+      prepareButton.disabled = true;
+      prepareButton.textContent = "Preparing…";
+      fixStatus.textContent = "";
+      try {
+        const response = await apiMutation(
+          `/v1/cost-issues/${encodeURIComponent(issueID)}/fixes`,
+          { kind, target_file: targetFile },
+          idempotencyKey,
+          "propose-cost-issue-fix.v1",
+        );
+        if (
+          readText(response && response.schema_version) !==
+            "belay.cost-issue-fix.v1" ||
+          !isRecord(response && response.data) ||
+          !readText(response.data.fix_id) ||
+          !readText(response.data.unified_diff)
+        ) {
+          throw new Error("Local API returned an invalid fix proposal.");
+        }
+        diff.textContent = readText(response.data.unified_diff);
+        diff.hidden = false;
+        fixStatus.textContent =
+          "Proposal ready. Review this diff, then use /belay to apply it with approval.";
+        prepareButton.textContent = "Prepared";
+      } catch (error) {
+        fixStatus.textContent =
+          error instanceof Error
+            ? error.message
+            : "This fix could not be prepared.";
+        prepareButton.disabled = false;
+        prepareButton.textContent = "Try preparing again";
+      }
+    });
+    fixActions.append(prepareButton);
+    fix.append(fixActions, fixStatus, diff);
+    card.append(fix);
+
+    const evidence = createElement("details", "cost-issue-evidence");
+    evidence.append(
+      createElement(
+        "summary",
+        "",
+        `Show evidence (${formatNumber(issue.excerpts.length)})`,
+      ),
+    );
+    const evidenceList = createElement("div", "cost-issue-evidence-list");
+    issue.excerpts.forEach((excerpt) => {
+      evidenceList.append(createCostIssueExcerpt(excerpt, false));
+    });
+    evidence.append(evidenceList);
+    card.append(evidence);
+    return card;
+  }
+
+  function appendCostMetric(list, label, value) {
+    const item = createElement("div");
+    item.append(
+      createElement("dt", "", label),
+      createElement("dd", "", value),
+    );
+    list.append(item);
+  }
+
+  function createCostIssueExcerpt(excerpt, preview) {
+    const wrapper = createElement(
+      "div",
+      preview ? "cost-issue-excerpt preview" : "cost-issue-excerpt",
+    );
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = compactID(citation.session_key);
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "turn unavailable";
+    wrapper.append(
+      createElement(
+        "p",
+        "cost-issue-citation",
+        [role, tool, session, turn].filter(Boolean).join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        readText(excerpt && excerpt.text) || "Excerpt unavailable",
+      ),
+    );
+    return wrapper;
+  }
+
+  function formatIssueDollarCost(cost) {
+    const value = cost && cost.wasted_usd;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return cost && cost.lower_bound
+        ? "At least the known token cost"
+        : "Unknown model price";
+    }
+    const formatted = new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Math.max(0, value));
+    return cost.lower_bound ? `At least ${formatted}` : formatted;
+  }
+
+  function formatIssueMinutes(cost) {
+    const minutes = Math.max(0, toFiniteNumber(cost && cost.wasted_minutes));
+    const formatted =
+      minutes >= 10 ? Math.round(minutes).toString() : minutes.toFixed(1);
+    return `${cost && cost.lower_bound ? "At least " : ""}${formatted} min`;
+  }
+
+  function formatIssueTokens(cost) {
+    const tokens = Math.max(0, toFiniteNumber(cost && cost.wasted_tokens));
+    return `${cost && cost.lower_bound ? "At least " : ""}${formatNumber(tokens)} tokens`;
+  }
+
+  function projectDisplayName(project) {
+    const identity = readText(project && project.identity);
+    const path = readText(project && project.path);
+    const candidate = identity || path;
+    if (!candidate) return "Project unavailable";
+    const parts = candidate.split(/[/:\\]/).filter(Boolean);
+    return (parts[parts.length - 1] || candidate).replace(/\.git$/i, "");
   }
 
   async function refreshSessions(preserveSelection) {
@@ -1884,6 +3306,14 @@
 
   function resolveFocusReference(reference) {
     if (!reference) return null;
+    if (reference.type === "mission-pack") {
+      return focusRegistry.missionPackTriggers.get(reference.issueID) || null;
+    }
+    if (reference.type === "report-evidence") {
+      return (
+        focusRegistry.reportEvidenceTriggers.get(reference.issueID) || null
+      );
+    }
     if (reference.type === "brief-action") {
       return focusRegistry.briefActions.get(reference.key) || null;
     }
@@ -2961,7 +4391,7 @@
     if (bucket.status === "error") {
       title.textContent = isGap
         ? "Evidence gaps unavailable"
-        : "Attention grouping is unavailable";
+        : experiencePageText("Attention grouping is unavailable");
       detail.textContent = isGap
         ? "The Local read failed. Existing session data remains available."
         : "Session data remains available.";
@@ -2982,7 +4412,9 @@
         : "No findings were reported in completed local analysis";
       detail.textContent = isGap
         ? "Supported completed analysis did not report a verification evidence gap."
-        : "No reviewed finding type produced a stable Attention item.";
+        : experiencePageText(
+            "No reviewed finding type produced a stable Attention item.",
+          );
       return;
     }
     title.textContent = isGap
@@ -3023,6 +4455,14 @@
   }
 
   function renderAttentionTotals() {
+    if (state.attentionMode === "issues") {
+      const total = state.costIssues.length;
+      elements.attentionCount.textContent =
+        state.costIssueStatus === "ready" ? String(total) : "—";
+      elements.attentionNavCount.hidden = total === 0;
+      elements.attentionNavCount.textContent = String(total);
+      return;
+    }
     const total = state.issues.data.length;
     elements.attentionCount.textContent = state.issues.hasMore
       ? `${total}+`
@@ -3395,8 +4835,9 @@
         return false;
       }
       state.familyMemberStatus = "error";
-      state.familyMemberError =
-        "Sessions with this finding could not be loaded. Refresh Attention and try again.";
+      state.familyMemberError = experiencePageText(
+        "Sessions with this finding could not be loaded. Refresh Attention and try again.",
+      );
       renderAttentionFamilyDetail();
       return false;
     }
@@ -3463,7 +4904,9 @@
           "p",
           "family-member-error",
           state.familyMemberError ||
-            "Sessions with this finding could not be loaded. Other Attention data remains available.",
+            experiencePageText(
+              "Sessions with this finding could not be loaded. Other Attention data remains available.",
+            ),
         ),
       );
     }
@@ -6051,7 +7494,9 @@
         return "This request conflicts with an earlier unresolved submission. Abandon that submission before choosing different input.";
       }
       if (error.problemType === "belay.local/ineligible-fix-annotation") {
-        return "An attempt can no longer be recorded for this finding. Refresh Attention before continuing.";
+        return experiencePageText(
+          "An attempt can no longer be recorded for this finding. Refresh Attention before continuing.",
+        );
       }
       return `The ${verb} conflicted with newer local state. The unresolved submission is still available to retry unchanged or abandon.`;
     }
@@ -6128,7 +7573,11 @@
     if (event.key === "Escape") {
       if (state.modalSubmitting) return;
       event.preventDefault();
-      if (state.activeModal === "fix-attempt") {
+      if (state.activeModal === "mission-pack") {
+        closeMissionPackDrawer(true);
+      } else if (state.activeModal === "report-evidence") {
+        closeReportEvidenceDrawer(true);
+      } else if (state.activeModal === "fix-attempt") {
         closeFixAttemptDialog(true);
       } else {
         closeFixRetractionDialog(true);
@@ -6137,9 +7586,13 @@
     }
     if (event.key !== "Tab") return;
     const dialog =
-      state.activeModal === "fix-attempt"
-        ? elements.fixAttemptDialog
-        : elements.fixRetractionDialog;
+      state.activeModal === "mission-pack"
+        ? elements.missionPackDialog
+        : state.activeModal === "report-evidence"
+        ? elements.reportEvidenceDialog
+        : state.activeModal === "fix-attempt"
+          ? elements.fixAttemptDialog
+          : elements.fixRetractionDialog;
     const focusable = Array.from(
       dialog.querySelectorAll(
         'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -6569,7 +8022,8 @@
       ? tone
       : "status";
     globalThis.clearTimeout(state.refreshNoticeTimer);
-    elements.attentionRefreshNotice.textContent = message;
+    elements.attentionRefreshNotice.textContent =
+      experiencePageText(message);
     elements.attentionRefreshNotice.dataset.tone = safeTone;
     elements.attentionRefreshNotice.setAttribute(
       "role",
@@ -7287,8 +8741,10 @@
       state.sessionReturnView === "attention"
         ? "Back to issue detail"
         : state.sessionReturnView === "brief"
-          ? "Back to Developer Brief"
-          : "Back to sessions",
+          ? experiencePageText("Back to Developer Brief")
+          : state.experience === "value-first"
+            ? "Back to History"
+            : "Back to sessions",
     );
     document.body.classList.add("is-timeline-open");
     applyPaneAccessibility();
@@ -8603,7 +10059,12 @@
       throw new Error("A canonical UUIDv4 retry key is required.");
     }
     if (
-      !["record-fix-attempt.v1", "retract-fix-attempt.v1"].includes(intent)
+      ![
+        "record-fix-attempt.v1",
+        "retract-fix-attempt.v1",
+        "propose-cost-issue-fix.v1",
+        "record-cost-issue-fix.v1",
+      ].includes(intent)
     ) {
       throw new Error("The Local write intent is invalid.");
     }
@@ -8759,7 +10220,7 @@
   }
 
   function showError(title, error) {
-    elements.errorTitle.textContent = title;
+    elements.errorTitle.textContent = experiencePageText(title);
     elements.errorDetail.textContent = customerErrorMessage(
       error,
       "Belay Local could not complete this request. Try again.",

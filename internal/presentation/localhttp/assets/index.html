@@ -14,8 +14,8 @@
     <script src="./bootstrap.js"></script>
     <script src="./app.js" defer></script>
   </head>
-  <body>
-    <div class="app-shell" id="app-shell">
+  <body data-experience="current">
+    <div class="app-shell" id="app-shell" data-experience="current">
       <header class="topbar">
         <div class="brand" aria-label="Belay Local">
           <span class="brand-mark" aria-hidden="true">
@@ -35,14 +35,14 @@
             type="button"
             aria-current="page"
           >
-            Brief
+            <span id="nav-brief-label">Report</span>
           </button>
           <button
             class="primary-nav-button"
             id="nav-attention"
             type="button"
           >
-            Attention
+            <span id="nav-attention-label">Attention</span>
             <span class="nav-count" id="attention-nav-count" hidden></span>
           </button>
           <button
@@ -50,13 +50,16 @@
             id="nav-sessions"
             type="button"
           >
-            Sessions
+            <span id="nav-sessions-label">Sessions</span>
           </button>
         </nav>
 
-        <div class="privacy-note" title="Belay Local keeps this view on your machine">
+        <div
+          class="privacy-note"
+          title="Full transcripts are encrypted on this machine and never uploaded"
+        >
           <span class="privacy-dot" aria-hidden="true"></span>
-          On-device
+          Encrypted on-device
         </div>
 
         <button class="icon-button" id="refresh-button" type="button">
@@ -83,9 +86,9 @@
           <div class="brief-scroll">
             <header class="brief-header">
               <div>
-                <p class="eyebrow">Developer Brief</p>
-                <h1 id="brief-heading" tabindex="-1">Your last 24 hours</h1>
-                <p id="brief-window">Loading the latest recorded activity…</p>
+                <p class="eyebrow" id="brief-eyebrow">Belay Report</p>
+                <h1 id="brief-heading" tabindex="-1">Your agent usage</h1>
+                <p id="brief-window">Claude Code and Codex · all retained time</p>
               </div>
               <p
                 class="brief-status"
@@ -95,36 +98,42 @@
               ></p>
             </header>
 
-            <section class="brief-summary" aria-label="Recent activity summary">
+            <section class="brief-summary" aria-label="All-time usage summary">
               <dl>
                 <div>
-                  <dt>Evaluated sessions</dt>
+                  <dt>Sessions</dt>
                   <dd id="brief-session-count">—</dd>
                 </div>
                 <div>
-                  <dt>Agents represented</dt>
+                  <dt>Hours</dt>
                   <dd id="brief-agent-count">—</dd>
                 </div>
                 <div>
-                  <dt>Reported outcomes</dt>
+                  <dt>Tokens</dt>
                   <dd id="brief-outcome-count">—</dd>
                 </div>
                 <div>
-                  <dt>Latest activity</dt>
+                  <dt>Dollars</dt>
                   <dd id="brief-latest-activity">—</dd>
                 </div>
               </dl>
+              <div
+                class="report-sparkline"
+                id="report-sparkline"
+                role="img"
+                aria-label="Weekly session usage"
+              ></div>
             </section>
 
             <div class="brief-loading" id="brief-loading">
               <span class="spinner" aria-hidden="true"></span>
-              <p>Preparing your local brief…</p>
+              <p id="brief-loading-text">Preparing your report…</p>
             </div>
 
             <div class="brief-error" id="brief-error" role="alert" hidden>
-              <h2>Brief unavailable</h2>
+              <h2 id="brief-error-title">Report unavailable</h2>
               <p id="brief-error-detail">
-                Belay could not prepare the brief. Attention and Sessions remain available.
+                Belay could not prepare the report. Attention and Sessions remain available.
               </p>
               <button class="secondary-button" id="brief-retry" type="button">
                 Try again
@@ -135,64 +144,115 @@
               <section class="brief-section" aria-labelledby="brief-actions-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Decisions</p>
-                    <h2 id="brief-actions-heading">What to review now</h2>
+                    <p class="eyebrow">Cost-ranked across sessions</p>
+                    <h2 id="brief-actions-heading">What keeps going wrong</h2>
                   </div>
                   <button
                     class="text-button"
                     id="brief-open-attention"
                     type="button"
                   >
-                    Open Attention
+                    Open all issues
                   </button>
                 </div>
                 <div class="brief-card-grid" id="brief-action-list"></div>
                 <div class="brief-empty" id="brief-actions-empty" hidden>
-                  <p id="brief-actions-empty-title"></p>
-                  <small id="brief-actions-empty-detail"></small>
+                  <p id="brief-actions-empty-title">No recurring issues detected yet</p>
+                  <small id="brief-actions-empty-detail">
+                    Belay keeps analyzing encrypted local transcripts as sessions arrive.
+                  </small>
                 </div>
               </section>
 
               <section class="brief-section" aria-labelledby="brief-recent-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Recent activity</p>
-                    <h2 id="brief-recent-heading">Recent work</h2>
+                    <p class="eyebrow">Applied and proposed</p>
+                    <h2 id="brief-recent-heading">Fixes</h2>
                   </div>
                   <button
                     class="text-button"
                     id="brief-open-sessions"
                     type="button"
                   >
-                    Open Sessions
+                    Open history
                   </button>
                 </div>
                 <div class="brief-recent-list" id="brief-recent-list"></div>
                 <div class="brief-empty" id="brief-recent-empty" hidden>
                   <p id="brief-recent-empty-title">
-                    No recorded agent activity in the last 24 hours
+                    No fixes recorded yet
                   </p>
                   <small id="brief-recent-empty-detail">
-                    Older stored sessions remain available in Sessions.
+                    Use /belay from Claude Code or Codex to review the top issue.
                   </small>
                 </div>
               </section>
 
-              <section class="brief-section" aria-labelledby="brief-agents-heading">
+              <section class="brief-section report-waste" aria-labelledby="brief-agents-heading">
                 <div class="brief-section-heading">
                   <div>
-                    <p class="eyebrow">Activity mix</p>
-                    <h2 id="brief-agents-heading">Across agents</h2>
+                    <p class="eyebrow">Attributed spend</p>
+                    <h2 id="brief-agents-heading">Waste</h2>
                   </div>
                 </div>
                 <div class="brief-agent-summary" id="brief-agent-summary"></div>
               </section>
 
               <details class="brief-coverage" id="brief-coverage">
-                <summary>Coverage and limitations</summary>
+                <summary>About this data</summary>
                 <p id="brief-coverage-summary"></p>
                 <ul id="brief-limitations"></ul>
                 <dl id="brief-sources"></dl>
+                <section
+                  class="transcript-overview"
+                  aria-labelledby="transcript-overview-heading"
+                >
+                  <div class="brief-section-heading">
+                    <div>
+                      <p class="eyebrow">Encrypted local transcripts</p>
+                      <h2 id="transcript-overview-heading">Transcript coverage</h2>
+                    </div>
+                    <p
+                      class="transcript-refresh-status"
+                      id="transcript-refresh-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      Loading…
+                    </p>
+                  </div>
+                  <p class="transcript-privacy-copy">
+                    Full local transcripts are retained encrypted on this device.
+                    Nothing is uploaded.
+                  </p>
+                  <dl class="transcript-coverage-counts">
+                    <div>
+                      <dt>With transcript</dt>
+                      <dd id="transcript-with-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Partial</dt>
+                      <dd id="transcript-partial-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Without transcript</dt>
+                      <dd id="transcript-without-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Transcript only</dt>
+                      <dd id="transcript-only-count">—</dd>
+                    </div>
+                  </dl>
+                  <div
+                    class="transcript-session-list"
+                    id="transcript-session-list"
+                    aria-live="polite"
+                  ></div>
+                  <p class="transcript-empty" id="transcript-empty" hidden>
+                    No live or recent transcript sessions yet.
+                  </p>
+                </section>
               </details>
             </div>
           </div>
@@ -210,11 +270,82 @@
           >
             <div class="panel-heading attention-heading">
               <div>
-                <p class="eyebrow">Findings</p>
-                <h1>Attention</h1>
+                <p class="eyebrow" id="attention-eyebrow">Findings</p>
+                <h1 id="attention-heading">Attention</h1>
               </div>
               <span class="count-pill" id="attention-count">—</span>
             </div>
+
+            <div
+              class="attention-mode-tabs"
+              role="tablist"
+              aria-label="Attention views"
+            >
+              <button
+                id="attention-mode-issues"
+                type="button"
+                role="tab"
+                aria-selected="true"
+              >
+                What keeps going wrong
+              </button>
+              <button
+                id="attention-mode-safety"
+                type="button"
+                role="tab"
+                aria-selected="false"
+              >
+                Safety
+              </button>
+            </div>
+
+            <section
+              class="cost-issues-section"
+              id="cost-issues-section"
+              aria-labelledby="cost-issues-heading"
+            >
+              <div class="attention-section-heading">
+                <div>
+                  <p class="eyebrow">Cost-ranked across sessions</p>
+                  <h2 id="cost-issues-heading">What keeps going wrong</h2>
+                </div>
+                <span class="count-pill" id="cost-issue-count">—</span>
+              </div>
+              <p class="section-disclosure">
+                Ranked by attributable dollars, then the number of sessions.
+                Every issue links to retained transcript evidence.
+              </p>
+              <div
+                class="cost-issue-list"
+                id="cost-issue-list"
+                aria-live="polite"
+              ></div>
+              <div class="panel-state compact-state" id="cost-issues-loading">
+                <span class="spinner" aria-hidden="true"></span>
+                <p>Analyzing recurring problems…</p>
+              </div>
+              <div
+                class="panel-state compact-state"
+                id="cost-issues-empty"
+                hidden
+              >
+                <span class="empty-glyph" aria-hidden="true">◇</span>
+                <p>No recurring cost issues detected yet</p>
+                <small>
+                  Belay continues analyzing encrypted local transcripts as
+                  sessions arrive.
+                </small>
+              </div>
+              <div
+                class="panel-state compact-state"
+                id="cost-issues-error"
+                role="alert"
+                hidden
+              >
+                <p>Cost-ranked issues are temporarily unavailable.</p>
+                <button id="cost-issues-retry" type="button">Try again</button>
+              </div>
+            </section>
 
             <section
               class="coverage-panel"
@@ -320,7 +451,7 @@
               aria-live="polite"
               hidden
             >
-              Attention status
+              <span id="attention-status-label">Attention status</span>
             </div>
 
             <div class="attention-scroll">
@@ -630,7 +761,9 @@
                   >
                     <span class="empty-glyph" aria-hidden="true">◇</span>
                     <p>No sessions with this finding were returned</p>
-                    <small>Refresh Attention before relying on this result.</small>
+                    <small id="family-members-empty-detail">
+                      Refresh Attention before relying on this result.
+                    </small>
                   </div>
                   <div
                     class="pagination-bar"
@@ -863,7 +996,7 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Activity</p>
-              <h1>Sessions</h1>
+              <h1 id="sessions-heading">Sessions</h1>
             </div>
             <span class="count-pill" id="session-count">—</span>
           </div>
@@ -974,8 +1107,9 @@
             <p class="eyebrow">Your agents, one timeline</p>
             <h2>Select a session to inspect its activity</h2>
             <p>
-              Belay shows minimized events from your local agent activity
-              without showing prompt text, response text, or file contents.
+              The timeline shows minimized canonical events. Encrypted
+              transcripts stay on this device and are used only for Belay
+              Local intelligence over loopback.
             </p>
           </div>
 
@@ -1120,7 +1254,7 @@
                 >
                   All loaded events
                 </button>
-                <span class="privacy-label">Minimized metadata</span>
+                <span class="privacy-label">Minimized canonical events</span>
               </div>
             </div>
             <p class="timeline-scope" id="timeline-scope"></p>
@@ -1156,6 +1290,163 @@
           <button id="error-retry" type="button">Try again</button>
         </div>
       </main>
+    </div>
+
+    <div
+      class="modal-layer report-evidence-layer"
+      id="mission-pack-modal-layer"
+      hidden
+    >
+      <section
+        class="modal-dialog report-evidence-drawer mission-pack-drawer"
+        id="mission-pack-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mission-pack-dialog-title"
+        aria-describedby="mission-pack-dialog-description"
+        tabindex="-1"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Next session</p>
+            <h2 id="mission-pack-dialog-title">Mission Pack</h2>
+          </div>
+          <button
+            class="modal-close"
+            id="mission-pack-close"
+            type="button"
+            aria-label="Close Mission Pack"
+          >
+            ×
+          </button>
+        </header>
+        <div class="modal-scroll mission-pack-scroll">
+          <p id="mission-pack-dialog-description">
+            Preview only. Your agent must ask before using this guidance.
+          </p>
+          <div
+            class="mission-pack-loading"
+            id="mission-pack-loading"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="spinner" aria-hidden="true"></span>
+            <p>Preparing from local evidence…</p>
+          </div>
+          <div
+            class="mission-pack-error"
+            id="mission-pack-error"
+            role="alert"
+            hidden
+          >
+            <p id="mission-pack-error-detail">
+              Belay could not prepare this Mission Pack.
+            </p>
+            <button
+              class="secondary-button"
+              id="mission-pack-retry"
+              type="button"
+            >
+              Try again
+            </button>
+          </div>
+          <div id="mission-pack-content" hidden>
+            <dl class="mission-pack-metadata" id="mission-pack-metadata"></dl>
+            <div id="mission-pack-sections"></div>
+            <p class="mission-pack-size" id="mission-pack-size"></p>
+          </div>
+        </div>
+        <footer class="modal-actions mission-pack-actions">
+          <button
+            class="primary-button"
+            id="mission-pack-copy"
+            type="button"
+            disabled
+          >
+            Copy /belay start command
+          </button>
+          <button
+            class="secondary-button"
+            id="mission-pack-show-evidence"
+            type="button"
+          >
+            Show evidence
+          </button>
+          <button
+            class="secondary-button"
+            id="mission-pack-done"
+            type="button"
+          >
+            Close
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      class="modal-layer report-evidence-layer"
+      id="report-evidence-modal-layer"
+      hidden
+    >
+      <section
+        class="modal-dialog report-evidence-drawer"
+        id="report-evidence-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="report-evidence-dialog-title"
+        aria-describedby="report-evidence-dialog-description"
+        tabindex="-1"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Issue evidence</p>
+            <h2 id="report-evidence-dialog-title">Issue details</h2>
+          </div>
+          <button
+            class="modal-close"
+            id="report-evidence-close"
+            type="button"
+            aria-label="Close issue evidence"
+          >
+            ×
+          </button>
+        </header>
+        <div class="modal-scroll report-evidence-scroll">
+          <p id="report-evidence-dialog-description">
+            Full local transcript excerpts and the complete suggested fix.
+          </p>
+          <section
+            class="report-evidence-section"
+            aria-labelledby="report-evidence-excerpts-heading"
+          >
+            <h3 id="report-evidence-excerpts-heading">Verbatim evidence</h3>
+            <div id="report-evidence-excerpts"></div>
+          </section>
+          <section
+            class="report-evidence-section report-evidence-fix"
+            aria-labelledby="report-evidence-fix-heading"
+          >
+            <h3 id="report-evidence-fix-heading">Suggested fix</h3>
+            <dl id="report-evidence-fix"></dl>
+          </section>
+        </div>
+        <footer class="modal-actions">
+          <button
+            class="primary-button"
+            id="report-evidence-fix-command"
+            type="button"
+          >
+            Fix this issue
+          </button>
+          <button
+            class="secondary-button"
+            id="report-evidence-done"
+            type="button"
+          >
+            Close
+          </button>
+        </footer>
+      </section>
     </div>
 
     <div class="modal-layer" id="fix-attempt-modal-layer" hidden>

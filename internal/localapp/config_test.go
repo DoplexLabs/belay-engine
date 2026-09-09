@@ -89,4 +89,8 @@ func TestResolvePathsUsesBelayHome(t *testing.T) {
 	if paths.CodexSpool == paths.ClaudeSpool {
 		t.Fatal("Codex and Claude must use separate live spools")
 	}
+	if got, want := paths.TranscriptCursors,
+		filepath.Join(root, "transcripts", "cursors"); got != want {
+		t.Fatalf("transcript cursor root = %q, want %q", got, want)
+	}
 }

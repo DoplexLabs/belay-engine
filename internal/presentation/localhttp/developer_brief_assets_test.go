@@ -12,11 +12,16 @@ func TestDeveloperBriefBrowserShellAndDefaultView(t *testing.T) {
 		`id="nav-brief"`,
 		`id="nav-brief"` + "\n" + `            type="button"` + "\n" + `            aria-current="page"`,
 		`id="brief-view"`,
-		`id="brief-heading" tabindex="-1">Your last 24 hours`,
+		`id="brief-heading" tabindex="-1">Your agent usage`,
 		`id="brief-action-list"`,
 		`id="brief-recent-list"`,
 		`id="brief-agent-summary"`,
 		`id="brief-coverage"`,
+		`id="report-sparkline"`,
+		`>What keeps going wrong</h2>`,
+		`>Fixes</h2>`,
+		`>Waste</h2>`,
+		`<summary>About this data</summary>`,
 		`id="attention-view"` + "\n" + `          hidden`,
 		`id="sessions-view" hidden`,
 		`id="session-diagnosis"`,
@@ -37,18 +42,24 @@ func TestDeveloperBriefBrowserShellAndDefaultView(t *testing.T) {
 func TestDeveloperBriefBrowserContractAndBounds(t *testing.T) {
 	app := readBrowserAsset(t, "assets/app.js")
 	index := readBrowserAsset(t, "assets/index.html")
+	browser := app + index
 
 	for _, required := range []string{
 		`activeView: "brief"`,
 		`setActiveView("brief", false);`,
-		`await apiGet("/v1/developer-brief")`,
-		`"belay.developer-brief.v1"`,
-		`brief.action_cards.slice(0, 5)`,
-		`brief.recent_work.slice(0, 8)`,
-		`"No recorded agent activity in the last 24 hours"`,
-		`"No reviewed action was identified in the evaluated activity"`,
-		`"This is not a claim that all activity was successful or problem-free."`,
-		`"Brief is limited. Review the coverage notes before relying on it."`,
+		`await apiGet("/v1/report")`,
+		`"belay.report.v1"`,
+		`brief.top_issues.slice(0, 5)`,
+		`fixes.slice(0, 20)`,
+		`No recurring issues detected yet`,
+		`No fixes recorded yet`,
+		`"Prepare next session"`,
+		`"Show evidence"`,
+		`formatIssueMinutes(issue.cost)`,
+		`formatIssueTokens(issue.cost)`,
+		"`/belay start --issue ${issueID}`",
+		"`/belay ${state.reportEvidenceIssueID}`",
+		`status.verification_state === "deferred"`,
 		`kind === "open_attention_family"`,
 		`kind === "open_issue"`,
 		`kind === "open_session"`,
@@ -58,17 +69,16 @@ func TestDeveloperBriefBrowserContractAndBounds(t *testing.T) {
 		`state.briefSelectionID = "";`,
 		`await loadDeveloperBrief();`,
 	} {
-		if !strings.Contains(app, required) {
+		if !strings.Contains(browser, required) {
 			t.Errorf("Developer Brief browser contract is missing %q", required)
 		}
 	}
-	if !strings.Contains(index, `>What to review now</h2>`) {
-		t.Error("Developer Brief is missing the primary review section")
+	if !strings.Contains(index, `>What keeps going wrong</h2>`) {
+		t.Error("Report is missing the primary issue section")
 	}
 
-	if strings.Contains(app, "brief.action_cards.sort(") ||
-		strings.Contains(app, "brief.recent_work.sort(") {
-		t.Fatal("browser must preserve the server-ranked Brief order")
+	if strings.Contains(app, "brief.top_issues.sort(") {
+		t.Fatal("browser must preserve the server-ranked report order")
 	}
 }
 
@@ -103,7 +113,7 @@ func TestDeveloperBriefAccessibilityAndSafeRendering(t *testing.T) {
 		`focusRegistry.briefSessions.get(reference.key)`,
 		`focusRegistry.diagnosisActions.get(reference.key)`,
 		`elements.briefStatus.textContent =`,
-		`"brief-observation"`,
+		`report-issue-card`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("Developer Brief accessibility contract is missing %q", required)
@@ -124,6 +134,8 @@ func TestDeveloperBriefAccessibilityAndSafeRendering(t *testing.T) {
 		`overflow-y: auto;`,
 		`.brief-session-button {`,
 		`min-height: 44px;`,
+		`.report-sparkline {`,
+		`.report-card-actions {`,
 		`.session-diagnosis {`,
 		`@media (max-width: 680px)`,
 		`.session-diagnosis-actions {`,

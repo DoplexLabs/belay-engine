@@ -2,10 +2,10 @@
 
 Belay Local is private, endpoint-first observability for an individual developer
 using AI coding agents. It reconstructs minimized local activity into one
-timeline and exposes the same evidence through a loopback browser and read-only
-MCP. The browser may also record a narrowly scoped, fixed-schema declaration
-that the developer attempted an external fix; Belay does not execute, describe,
-or verify that change.
+timeline and exposes the same evidence through a loopback browser and local
+stdio MCP. The browser and MCP may also record narrowly scoped, fixed-schema
+fix proposals and application records; Belay does not execute a command or
+write the proposed change to a project.
 
 This repository contains the Apache-2.0-licensed Belay edge. Belay Teams is a
 separate product and is not included in this Local alpha.
@@ -26,14 +26,15 @@ Alpha scope:
 - Historical scanning and explicit monitor-only live hooks
 - Loopback-only browser with a random per-launch token
 - Attention Inbox with deterministic issues and exact matching sessions
-- Browser-only, append-only fix-attempt declarations with no free-text field
+- Bounded fix proposals and append-only application records with no arbitrary
+  project-file write
 - Exact post-attempt recurrence monitoring with bounded retained evidence
-- Exactly nine read-only MCP tools, including issue discovery and exact cited-event lookup
+- Fifteen local MCP tools: thirteen read-only and two bounded additive tools
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
 part of the alpha support claim until it passes the clean-machine checklist.
-Linux, Windows, Teams, enforcement, remediation, and write-capable MCP are out
-of scope.
+Linux, Windows, Teams, enforcement, command execution, arbitrary MCP writes,
+and automatic remediation are out of scope.
 
 The Attention Inbox turns the private deterministic issue projection into a
 browser triage surface. It groups only exact compatible fingerprints, links
@@ -159,7 +160,7 @@ The alpha goal is a useful historical timeline within 15 minutes, but that
 remains a measured clean-machine gate rather than a guarantee until external
 alpha evidence is recorded.
 
-## Read-only MCP
+## Local MCP
 
 Normal `quickstart` may register Claude automatically when its status is safely
 understood. Codex registration requires the explicit opt-in shown above. The
@@ -198,6 +199,24 @@ Agent clients launch `./bin/belay mcp` over stdio on demand. The tools are:
 - `list_issues`
 - `get_issue`
 - `lookup_session_events`
+- `get_top_issues`
+- `get_issue_excerpts`
+- `get_fix_status`
+- `get_mission_pack`
+- `propose_fix`
+- `record_fix_applied`
+
+The MCP implementation is `1.6.0`. `get_mission_pack` uses
+`mission-pack.det.v3` to prepare bounded, inactive guidance for the current
+project. Managed `/belay` calls pass the actual host harness (`claude` or
+`codex`) and a concise active-task hint when one exists. Without a current
+harness, Belay omits semantic rules; without a relevant task hint, it does not
+surface unrelated unanchored correction clusters. Stale, low-confidence, or
+unsupported semantic rules are omitted, cross-harness targets are safely
+adapted or suppressed, and at most three verification commands are selected
+for the stated intent. A pack with no actionable traps, rules, or verification
+commands is `empty` and cannot be activated. Mission Pack preparation does not
+verify later recurrence or cost reduction.
 
 The issue-evidence loop is deliberately structured: call `list_issues`, check
 its normalized selection and analysis coverage, pass its `view_cursor` to
@@ -235,9 +254,12 @@ coverage explicitly. A matching observation is attention evidence, not proof
 that a fix failed; no match is not proof that a fix worked. Recurrence
 monitoring reports only post-attempt evidence observed after the recorded
 attempt baseline.
-Monitoring is available through authenticated Local HTTP/browser routes only.
-MCP remains exactly the nine read-only tools listed above and receives no fix
-recording, fix history, or recurrence-monitoring capability.
+Recurrence monitoring remains available through authenticated Local
+HTTP/browser routes only. Thirteen MCP tools are read-only. `propose_fix`
+stores a bounded unified-diff proposal for an allowlisted harness configuration
+file but never applies it; `record_fix_applied` records the resulting file hash
+after explicit user approval and external application. Neither tool executes a
+command or writes a project file.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).
@@ -250,8 +272,11 @@ Exact Codex and Claude Code configuration examples are in
   according to that product's privacy policy and the user's configuration.
 - Prompt bodies, transcripts, file contents, raw endpoint identity, and raw
   evidence paths are excluded from canonical events.
+- Belay Local separately retains secret-scrubbed transcript turns in encrypted
+  on-device storage for loopback-only local analysis. Belay does not upload
+  this content.
 - Minimized envelope/index fields remain plaintext in SQLite; canonical event
-  JSON and finding citations are encrypted.
+  JSON, finding citations, and transcript payloads are encrypted.
 - Command summaries may retain the executable name and bounded option names.
   File resources retain a project-relative path or basename, and network
   resources retain scheme plus host. Minimized evidence may also include

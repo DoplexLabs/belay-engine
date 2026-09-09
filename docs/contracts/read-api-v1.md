@@ -15,10 +15,13 @@ must not be represented as available Local Alpha or Teams functionality.
 
 The snapshot-queryable issue repository is shared by the loopback HTTP
 Attention Inbox and the read-only MCP issue-evidence tools. HTTP remains the
-only adapter with browser fix-attempt and recurrence-monitoring capabilities.
+only adapter with the legacy browser fix-attempt/retraction routes and
+recurrence-monitoring capabilities. MCP's newer additive tools store only a
+bounded fix proposal or approved-application record.
 
 P0-03 adds four Local-only routes for explicit browser fix-attempt declarations.
-They are not future Teams read-contract claims and do not make MCP write-capable.
+They are not future Teams read-contract claims and are separate from MCP's
+bounded proposal/application records.
 
 P0-04 adds three Local-only, read-only monitoring routes over exact compatible
 fingerprint observations after a recorded attempt. They do not claim semantic
@@ -321,8 +324,7 @@ and the exact selected `session_id`; diagnosis cards do not use an issue view
 cursor that could open another session's occurrence.
 
 The shared readmodel `SessionDetail` remains unchanged. MCP `get_session`
-therefore does not receive the Local HTTP-only diagnosis field, and MCP remains
-exactly nine read-only tools.
+therefore does not receive the Local HTTP-only diagnosis field.
 
 Counting rules are deliberately mechanical:
 
@@ -1460,9 +1462,9 @@ Errors use `application/problem+json` with:
     explicit browser intent.
 13. Fix creation/retraction are append-only, idempotent, payload-free, and
     survive Local restart and ordinary retention.
-14. Fix recording and exact recurrence monitoring remain Local HTTP/browser
-    capabilities; MCP exposes exactly nine read-only tools and receives neither
-    capability.
+14. Exact recurrence monitoring remains a Local HTTP/browser capability. MCP
+    fix proposal/application records remain bounded and do not edit project
+    files or claim recurrence reduction.
 15. Monitoring cursors bind every documented high-water, route ID, normalized
     filter, page size, and ordering position for 15 minutes.
 16. Catch-up 503 affects only monitoring routes; cancellation/restart converges

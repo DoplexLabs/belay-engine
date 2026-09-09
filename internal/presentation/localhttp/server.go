@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/issueintel"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 )
 
@@ -25,9 +26,12 @@ import (
 var assetFiles embed.FS
 
 type Server struct {
-	read  *readmodel.Service
-	fix   FixService
-	token string
+	read         *readmodel.Service
+	fix          FixService
+	costFix      CostIssueFixService
+	missionPacks MissionPackService
+	token        string
+	experience   Experience
 }
 
 type RunningServer struct {
@@ -53,6 +57,35 @@ func WithFixService(service FixService) Option {
 	}
 }
 
+type CostIssueFixService interface {
+	ProposeFix(
+		context.Context,
+		string,
+		string,
+		string,
+	) (issueintel.FixRecord, error)
+	RecordApplied(
+		context.Context,
+		string,
+		string,
+		string,
+		string,
+	) (issueintel.FixRecord, error)
+	Status(context.Context, string) (issueintel.FixStatus, error)
+}
+
+func WithCostIssueFixService(service CostIssueFixService) Option {
+	return func(server *Server) {
+		server.costFix = service
+	}
+}
+
+func WithExperience(experience Experience) Option {
+	return func(server *Server) {
+		server.experience = experience
+	}
+}
+
 func New(read *readmodel.Service, token string, options ...Option) (*Server, error) {
 	if read == nil {
 		return nil, errors.New("local HTTP server requires a read service")
@@ -60,11 +93,18 @@ func New(read *readmodel.Service, token string, options ...Option) (*Server, err
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("local HTTP server requires a launch token")
 	}
-	server := &Server{read: read, token: token}
+	server := &Server{
+		read:       read,
+		token:      token,
+		experience: ExperienceCurrent,
+	}
 	for _, option := range options {
 		if option != nil {
 			option(server)
 		}
+	}
+	if !server.experience.Valid() {
+		return nil, ErrInvalidExperience
 	}
 	return server, nil
 }
@@ -86,7 +126,21 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.Handle("GET /v1/runtime", s.authorize(http.HandlerFunc(s.getRuntime)))
+	mux.Handle("GET /v1/transcript-status", s.authorize(http.HandlerFunc(s.getTranscriptStatus)))
 	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
+	mux.Handle("GET /v1/report", s.authorize(http.HandlerFunc(s.getReport)))
+	if s.missionPacks != nil {
+		mux.Handle(
+			"GET /v1/mission-pack",
+			s.authorize(http.HandlerFunc(s.getMissionPack)),
+		)
+	}
+	mux.Handle("GET /v1/cost-issues", s.authorize(http.HandlerFunc(s.listCostIssues)))
+	mux.Handle("GET /v1/cost-issues/{id}", s.authorize(http.HandlerFunc(s.getCostIssue)))
+	if s.costFix != nil {
+		s.registerCostIssueFixRoutes(mux, trustedListener)
+	}
 	mux.Handle("GET /v1/sessions", s.authorize(http.HandlerFunc(s.listSessions)))
 	mux.Handle("GET /v1/sessions/{id}", s.authorize(http.HandlerFunc(s.getSession)))
 	mux.Handle("GET /v1/sessions/{id}/events", s.authorize(http.HandlerFunc(s.getTimeline)))

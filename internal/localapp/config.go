@@ -23,15 +23,16 @@ const (
 )
 
 type Paths struct {
-	Root          string
-	Config        string
-	Database      string
-	CodexSpool    string
-	ClaudeSpool   string
-	Logs          string
-	BundledBin    string
-	MCPManifest   string
-	MCPConfigLock string
+	Root              string
+	Config            string
+	Database          string
+	CodexSpool        string
+	ClaudeSpool       string
+	Logs              string
+	BundledBin        string
+	TranscriptCursors string
+	MCPManifest       string
+	MCPConfigLock     string
 }
 
 type Config struct {
@@ -66,6 +67,11 @@ func ResolvePaths(explicitRoot string) (Paths, error) {
 		ClaudeSpool: filepath.Join(absolute, "live", "claude.ndjson"),
 		Logs:        filepath.Join(absolute, "logs"),
 		BundledBin:  filepath.Join(absolute, "bin", "numbat"),
+		TranscriptCursors: filepath.Join(
+			absolute,
+			"transcripts",
+			"cursors",
+		),
 		MCPManifest: filepath.Join(absolute, "mcp-config-ownership.json"),
 		MCPConfigLock: filepath.Join(
 			os.TempDir(),
@@ -231,6 +237,7 @@ func ensurePrivateDirectories(paths Paths) error {
 		filepath.Dir(paths.CodexSpool),
 		paths.Logs,
 		filepath.Dir(paths.BundledBin),
+		paths.TranscriptCursors,
 	} {
 		if err := ensurePrivateDirectory(directory); err != nil {
 			return err

@@ -477,6 +477,38 @@ func TestManageMCPConfigStatusClassifiesExactCodexIdentity(t *testing.T) {
 	}
 }
 
+func TestManageMCPConfigRunsSymlinkedCLIUsingLookPathPath(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	belay := writeMCPExecutable(t, "belay")
+	toolbox := writeMCPExecutable(t, "toolbox")
+	codex := filepath.Join(t.TempDir(), "codex")
+	if err := os.Symlink(toolbox, codex); err != nil {
+		t.Fatal(err)
+	}
+	runner := &scriptedMCPRunner{
+		t:       t,
+		results: []mcpCommandResult{codexAbsentResult()},
+	}
+	result, err := manageMCPConfig(
+		context.Background(),
+		MCPConfigRequest{
+			Paths:      paths,
+			Executable: belay,
+			Action:     MCPConfigStatus,
+		},
+		mcpTestDependencies(t, runner, codex, ""),
+	)
+	if err == nil || result.Targets[0].Status != "absent" || len(runner.calls) != 1 {
+		t.Fatalf("result = %+v err=%v calls=%+v", result, err, runner.calls)
+	}
+	if got := runner.calls[0].executable; got != codex {
+		t.Fatalf("runner executable = %q, want symlink %q instead of target %q", got, codex, toolbox)
+	}
+}
+
 func TestManageMCPConfigTimeoutDoesNotExposeCapturedOutput(t *testing.T) {
 	paths, err := ResolvePaths(t.TempDir())
 	if err != nil {

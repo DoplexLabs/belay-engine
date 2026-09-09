@@ -23,15 +23,25 @@ var safeTag = regexp.MustCompile(`^[a-z0-9_.:-]{1,64}$`)
 
 func sanitizeLabel(value string, limit int, secrets *int) string {
 	value = strings.TrimSpace(value)
-	for _, pattern := range secretPatterns {
-		matches := pattern.FindAllStringIndex(value, -1)
-		if len(matches) > 0 {
-			*secrets += len(matches)
-			value = pattern.ReplaceAllString(value, "[redacted]")
-		}
-	}
+	value, removed := ScrubSecrets(value)
+	*secrets += removed
 	value = strings.ReplaceAll(value, "\x1b", "")
 	return bounded(value, limit)
+}
+
+// ScrubSecrets applies Belay's existing local secret patterns without
+// otherwise minimizing or truncating the supplied text.
+func ScrubSecrets(value string) (string, int) {
+	removed := 0
+	for _, pattern := range secretPatterns {
+		matches := pattern.FindAllStringIndex(value, -1)
+		if len(matches) == 0 {
+			continue
+		}
+		removed += len(matches)
+		value = pattern.ReplaceAllString(value, "[redacted]")
+	}
+	return value, removed
 }
 
 func secretSignals(value string) int {

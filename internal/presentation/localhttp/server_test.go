@@ -3,6 +3,7 @@ package localhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -196,6 +197,113 @@ func TestStaticBrowserDoesNotRequireToken(t *testing.T) {
 	}
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestRuntimeRouteDefaultAndConfiguredExperience(t *testing.T) {
+	tests := []struct {
+		name       string
+		options    []Option
+		experience Experience
+	}{
+		{
+			name:       "default",
+			experience: ExperienceCurrent,
+		},
+		{
+			name:       "value first",
+			options:    []Option{WithExperience(ExperienceValueFirst)},
+			experience: ExperienceValueFirst,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := New(
+				readmodel.New(testRepository{}),
+				"launch-secret",
+				test.options...,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"http://127.0.0.1/v1/runtime",
+				nil,
+			)
+			request.RemoteAddr = "127.0.0.1:1234"
+			request.Header.Set("Authorization", "Bearer launch-secret")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf(
+					"status = %d body=%s",
+					response.Code,
+					response.Body.String(),
+				)
+			}
+			if got := response.Header().Get("Cache-Control"); got != "no-store" {
+				t.Fatalf("Cache-Control = %q, want no-store", got)
+			}
+			want := fmt.Sprintf(
+				"{\"schema_version\":\"%s\",\"experience\":\"%s\"}\n",
+				RuntimeSchemaVersion,
+				test.experience,
+			)
+			if response.Body.String() != want {
+				t.Fatalf(
+					"runtime response = %q, want %q",
+					response.Body.String(),
+					want,
+				)
+			}
+		})
+	}
+}
+
+func TestRuntimeRouteRequiresAuthorizationAndLoopback(t *testing.T) {
+	server, err := New(readmodel.New(testRepository{}), "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauthorized := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/runtime",
+		nil,
+	)
+	unauthorized.RemoteAddr = "127.0.0.1:1234"
+	unauthorizedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorizedResponse.Code)
+	}
+
+	nonLoopback := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/runtime",
+		nil,
+	)
+	nonLoopback.RemoteAddr = "203.0.113.4:1234"
+	nonLoopback.Header.Set("Authorization", "Bearer launch-secret")
+	nonLoopbackResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(nonLoopbackResponse, nonLoopback)
+	if nonLoopbackResponse.Code != http.StatusForbidden {
+		t.Fatalf("non-loopback status = %d", nonLoopbackResponse.Code)
+	}
+}
+
+func TestRuntimeExperienceOptionRejectsInvalidValue(t *testing.T) {
+	_, err := New(
+		readmodel.New(testRepository{}),
+		"launch-secret",
+		WithExperience(Experience("PRIVATE_MODE_CANARY")),
+	)
+	if !errors.Is(err, ErrInvalidExperience) {
+		t.Fatalf("New() error = %v, want invalid experience", err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_MODE_CANARY") {
+		t.Fatalf("New() error reflected invalid value: %q", err)
 	}
 }
 
