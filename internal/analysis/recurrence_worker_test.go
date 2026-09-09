@@ -378,18 +378,19 @@ func newRecurrenceWorkerFixtureWithAttempts(
 	if len(issues.Data) != 1 {
 		t.Fatalf("initial issue page = %+v", issues)
 	}
-	issuedAt := time.Now().UTC()
 	var lastAnnotation model.FixAnnotation
 	for index := range attemptCount {
 		annotation, err := store.RecordFixAnnotation(
 			ctx,
 			local.FixAnnotationInput{
 				Claims: model.FixActionClaims{
-					Version:   model.FixActionTokenVersion,
-					IssueID:   issues.Data[0].IssueID,
-					Snapshot:  issues.Snapshot,
-					IssuedAt:  issuedAt,
-					ExpiresAt: issuedAt.Add(15 * time.Minute),
+					Version:             model.FixActionTokenVersion,
+					CursorEpoch:         issues.CursorEpoch,
+					IssueID:             issues.Data[0].IssueID,
+					Snapshot:            issues.Snapshot,
+					RetentionGeneration: issues.RetentionGeneration,
+					IssuedAt:            issues.IssuedAt,
+					ExpiresAt:           issues.IssuedAt.Add(15 * time.Minute),
 				},
 				ChangeKind:  model.FixChangeCode,
 				RecordedVia: model.FixRecordedViaLocalUI,

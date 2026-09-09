@@ -358,10 +358,8 @@ func TestImportReconcileAndIssueQueryEndToEnd(t *testing.T) {
 	if reconcile.Current != 1 || reconcile.Occurrences != 2 {
 		t.Fatalf("reconcile report = %+v", reconcile)
 	}
-	issuedAt := time.Now().UTC()
 	page, err := store.QueryIssues(ctx, model.IssueQuery{
-		Limit:    20,
-		IssuedAt: issuedAt,
+		Limit: 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -377,10 +375,12 @@ func TestImportReconcileAndIssueQueryEndToEnd(t *testing.T) {
 		occurrences, err := store.QueryIssueOccurrences(
 			ctx,
 			model.IssueOccurrenceQuery{
-				IssueID:  issue.IssueID,
-				Limit:    20,
-				Snapshot: page.Snapshot,
-				IssuedAt: issuedAt,
+				IssueID:             issue.IssueID,
+				Limit:               20,
+				CursorEpoch:         page.CursorEpoch,
+				Snapshot:            page.Snapshot,
+				RetentionGeneration: page.RetentionGeneration,
+				IssuedAt:            page.IssuedAt,
 			},
 		)
 		if err != nil {
