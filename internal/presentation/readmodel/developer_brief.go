@@ -2,8 +2,11 @@ package readmodel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -417,6 +420,7 @@ func briefSessionOutcomeCandidates(values []model.SessionSummary) []briefCandida
 }
 
 func rankBriefCandidates(values []briefCandidate) []DeveloperBriefActionCard {
+	values = consolidateBriefCandidates(values)
 	sort.SliceStable(values, func(i, j int) bool {
 		if values[i].rank != values[j].rank {
 			return values[i].rank > values[j].rank
@@ -450,6 +454,133 @@ func rankBriefCandidates(values []briefCandidate) []DeveloperBriefActionCard {
 		result = append(result, value.card)
 	}
 	return nonNil(result)
+}
+
+func consolidateBriefCandidates(values []briefCandidate) []briefCandidate {
+	result := make([]briefCandidate, 0, len(values))
+	semanticPositions := make(map[string]int, len(values))
+	for _, value := range values {
+		semanticKey, ok := briefCandidateSemanticKey(value.card)
+		if !ok {
+			result = append(result, value)
+			continue
+		}
+		if position, exists := semanticPositions[semanticKey]; exists {
+			result[position] = mergeBriefCandidates(result[position], value, semanticKey)
+			continue
+		}
+		value = initializeConsolidatedBriefCandidate(value, semanticKey)
+		semanticPositions[semanticKey] = len(result)
+		result = append(result, value)
+	}
+	return result
+}
+
+func briefCandidateSemanticKey(card DeveloperBriefActionCard) (string, bool) {
+	switch card.Kind {
+	case BriefActionReviewedFinding, BriefActionEvidenceGap:
+	default:
+		return "", false
+	}
+	parts := []string{
+		card.Kind,
+		card.Title,
+		card.Observation,
+		card.Limitation,
+		card.NextStep.Kind,
+		card.NextStep.Label,
+	}
+	if !completeCatalogText(parts...) {
+		return "", false
+	}
+	var key strings.Builder
+	for _, part := range parts {
+		key.WriteString(strconv.Itoa(len(part)))
+		key.WriteByte(':')
+		key.WriteString(part)
+		key.WriteByte('|')
+	}
+	return key.String(), true
+}
+
+func initializeConsolidatedBriefCandidate(
+	value briefCandidate,
+	semanticKey string,
+) briefCandidate {
+	stableID := briefSemanticCardID(semanticKey)
+	value.card.CardID = stableID
+	value.stableID = stableID
+	return value
+}
+
+func mergeBriefCandidates(
+	current briefCandidate,
+	incoming briefCandidate,
+	semanticKey string,
+) briefCandidate {
+	representative := current
+	if incoming.lastObserved.After(current.lastObserved) ||
+		(incoming.lastObserved.Equal(current.lastObserved) &&
+			briefNextStepStableKey(incoming.card.NextStep) <
+				briefNextStepStableKey(current.card.NextStep)) {
+		representative = incoming
+	}
+	current.card.NextStep = representative.card.NextStep
+	if incoming.rank > current.rank {
+		current.rank = incoming.rank
+	}
+	if incoming.kindOrder < current.kindOrder {
+		current.kindOrder = incoming.kindOrder
+	}
+	current.sessionCount = addBriefCount(current.sessionCount, incoming.sessionCount)
+	current.occurrenceCount = addBriefCount(current.occurrenceCount, incoming.occurrenceCount)
+	if incoming.lastObserved.After(current.lastObserved) {
+		current.lastObserved = incoming.lastObserved
+	}
+	current.card.Evidence.LastObservedAt = current.lastObserved.UTC()
+	current.card.Evidence.SessionCount = intPointer(current.sessionCount)
+	current.card.Evidence.OccurrenceCount = intPointer(current.occurrenceCount)
+	current.card.Evidence.Harnesses = normalizedHarnesses(append(
+		append([]string(nil), current.card.Evidence.Harnesses...),
+		incoming.card.Evidence.Harnesses...,
+	))
+	stableID := briefSemanticCardID(semanticKey)
+	current.card.CardID = stableID
+	current.stableID = stableID
+	return current
+}
+
+func briefNextStepStableKey(value DeveloperBriefNextStep) string {
+	parts := []string{value.Kind, value.Label}
+	for _, candidate := range []*string{
+		value.FamilyID,
+		value.IssueID,
+		value.SessionID,
+		value.ViewCursor,
+	} {
+		if candidate == nil {
+			parts = append(parts, "")
+			continue
+		}
+		parts = append(parts, *candidate)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func briefSemanticCardID(semanticKey string) string {
+	digest := sha256.Sum256([]byte(semanticKey))
+	return "signal:" + hex.EncodeToString(digest[:16])
+}
+
+func addBriefCount(first, second int) int {
+	const maxInt = int(^uint(0) >> 1)
+	if first < 0 || second < 0 {
+		return 0
+	}
+	if second > maxInt-first {
+		return maxInt
+	}
+	return first + second
 }
 
 func buildDeveloperBriefRecentSummary(
@@ -826,6 +957,10 @@ func stringPointer(value string) *string {
 	if value == "" {
 		return nil
 	}
+	return &value
+}
+
+func intPointer(value int) *int {
 	return &value
 }
 

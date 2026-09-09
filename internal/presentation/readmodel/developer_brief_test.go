@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -344,6 +345,152 @@ func TestRankBriefCandidatesCapsOutcomesAndUsesStableTies(t *testing.T) {
 	}
 }
 
+func TestDeveloperBriefConsolidatesSemanticallyIdenticalExactFamilies(t *testing.T) {
+	now := time.Date(2026, 9, 9, 17, 0, 0, 0, time.UTC)
+	catalog := AttentionFamilyCatalogMetadata{
+		CatalogVersion:       IssueCatalogVersion,
+		GroupingVersion:      "1",
+		DisplayTitle:         "No recognized verification retained after changes",
+		ObservationStatement: "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended.",
+		Caveat:               "This does not show that verification did not occur; Belay only checks supported commands in retained activity.",
+		NextEvidenceAction:   "inspect_cited_events",
+	}
+	families := []AttentionFamilySummary{
+		briefExactFamily(
+			"a",
+			now.Add(-30*time.Minute),
+			1,
+			2,
+			[]string{"codex"},
+			"cursor-a",
+			catalog,
+		),
+		briefExactFamily(
+			"b",
+			now.Add(-5*time.Minute),
+			2,
+			3,
+			[]string{"claude-code", "codex"},
+			"cursor-b",
+			catalog,
+		),
+		briefExactFamily(
+			"c",
+			now.Add(-10*time.Minute),
+			1,
+			4,
+			[]string{"claude-code"},
+			"cursor-c",
+			catalog,
+		),
+	}
+
+	first := rankBriefCandidates(briefFamilyCandidates(
+		families,
+		now.Add(-time.Hour),
+		now,
+	))
+	second := rankBriefCandidates(briefFamilyCandidates(
+		[]AttentionFamilySummary{families[2], families[0], families[1]},
+		now.Add(-time.Hour),
+		now,
+	))
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("consolidated cards = %+v / %+v", first, second)
+	}
+	card := first[0]
+	if !strings.HasPrefix(card.CardID, "signal:") ||
+		card.CardID != second[0].CardID ||
+		card.Evidence.SessionCount == nil ||
+		*card.Evidence.SessionCount != 4 ||
+		card.Evidence.OccurrenceCount == nil ||
+		*card.Evidence.OccurrenceCount != 9 ||
+		strings.Join(card.Evidence.Harnesses, ",") != "claude-code,codex" ||
+		!card.Evidence.LastObservedAt.Equal(now.Add(-5*time.Minute)) ||
+		card.NextStep.IssueID == nil ||
+		*card.NextStep.IssueID != testIssueID("b") ||
+		card.NextStep.ViewCursor == nil ||
+		*card.NextStep.ViewCursor != "cursor-b" {
+		t.Fatalf("consolidated card = %+v", card)
+	}
+	if second[0].NextStep.IssueID == nil ||
+		*second[0].NextStep.IssueID != testIssueID("b") {
+		t.Fatalf("reordered representative = %+v", second[0].NextStep)
+	}
+}
+
+func TestDeveloperBriefDoesNotMergeDistinctSignalCopy(t *testing.T) {
+	now := time.Date(2026, 9, 9, 17, 0, 0, 0, time.UTC)
+	firstCatalog := AttentionFamilyCatalogMetadata{
+		CatalogVersion:       IssueCatalogVersion,
+		GroupingVersion:      "1",
+		DisplayTitle:         "Signal title",
+		ObservationStatement: "First reviewed observation.",
+		Caveat:               "First reviewed limitation.",
+		NextEvidenceAction:   "inspect_cited_events",
+	}
+	secondCatalog := firstCatalog
+	secondCatalog.ObservationStatement = "Different reviewed observation."
+	cards := rankBriefCandidates(briefFamilyCandidates(
+		[]AttentionFamilySummary{
+			briefExactFamily("a", now, 1, 1, []string{"codex"}, "cursor-a", firstCatalog),
+			briefExactFamily("b", now, 1, 1, []string{"codex"}, "cursor-b", secondCatalog),
+		},
+		now.Add(-time.Hour),
+		now,
+	))
+	if len(cards) != 2 || cards[0].CardID == cards[1].CardID {
+		t.Fatalf("distinct signals merged: %+v", cards)
+	}
+}
+
+func TestDeveloperBriefDoesNotMergeDifferentNavigationKinds(t *testing.T) {
+	now := time.Date(2026, 9, 9, 17, 0, 0, 0, time.UTC)
+	catalog := AttentionFamilyCatalogMetadata{
+		CatalogVersion:       IssueCatalogVersion,
+		GroupingVersion:      "1",
+		DisplayTitle:         "Same reviewed signal",
+		ObservationStatement: "Same reviewed observation.",
+		Caveat:               "Same reviewed limitation.",
+		NextEvidenceAction:   "inspect_cited_events",
+	}
+	exact := briefExactFamily(
+		"a",
+		now,
+		1,
+		1,
+		[]string{"codex"},
+		"cursor-a",
+		catalog,
+	)
+	mapped := briefExactFamily(
+		"b",
+		now,
+		1,
+		1,
+		[]string{"codex"},
+		"cursor-b",
+		catalog,
+	)
+	mapped.Kind = model.AttentionFamilyKindMappedUpstream
+
+	cards := rankBriefCandidates(briefFamilyCandidates(
+		[]AttentionFamilySummary{exact, mapped},
+		now.Add(-time.Hour),
+		now,
+	))
+	if len(cards) != 2 {
+		t.Fatalf("different navigation kinds merged: %+v", cards)
+	}
+	gotKinds := []string{cards[0].NextStep.Kind, cards[1].NextStep.Kind}
+	sort.Strings(gotKinds)
+	wantKinds := []string{BriefTargetAttentionFamily, BriefTargetIssue}
+	sort.Strings(wantKinds)
+	if strings.Join(gotKinds, ",") != strings.Join(wantKinds, ",") {
+		t.Fatalf("navigation kinds = %v, want %v", gotKinds, wantKinds)
+	}
+}
+
 func TestDeveloperBriefCoverageIsConservativeAndReportsBounds(t *testing.T) {
 	now := time.Date(2026, 9, 9, 17, 0, 0, 0, time.UTC)
 	coverage := buildDeveloperBriefCoverage(
@@ -429,6 +576,31 @@ func briefSession(id, harness, outcome string, endedAt time.Time) model.SessionS
 		EventCount: 3,
 		Outcome:    outcome,
 		History:    "live",
+	}
+}
+
+func briefExactFamily(
+	id string,
+	lastObservedAt time.Time,
+	sessionCount int,
+	occurrenceCount int,
+	harnesses []string,
+	viewCursor string,
+	catalog AttentionFamilyCatalogMetadata,
+) AttentionFamilySummary {
+	return AttentionFamilySummary{
+		FamilyID:              testAttentionFamilyID(id),
+		Kind:                  model.AttentionFamilyKindExactIssue,
+		RepresentativeIssueID: testIssueID(id),
+		Severity:              "medium",
+		LastObservedAt:        lastObservedAt,
+		SessionCount:          sessionCount,
+		OccurrenceCount:       occurrenceCount,
+		Harnesses:             harnesses,
+		AnalysisStatus:        model.AnalysisCurrent,
+		ViewCursor:            viewCursor,
+		Catalog:               catalog,
+		CatalogStatus:         "known",
 	}
 }
 
