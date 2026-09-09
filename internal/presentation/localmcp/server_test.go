@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -312,6 +313,40 @@ func TestGetStatsAdvertisesGlobalOnlyInput(t *testing.T) {
 	t.Fatal("get_stats tool was not advertised")
 }
 
+func TestGetStatsInitializationIsAdditiveAndLegacyCompatible(t *testing.T) {
+	repository := &testRepository{}
+	legacy := callTool(t, newTestClient(t, repository), "get_stats", map[string]any{})
+	if legacy.IsError {
+		t.Fatalf("legacy get_stats failed: %v", legacy.Content)
+	}
+	legacyReadmodel := asObject(t, asObject(t, legacy.StructuredContent)["readmodel"])
+	if value, exists := legacyReadmodel["initialization"]; !exists || value != nil {
+		t.Fatalf("legacy initialization = %#v, exists=%v; want null", value, exists)
+	}
+
+	tracker := initialization.NewTracker(true, testTime)
+	withProvider := callTool(
+		t,
+		newTestClient(
+			t,
+			repository,
+			readmodel.WithInitializationProvider(tracker),
+		),
+		"get_stats",
+		map[string]any{},
+	)
+	if withProvider.IsError {
+		t.Fatalf("provider get_stats failed: %v", withProvider.Content)
+	}
+	readModel := asObject(t, asObject(t, withProvider.StructuredContent)["readmodel"])
+	status := asObject(t, readModel["initialization"])
+	if status["state"] != initialization.StateInitializing ||
+		status["completed_at"] != nil ||
+		status["error_code"] != nil {
+		t.Fatalf("MCP initialization = %#v", status)
+	}
+}
+
 func TestRepresentativeCallsReturnWrappedReadModels(t *testing.T) {
 	repository := &testRepository{}
 	session := newTestClient(t, repository)
@@ -589,18 +624,23 @@ func TestNewRequiresIssueEvidenceCapabilities(t *testing.T) {
 	}
 }
 
-func newTestClient(t *testing.T, repository readmodel.Repository) *mcp.ClientSession {
+func newTestClient(
+	t *testing.T,
+	repository readmodel.Repository,
+	options ...readmodel.Option,
+) *mcp.ClientSession {
 	t.Helper()
 	issueRepository, ok := repository.(readmodel.IssueRepository)
 	if !ok {
 		t.Fatalf("repository %T does not implement readmodel.IssueRepository", repository)
 	}
-	server, err := New(readmodel.New(
-		repository,
+	readOptions := []readmodel.Option{
 		readmodel.WithIssueRepository(issueRepository),
 		readmodel.WithIssueCursorCodec(testIssueCursorCodec{}),
 		readmodel.WithClock(testTime),
-	))
+	}
+	readOptions = append(readOptions, options...)
+	server, err := New(readmodel.New(repository, readOptions...))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -83,7 +83,7 @@ select:focus-visible {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr);
+  grid-template-rows: 64px auto minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
 }
@@ -172,6 +172,24 @@ select:focus-visible {
   border-radius: 50%;
   background: var(--success);
   box-shadow: 0 0 0 4px var(--success-soft);
+}
+
+.initialization-banner {
+  z-index: 4;
+  margin: 0;
+  padding: 9px 20px;
+  border-bottom: 1px solid rgba(244, 199, 104, 0.3);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.initialization-banner[data-state="degraded"] {
+  border-bottom-color: rgba(255, 125, 118, 0.28);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .icon-button,
@@ -3242,6 +3260,11 @@ h1 {
     padding: 0 14px;
   }
 
+  .initialization-banner {
+    padding: 8px 14px;
+    font-size: 11px;
+  }
+
   .brand small {
     display: none;
   }
@@ -3554,7 +3577,7 @@ h1 {
 
 @media (max-height: 700px) {
   .app-shell {
-    grid-template-rows: 56px minmax(0, 1fr);
+    grid-template-rows: 56px auto minmax(0, 1fr);
   }
 
   .topbar {

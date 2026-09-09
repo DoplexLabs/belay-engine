@@ -13,6 +13,7 @@
     fixRecurrences: { page: 20 },
   });
   const mutationRequestDeadlineMilliseconds = 15_000;
+  const initializationPollMilliseconds = 2_000;
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
   const issueCatalog = Object.freeze({
     "issue.explicit_command_failure": Object.freeze({
@@ -209,6 +210,10 @@
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
     activeView: "brief",
+    initialization: null,
+    initializationRequestInFlight: false,
+    initializationPollGeneration: 0,
+    initializationPollTimer: 0,
     developerBrief: null,
     briefStatus: "idle",
     briefError: "",
@@ -287,6 +292,7 @@
     attentionExpiryRefresh: false,
     refreshNoticeTimer: 0,
     sessions: [],
+    sessionsRequestGeneration: 0,
     sessionLimit: pageLimits.sessions.initial,
     sessionNextCursor: "",
     sessionHasMore: false,
@@ -315,6 +321,7 @@
 
   const elements = {
     appShell: document.querySelector("#app-shell"),
+    initializationBanner: document.querySelector("#initialization-banner"),
     navBrief: document.querySelector("#nav-brief"),
     navAttention: document.querySelector("#nav-attention"),
     navSessions: document.querySelector("#nav-sessions"),
@@ -674,7 +681,7 @@
   renderFixMonitoringFilters();
   bindEvents();
   setActiveView("brief", false);
-  refreshAll(false);
+  void startProgressiveInitialization();
 
   function createIssueBucket(kind) {
     return {
@@ -735,12 +742,149 @@
     };
   }
 
-  async function loadDeveloperBrief() {
+  async function startProgressiveInitialization() {
+    await requestInitializationStatus();
+    await refreshActiveViewForInitialization(false);
+    scheduleInitializationPoll();
+  }
+
+  async function requestInitializationStatus() {
+    if (state.initializationRequestInFlight) {
+      return { ok: false, skipped: true };
+    }
+    state.initializationRequestInFlight = true;
+    const generation = ++state.initializationPollGeneration;
+    const previous = readText(state.initialization && state.initialization.state);
+    try {
+      const response = await apiGet("/v1/initialization");
+      if (generation !== state.initializationPollGeneration) {
+        return { ok: false, stale: true, previous, current: previous };
+      }
+      const initialization = requireInitializationStatus(response);
+      state.initialization = initialization;
+      renderInitializationStatus();
+      return {
+        ok: true,
+        previous,
+        current: initialization.state,
+      };
+    } catch {
+      if (generation !== state.initializationPollGeneration) {
+        return { ok: false, stale: true, previous, current: previous };
+      }
+      renderInitializationStatus();
+      return { ok: false, previous, current: previous };
+    } finally {
+      state.initializationRequestInFlight = false;
+    }
+  }
+
+  function requireInitializationStatus(response) {
+    const value = isRecord(response) ? response.initialization : null;
+    const initializationState = readText(value && value.state);
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== "belay.initialization.v1" ||
+      !isRecord(value) ||
+      !["initializing", "ready", "degraded"].includes(initializationState)
+    ) {
+      throw new Error("Local API returned an invalid initialization status.");
+    }
+    return {
+      schema_version: "belay.initialization.v1",
+      state: initializationState,
+      started_at: readText(value.started_at),
+      completed_at: readText(value.completed_at),
+      error_code: readText(value.error_code),
+    };
+  }
+
+  function renderInitializationStatus() {
+    const initializationState = readText(
+      state.initialization && state.initialization.state,
+    );
+    let message = "";
+    if (initializationState === "initializing") {
+      message =
+        "Belay is importing local agent history. Results are partial and will update automatically.";
+    } else if (initializationState === "degraded") {
+      message =
+        "Belay imported available data, but part of the initial scan could not complete. Results may be partial.";
+    }
+    elements.initializationBanner.hidden = !message;
+    elements.initializationBanner.dataset.state = initializationState;
+    elements.initializationBanner.textContent = message;
+  }
+
+  function scheduleInitializationPoll() {
+    if (
+      readText(state.initialization && state.initialization.state) !==
+        "initializing" ||
+      state.initializationRequestInFlight ||
+      state.initializationPollTimer
+    ) {
+      return;
+    }
+    state.initializationPollTimer = globalThis.setTimeout(() => {
+      state.initializationPollTimer = 0;
+      void pollInitialization();
+    }, initializationPollMilliseconds);
+  }
+
+  function stopInitializationPolling() {
+    globalThis.clearTimeout(state.initializationPollTimer);
+    state.initializationPollTimer = 0;
+  }
+
+  async function pollInitialization() {
+    if (state.initializationRequestInFlight) return;
+    const result = await requestInitializationStatus();
+    const transitionedToTerminal =
+      result.ok &&
+      result.previous === "initializing" &&
+      ["ready", "degraded"].includes(result.current);
+    if (
+      result.ok &&
+      (result.current === "initializing" || transitionedToTerminal)
+    ) {
+      await refreshActiveViewForInitialization(true);
+    }
+    if (
+      readText(state.initialization && state.initialization.state) ===
+      "initializing"
+    ) {
+      scheduleInitializationPoll();
+    } else {
+      stopInitializationPolling();
+    }
+  }
+
+  async function refreshActiveViewForInitialization(preserveSelection) {
+    if (state.activeView === "brief") {
+      await loadDeveloperBrief(preserveSelection);
+      return true;
+    }
+    if (state.activeView === "attention") {
+      if (state.selectedFamily || state.selectedIssueID) return false;
+      await refreshAttention(false, true);
+      return true;
+    }
+    if (state.selectedSessionID) return false;
+    await refreshSessions(false);
+    return true;
+  }
+
+  async function loadDeveloperBrief(preserveCurrent = false) {
     const generation = ++state.briefRequestGeneration;
-    state.briefStatus = "loading";
-    state.briefError = "";
-    state.developerBrief = null;
-    renderDeveloperBrief();
+    const priorBrief = state.developerBrief;
+    const priorStatus = state.briefStatus;
+    const priorError = state.briefError;
+    if (!preserveCurrent) {
+      state.briefStatus = "loading";
+      state.briefError = "";
+      state.developerBrief = null;
+      renderDeveloperBrief();
+    }
     try {
       const response = await apiGet("/v1/developer-brief");
       if (generation !== state.briefRequestGeneration) return false;
@@ -750,6 +894,13 @@
       return true;
     } catch (error) {
       if (generation !== state.briefRequestGeneration) return false;
+      if (preserveCurrent && priorBrief) {
+        state.developerBrief = priorBrief;
+        state.briefStatus = priorStatus;
+        state.briefError = priorError;
+        renderDeveloperBrief();
+        return false;
+      }
       state.developerBrief = null;
       state.briefStatus = "error";
       state.briefError = customerErrorMessage(
@@ -811,7 +962,9 @@
         ? `${formatFullDate(start)} to ${formatFullDate(end)}`
         : "Rolling 24-hour window";
     elements.briefStatus.textContent =
-      readText(brief.status) === "limited"
+      initializationInProgress()
+        ? "Initial import is still in progress; these values are partial."
+        : readText(brief.status) === "limited"
         ? "Brief is limited. Review the coverage notes before relying on it."
         : "Based on the activity Belay could evaluate.";
     renderBriefSummary(brief.recent_summary);
@@ -859,11 +1012,14 @@
     const complete = brief.coverage.complete === true;
     const sessionsAvailable =
       briefSourceStatus(brief, "sessions") !== "unavailable";
+    const initializing = initializationInProgress();
     elements.briefActionsEmpty.hidden = cards.length !== 0;
     if (cards.length === 0) {
       elements.briefActionsEmptyTitle.textContent =
         !sessionsAvailable
           ? "Recent sessions could not be evaluated"
+          : initializing && sessionCount === 0
+            ? "No recent activity has been imported yet"
           : sessionCount === 0
           ? "No recorded agent activity in the last 24 hours"
           : complete
@@ -872,6 +1028,8 @@
       elements.briefActionsEmptyDetail.textContent =
         !sessionsAvailable
           ? "Attention may still contain reviewed findings, and stored activity remains available in Sessions."
+          : initializing && sessionCount === 0
+            ? "Initial import is still in progress; this result is partial and will update automatically."
           : sessionCount === 0
           ? "Older stored sessions remain available in Sessions."
           : complete
@@ -975,13 +1133,25 @@
     if (sessions.length === 0) {
       const sessionsAvailable =
         briefSourceStatus(brief, "sessions") !== "unavailable";
-      elements.briefRecentEmptyTitle.textContent = sessionsAvailable
-        ? "No recorded agent activity in the last 24 hours"
-        : "Recent work is unavailable";
-      elements.briefRecentEmptyDetail.textContent = sessionsAvailable
-        ? "Older stored sessions remain available in Sessions."
-        : "Open Sessions to inspect stored activity directly.";
+      const initializing = initializationInProgress();
+      elements.briefRecentEmptyTitle.textContent = !sessionsAvailable
+        ? "Recent work is unavailable"
+        : initializing
+          ? "No recent activity has been imported yet"
+          : "No recorded agent activity in the last 24 hours";
+      elements.briefRecentEmptyDetail.textContent = !sessionsAvailable
+        ? "Open Sessions to inspect stored activity directly."
+        : initializing
+          ? "Initial import is still in progress; this result is partial and will update automatically."
+          : "Older stored sessions remain available in Sessions.";
     }
+  }
+
+  function initializationInProgress() {
+    return (
+      readText(state.initialization && state.initialization.state) ===
+      "initializing"
+    );
   }
 
   function briefSourceStatus(brief, sourceName) {
@@ -1590,13 +1760,20 @@
     const selectedID = preserveSelection ? state.selectedSessionID : "";
     state.sessionLimit = pageLimits.sessions.initial;
     state.sessionNextCursor = "";
-    await Promise.allSettled([loadStats(), loadSessions(false)]);
+    const [, sessionsResult] = await Promise.allSettled([
+      loadStats(),
+      loadSessions(false),
+    ]);
+    const sessionsReady =
+      sessionsResult.status === "fulfilled" && sessionsResult.value === true;
+    if (!sessionsReady) return false;
     if (
       selectedID &&
       state.sessions.some((session) => readText(session.session_id) === selectedID)
     ) {
       openSession(selectedID, state.selectedSessionDetail);
     }
+    return true;
   }
 
   function setActiveView(view, moveFocus) {
@@ -6815,19 +6992,22 @@
   }
 
   async function loadSessions(append) {
+    const generation = ++state.sessionsRequestGeneration;
+    const cursor = append ? state.sessionNextCursor : "";
+    const priorSessions = append && cursor ? state.sessions.slice() : [];
     state.lastAction = "sessions";
     hideError();
     elements.sessionsLoading.hidden = append;
     elements.sessionsEmpty.hidden = true;
     elements.sessionsLoadMore.disabled = true;
     try {
-      const cursor = append ? state.sessionNextCursor : "";
       const response = await apiGet(buildSessionPath(cursor));
+      if (generation !== state.sessionsRequestGeneration) return false;
       const page = Array.isArray(response.data) ? response.data : [];
       const nextCursor = readCursor(response.next_cursor);
       state.sessions =
         append && cursor
-          ? deduplicateByID(state.sessions.concat(page), "session_id")
+          ? deduplicateByID(priorSessions.concat(page), "session_id")
           : page;
       state.sessionNextCursor = nextCursor;
       state.sessionHasMore = response.has_more === true || Boolean(nextCursor);
@@ -6835,7 +7015,9 @@
       updateHarnessOptions([]);
       renderSessions();
       renderSessionPagination();
+      return true;
     } catch (error) {
+      if (generation !== state.sessionsRequestGeneration) return false;
       if (!append) {
         state.sessions = [];
         state.sessionHasMore = false;
@@ -6843,11 +7025,14 @@
       }
       renderSessionPagination();
       showError("Unable to load sessions", error);
+      return false;
     } finally {
-      elements.sessionsLoading.hidden = true;
-      elements.sessionsLoadMore.disabled = false;
-      renderSessions();
-      renderSessionPagination();
+      if (generation === state.sessionsRequestGeneration) {
+        elements.sessionsLoading.hidden = true;
+        elements.sessionsLoadMore.disabled = false;
+        renderSessions();
+        renderSessionPagination();
+      }
     }
   }
 

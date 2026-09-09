@@ -9,6 +9,7 @@ import (
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/analysis"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/pipeline"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
@@ -26,6 +27,30 @@ type HookResult struct {
 	Action   string `json:"action"`
 	ExitCode int    `json:"exit_code"`
 	Error    string `json:"error,omitempty"`
+}
+
+func StartHistoricalInitialization(
+	ctx context.Context,
+	tracker *initialization.Tracker,
+	scan func(context.Context) error,
+) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if tracker == nil || scan == nil || ctx.Err() != nil {
+			return
+		}
+		err := scan(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			tracker.MarkHistoricalScanIncomplete()
+			return
+		}
+		tracker.MarkReady()
+	}()
+	return done
 }
 
 func DiscoverAndScan(

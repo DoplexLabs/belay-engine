@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 )
 
 const SchemaVersion = "belay.read.v1"
@@ -110,6 +111,7 @@ type Service struct {
 	attentionFamilyRepository AttentionFamilyRepository
 	issueCursorCodec          IssueCursorCodec
 	fixMonitoringRepository   FixMonitoringRepository
+	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }
 
@@ -139,6 +141,12 @@ func WithIssueCursorCodec(codec IssueCursorCodec) Option {
 func WithFixMonitoringRepository(repository FixMonitoringRepository) Option {
 	return func(service *Service) {
 		service.fixMonitoringRepository = repository
+	}
+}
+
+func WithInitializationProvider(provider initialization.Provider) Option {
+	return func(service *Service) {
+		service.initializationProvider = provider
 	}
 }
 
@@ -257,10 +265,16 @@ type FindingList struct {
 }
 
 type StatsResponse struct {
-	SchemaVersion string           `json:"schema_version"`
-	MetricVersion string           `json:"metric_version"`
-	Data          model.LocalStats `json:"data"`
-	DataThrough   time.Time        `json:"data_through"`
+	SchemaVersion  string                 `json:"schema_version"`
+	MetricVersion  string                 `json:"metric_version"`
+	Data           model.LocalStats       `json:"data"`
+	DataThrough    time.Time              `json:"data_through"`
+	Initialization *initialization.Status `json:"initialization"`
+}
+
+type InitializationResponse struct {
+	SchemaVersion  string                `json:"schema_version"`
+	Initialization initialization.Status `json:"initialization"`
 }
 
 type IssueList struct {
@@ -1034,12 +1048,35 @@ func (s *Service) LookupSessionEvents(
 
 func (s *Service) GetStats(ctx context.Context) (StatsResponse, error) {
 	data, dataThrough, err := s.repository.GetStats(ctx)
-	return StatsResponse{
+	response := StatsResponse{
 		SchemaVersion: SchemaVersion,
 		MetricVersion: "belay.metrics.local.v1",
 		Data:          data,
 		DataThrough:   dataThrough,
-	}, err
+	}
+	if err != nil || s.initializationProvider == nil {
+		return response, err
+	}
+	status := s.initializationProvider.InitializationStatus()
+	if !initialization.Valid(status) {
+		return StatsResponse{}, errors.New("initialization provider returned invalid status")
+	}
+	response.Initialization = &status
+	return response, nil
+}
+
+func (s *Service) GetInitialization() (InitializationResponse, error) {
+	if s == nil || s.initializationProvider == nil {
+		return InitializationResponse{}, capabilityUnavailable()
+	}
+	status := s.initializationProvider.InitializationStatus()
+	if !initialization.Valid(status) {
+		return InitializationResponse{}, errors.New("initialization provider returned invalid status")
+	}
+	return InitializationResponse{
+		SchemaVersion:  initialization.SchemaVersion,
+		Initialization: status,
+	}, nil
 }
 
 func sessionNextCursor(

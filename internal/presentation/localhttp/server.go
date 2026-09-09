@@ -98,6 +98,7 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/attention-families", s.authorize(http.HandlerFunc(s.listAttentionFamilies)))
 	mux.Handle("GET /v1/attention-families/{family_id}", s.authorize(http.HandlerFunc(s.getAttentionFamily)))
 	s.registerFixMonitoringRoutes(mux)
+	mux.Handle("GET /v1/initialization", s.authorize(http.HandlerFunc(s.getInitialization)))
 	mux.Handle("GET /v1/stats", s.authorize(http.HandlerFunc(s.getStats)))
 	if s.fix != nil {
 		s.registerFixRoutes(mux, trustedListener)
@@ -470,6 +471,15 @@ func writeReadInvalidRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 	response, err := s.read.GetStats(r.Context())
+	writeReadResult(w, r, response, err)
+}
+
+func (s *Server) getInitialization(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		writeReadInvalidRequest(w, r)
+		return
+	}
+	response, err := s.read.GetInitialization()
 	writeReadResult(w, r, response, err)
 }
 

@@ -3,19 +3,92 @@ package localapp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
 type memoryKeyProvider struct {
 	keys map[string][]byte
+}
+
+func TestStartHistoricalInitializationTransitionsWithoutBlocking(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		scanError error
+		wantState string
+		wantCode  *string
+	}{
+		{
+			name:      "success",
+			wantState: initialization.StateReady,
+		},
+		{
+			name:      "failure",
+			scanError: errors.New("PRIVATE_SCAN_ERROR_/Users/private/project"),
+			wantState: initialization.StateDegraded,
+			wantCode:  stringPointer(initialization.ErrorHistoricalScanIncomplete),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tracker := initialization.NewTracker(true, time.Now)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := StartHistoricalInitialization(
+				context.Background(),
+				tracker,
+				func(context.Context) error {
+					close(started)
+					<-release
+					return test.scanError
+				},
+			)
+			<-started
+			if status := tracker.InitializationStatus(); status.State != initialization.StateInitializing {
+				t.Fatalf("blocked scan status = %+v", status)
+			}
+			close(release)
+			<-done
+			status := tracker.InitializationStatus()
+			if status.State != test.wantState {
+				t.Fatalf("terminal status = %+v, want %q", status, test.wantState)
+			}
+			if test.wantCode == nil {
+				if status.ErrorCode != nil {
+					t.Fatalf("error code = %v, want null", status.ErrorCode)
+				}
+			} else if status.ErrorCode == nil || *status.ErrorCode != *test.wantCode {
+				t.Fatalf("error code = %v, want %q", status.ErrorCode, *test.wantCode)
+			}
+			if status.ErrorCode != nil &&
+				strings.Contains(*status.ErrorCode, "PRIVATE_SCAN_ERROR") {
+				t.Fatalf("raw scan error leaked into status: %+v", status)
+			}
+		})
+	}
+}
+
+func TestStartHistoricalInitializationCancellationDoesNotReportFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	tracker := initialization.NewTracker(true, time.Now)
+	done := StartHistoricalInitialization(ctx, tracker, func(scanCtx context.Context) error {
+		<-scanCtx.Done()
+		return scanCtx.Err()
+	})
+	cancel()
+	<-done
+	if status := tracker.InitializationStatus(); status.State != initialization.StateInitializing {
+		t.Fatalf("canceled process status = %+v", status)
+	}
 }
 
 func (p *memoryKeyProvider) Load(_ context.Context, storeID string) ([]byte, error) {

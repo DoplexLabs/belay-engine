@@ -16,6 +16,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/analysis"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/detection"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/localaction"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
@@ -56,7 +57,6 @@ type localLaunchOptions struct {
 	installMCP       bool
 	allowCodexMCPAdd bool
 	historicalScan   bool
-	waitForScan      bool
 	openBrowser      bool
 	commandName      string
 }
@@ -74,8 +74,9 @@ var (
 		store *local.Store,
 		token string,
 		address string,
+		initializationProvider initialization.Provider,
 	) (runningLocalServer, error) {
-		server, err := newLocalHTTPServer(store, token)
+		server, err := newLocalHTTPServer(store, token, initializationProvider)
 		if err != nil {
 			return nil, err
 		}
@@ -85,8 +86,6 @@ var (
 		return local.Open(path, local.NewMacOSKeychainProvider())
 	}
 )
-
-const initialQuickstartScanTimeout = 15 * time.Minute
 
 func addLocalRuntimeFlags(flags *flag.FlagSet) localRuntimeFlags {
 	return localRuntimeFlags{
@@ -286,7 +285,6 @@ Options:`)
 		installMCP:       !*noMCP,
 		allowCodexMCPAdd: *allowCodexMCPAdd,
 		historicalScan:   true,
-		waitForScan:      true,
 		openBrowser:      !*noOpen,
 		commandName:      "quickstart",
 	}, stdout, stderr)
@@ -339,43 +337,25 @@ func runLocalLaunch(
 			options.commandName,
 		)
 	}
-	if options.historicalScan && options.waitForScan {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: initial historical scan in progress\n",
-			options.commandName,
-		)
-		scanCtx, cancelScan := context.WithTimeout(ctx, initialQuickstartScanTimeout)
-		scanErr := runHistoricalScan(
-			scanCtx,
-			runtime,
-			store,
-			options.commandName,
-			"initial historical scan",
-			stderr,
-		)
-		cancelScan()
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if scanErr == nil {
-			fmt.Fprintf(
-				stderr,
-				"belay %s: initial historical scan complete\n",
-				options.commandName,
-			)
-		}
-	}
+	initializationTracker := initialization.NewTracker(options.historicalScan, time.Now)
 	token, err := localhttp.NewLaunchToken()
 	if err != nil {
 		return err
 	}
-	running, err := startLocalHTTPServer(ctx, store, token, options.listen)
+	runtimeCtx, stopRuntime := context.WithCancel(ctx)
+	defer stopRuntime()
+	running, err := startLocalHTTPServer(
+		runtimeCtx,
+		store,
+		token,
+		options.listen,
+		initializationTracker,
+	)
 	if err != nil {
 		return err
 	}
 	stopRecovery, recoveryDone := startLocalRecovery(
-		ctx,
+		runtimeCtx,
 		store,
 		func() {
 			fmt.Fprintf(
@@ -392,33 +372,48 @@ func runLocalLaunch(
 			)
 		},
 	)
-	if _, err := localapp.ImportLive(ctx, runtime.paths, store, runtime.config); err != nil {
-		fmt.Fprintf(stderr, "belay %s: live records will be retried\n", options.commandName)
-	}
-	go localapp.PollLive(ctx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
-		fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
-	})
-	if options.historicalScan && !options.waitForScan {
-		go func() {
-			_ = runHistoricalScan(
-				ctx,
-				runtime,
-				store,
-				options.commandName,
-				"historical scan",
-				stderr,
-			)
-		}()
+	liveDone := make(chan struct{})
+	go func() {
+		defer close(liveDone)
+		localapp.PollLive(runtimeCtx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
+			fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
+		})
+	}()
+	scanDone := closedSignal()
+	if options.historicalScan {
+		scanDone = localapp.StartHistoricalInitialization(
+			runtimeCtx,
+			initializationTracker,
+			func(scanCtx context.Context) error {
+				return runHistoricalScan(
+					scanCtx,
+					runtime,
+					store,
+					options.commandName,
+					"historical scan",
+					stderr,
+				)
+			},
+		)
 	}
 	browserURL := running.BrowserURL()
 	fmt.Fprintln(stdout, browserURL)
 	if options.openBrowser {
-		attemptBrowserOpen(ctx, browserURL, options.commandName, stderr)
+		attemptBrowserOpen(runtimeCtx, browserURL, options.commandName, stderr)
 	}
 	waitErr := running.Wait()
+	stopRuntime()
+	<-scanDone
+	<-liveDone
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
+}
+
+func closedSignal() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
 }
 
 func runHistoricalScan(
@@ -429,14 +424,13 @@ func runHistoricalScan(
 	label string,
 	stderr io.Writer,
 ) error {
-	_, reports, scanErr := discoverAndScan(
+	_, _, scanErr := discoverAndScan(
 		ctx,
 		runtime.client,
 		store,
 		runtime.config,
 	)
-	_ = writeJSON(stderr, reports)
-	if scanErr != nil {
+	if scanErr != nil && ctx.Err() == nil {
 		fmt.Fprintf(
 			stderr,
 			"belay %s: %s incomplete; Local will continue\n",
@@ -447,18 +441,28 @@ func runHistoricalScan(
 	return scanErr
 }
 
-func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, error) {
+func newLocalHTTPServer(
+	store *local.Store,
+	token string,
+	providers ...initialization.Provider,
+) (*localhttp.Server, error) {
 	actions, err := localaction.New(store, store)
 	if err != nil {
 		return nil, err
 	}
+	readOptions := []readmodel.Option{
+		readmodel.WithIssueRepository(store),
+		readmodel.WithIssueCursorCodec(store),
+		readmodel.WithFixMonitoringRepository(store),
+	}
+	if len(providers) > 0 && providers[0] != nil {
+		readOptions = append(
+			readOptions,
+			readmodel.WithInitializationProvider(providers[0]),
+		)
+	}
 	return localhttp.New(
-		readmodel.New(
-			store,
-			readmodel.WithIssueRepository(store),
-			readmodel.WithIssueCursorCodec(store),
-			readmodel.WithFixMonitoringRepository(store),
-		),
+		readmodel.New(store, readOptions...),
 		token,
 		localhttp.WithFixService(actions),
 	)

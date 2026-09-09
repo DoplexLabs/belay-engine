@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 )
 
@@ -195,6 +196,108 @@ func TestStaticBrowserDoesNotRequireToken(t *testing.T) {
 	}
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestInitializationRouteIsAuthenticatedFixedAndRejectsQueryParameters(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tracker := initialization.NewTracker(true, func() time.Time { return now })
+	server, err := New(
+		readmodel.New(
+			testRepository{},
+			readmodel.WithInitializationProvider(tracker),
+		),
+		"launch-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauthorized := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	unauthorized.RemoteAddr = "127.0.0.1:1234"
+	unauthorizedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorizedResponse.Code)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	request.RemoteAddr = "127.0.0.1:1234"
+	request.Header.Set("Authorization", "Bearer launch-secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var body readmodel.InitializationResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SchemaVersion != initialization.SchemaVersion ||
+		body.Initialization.State != initialization.StateInitializing ||
+		body.Initialization.CompletedAt != nil ||
+		body.Initialization.ErrorCode != nil {
+		t.Fatalf("initialization response = %+v", body)
+	}
+
+	for _, rawQuery := range []string{"state=ready", "private=RAW_ERROR_CANARY"} {
+		withQuery := httptest.NewRequest(
+			http.MethodGet,
+			"http://127.0.0.1/v1/initialization?"+rawQuery,
+			nil,
+		)
+		withQuery.RemoteAddr = "127.0.0.1:1234"
+		withQuery.Header.Set("Authorization", "Bearer launch-secret")
+		queryResponse := httptest.NewRecorder()
+		server.Handler().ServeHTTP(queryResponse, withQuery)
+		if queryResponse.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status = %d", rawQuery, queryResponse.Code)
+		}
+		if strings.Contains(queryResponse.Body.String(), "RAW_ERROR_CANARY") {
+			t.Fatalf("query response reflected input: %s", queryResponse.Body.String())
+		}
+	}
+}
+
+func TestInitializationRouteDegradedStateIsPayloadFree(t *testing.T) {
+	tracker := initialization.NewTracker(true, time.Now)
+	tracker.MarkHistoricalScanIncomplete()
+	server, err := New(
+		readmodel.New(
+			testRepository{},
+			readmodel.WithInitializationProvider(tracker),
+		),
+		"launch-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/initialization",
+		nil,
+	)
+	request.RemoteAddr = "127.0.0.1:1234"
+	request.Header.Set("Authorization", "Bearer launch-secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(
+		response.Body.String(),
+		`"error_code":"historical_scan_incomplete"`,
+	) ||
+		strings.Contains(response.Body.String(), "/Users/") {
+		t.Fatalf("degraded response = %s", response.Body.String())
 	}
 }
 
