@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
@@ -24,21 +25,168 @@ func TestBuiltinCatalogIsFixed(t *testing.T) {
 	}
 	want := []string{
 		"explicit_command_failure",
+		"explicit_tool_failure",
 		"repeated_command_attempts",
 		"explicit_permission_denial",
-		"verification_not_observed",
+		"retained_verification_gap_after_changes",
 		"unresolved_verification_failure_at_completion",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("detector order = %v, want %v", got, want)
 	}
-	if !entries[1].Experimental {
+	if !entries[2].Experimental {
 		t.Fatal("repeated command detector must remain experimental")
 	}
 	for index, entry := range entries {
-		if index != 1 && entry.Experimental {
+		if index != 2 && entry.Experimental {
 			t.Fatalf("%s unexpectedly experimental", entry.DetectorID)
 		}
+	}
+}
+
+func TestExplicitToolFailureRequiresSafeStableIdentity(t *testing.T) {
+	tests := []struct {
+		name       string
+		events     []model.Event
+		wantMatch  bool
+		severity   string
+		citations  int
+		identity   string
+		historical bool
+	}{
+		{
+			name: "MCP identity is preferred and normalized",
+			events: []model.Event{
+				withToolIdentity(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+					"GitHub.Server",
+					"Create_Issue",
+				),
+			},
+			wantMatch: true,
+			severity:  SeverityLow,
+			citations: 1,
+			identity:  "mcp:github.server/create_issue",
+		},
+		{
+			name: "safe minimized tool resource is accepted",
+			events: []model.Event{
+				withToolResource(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+					"read_file",
+				),
+			},
+			wantMatch: true,
+			severity:  SeverityLow,
+			citations: 1,
+			identity:  "tool:read_file",
+		},
+		{
+			name: "three failures group and increase severity",
+			events: []model.Event{
+				withToolResource(withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil), "read_file"),
+				withToolResource(withOutcome(testEvent("result-2", 2, "tool.result"), "failed", nil), "read_file"),
+				withToolResource(withOutcome(testEvent("result-3", 3, "tool.result"), "failed", nil), "read_file"),
+			},
+			wantMatch: true,
+			severity:  SeverityMedium,
+			citations: 3,
+			identity:  "tool:read_file",
+		},
+		{
+			name: "historical positive is retained",
+			events: []model.Event{
+				withHistorical(withToolResource(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+					"read_file",
+				)),
+			},
+			wantMatch:  true,
+			severity:   SeverityLow,
+			citations:  1,
+			identity:   "tool:read_file",
+			historical: true,
+		},
+		{
+			name: "missing identity is ignored",
+			events: []model.Event{
+				withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+			},
+		},
+		{
+			name: "path-like identity is ignored",
+			events: []model.Event{
+				withToolResource(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+					"/Users/private/tool",
+				),
+			},
+		},
+		{
+			name: "tool call ID alone is ignored",
+			events: []model.Event{
+				withToolCall(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", nil),
+					"private-call-id",
+				),
+			},
+		},
+		{
+			name: "unknown outcome is not a failure",
+			events: []model.Event{
+				withToolResource(testEvent("result-1", 1, "tool.result"), "read_file"),
+			},
+		},
+		{
+			name: "contradictory canonical outcome fails closed",
+			events: []model.Event{
+				withToolResource(
+					withOutcome(testEvent("result-1", 1, "tool.result"), "failed", intPointer(0)),
+					"read_file",
+				),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := DefaultCatalog().Run(context.Background(), testInput(test.events...))
+			requireCurrent(t, result)
+			match, ok := findMatch(t, result, "explicit_tool_failure")
+			if ok != test.wantMatch {
+				t.Fatalf("match present = %v, want %v; matches = %+v", ok, test.wantMatch, result.Matches)
+			}
+			if !ok {
+				return
+			}
+			if match.Severity != test.severity ||
+				match.Confidence != ConfidenceHigh ||
+				len(match.CitedEventIDs) != test.citations {
+				t.Fatalf("unexpected match: %+v", match)
+			}
+			foundIdentity := false
+			for _, dimension := range match.Fingerprint {
+				if dimension.Name == "tool_identity" {
+					foundIdentity = dimension.Value == test.identity
+				}
+				if strings.Contains(dimension.Value, "private-call-id") ||
+					strings.Contains(dimension.Value, "/Users/") {
+					t.Fatalf("unsafe fingerprint dimension: %+v", match.Fingerprint)
+				}
+			}
+			if !foundIdentity {
+				t.Fatalf("tool identity missing from fingerprint: %+v", match.Fingerprint)
+			}
+			if test.historical {
+				for _, applicability := range result.Applicability {
+					if applicability.DetectorID == "explicit_tool_failure" &&
+						(applicability.AbsenceCapability != AbsenceIncomplete ||
+							applicability.UnavailableReason != "tool_failure_absence_unsupported") {
+						t.Fatalf("historical absence was overclaimed: %+v", applicability)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -516,149 +664,165 @@ func TestExplicitPermissionDenial(t *testing.T) {
 	}
 }
 
-func TestVerificationGapExactCompatibilityMatrix(t *testing.T) {
-	base := func(agent string) SessionInput {
-		command := testEvent("command", 1, "command.exec")
-		command.Source.Agent = agent
-		mutation := testEvent("mutation", 2, "file.write")
+func TestRetainedVerificationGapHistoricalAndLiveSemantics(t *testing.T) {
+	build := func(agent string, historical bool) SessionInput {
+		mutation := testEvent("mutation", 1, "file.write")
 		mutation.Source.Agent = agent
-		terminal := testEvent("terminal", 3, "session.end")
+		terminal := testEvent("terminal", 2, "session.end")
 		terminal.Source.Agent = agent
 		terminal.Coverage.Depth = "lifecycle"
-		input := testInput(command, mutation, terminal)
-		enrichCommand(&input, "command", "sig-other", CommandClassOther)
-		return input
+		if historical {
+			mutation = withHistorical(mutation)
+			terminal = withHistorical(terminal)
+		}
+		return testInput(mutation, terminal)
 	}
 
-	for _, agent := range []string{"codex", "claude-code"} {
-		t.Run("enabled "+agent, func(t *testing.T) {
-			result := DefaultCatalog().Run(context.Background(), base(agent))
+	for _, test := range []struct {
+		name       string
+		input      SessionInput
+		confidence string
+		absence    AbsenceCapability
+	}{
+		{
+			name:       "compatible Codex live",
+			input:      build("codex", false),
+			confidence: ConfidenceMedium,
+			absence:    AbsenceSupported,
+		},
+		{
+			name:       "compatible Claude live",
+			input:      build("claude-code", false),
+			confidence: ConfidenceMedium,
+			absence:    AbsenceSupported,
+		},
+		{
+			name:       "historical retained evidence",
+			input:      build("codex", true),
+			confidence: ConfidenceLow,
+			absence:    AbsenceIncomplete,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := DefaultCatalog().Run(context.Background(), test.input)
 			requireCurrent(t, result)
-			match, ok := findMatch(t, result, "verification_not_observed")
-			if !ok || match.Severity != SeverityInfo || match.Confidence != ConfidenceMedium {
-				t.Fatalf("D4 match = %+v, present = %v", match, ok)
+			match, ok := findMatch(t, result, "retained_verification_gap_after_changes")
+			if !ok ||
+				match.Severity != SeverityInfo ||
+				match.Confidence != test.confidence ||
+				!reflect.DeepEqual(match.CitedEventIDs, []string{"mutation", "terminal"}) {
+				t.Fatalf("retained gap = %+v, present = %v", match, ok)
+			}
+			for _, applicability := range result.Applicability {
+				if applicability.DetectorID == "retained_verification_gap_after_changes" &&
+					applicability.AbsenceCapability != test.absence {
+					t.Fatalf("applicability = %+v, want %q", applicability, test.absence)
+				}
 			}
 		})
 	}
+}
 
+func TestRetainedVerificationGapRequiresFinalMutationBeforeTerminal(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*SessionInput)
+		events []model.Event
 	}{
 		{
-			name: "unsupported harness",
-			mutate: func(input *SessionInput) {
-				for index := range input.Events {
-					input.Events[index].Source.Agent = "other"
-				}
+			name: "missing terminal",
+			events: []model.Event{
+				testEvent("mutation", 1, "file.write"),
 			},
 		},
 		{
-			name: "historical",
-			mutate: func(input *SessionInput) {
-				for index := range input.Events {
-					input.Events[index].Historical.IsHistorical = true
-					input.Events[index].Source.Kind = "artifact"
-				}
+			name: "missing mutation",
+			events: []model.Event{
+				func() model.Event {
+					event := testEvent("terminal", 1, "session.end")
+					event.Coverage.Depth = "lifecycle"
+					return event
+				}(),
 			},
 		},
 		{
-			name: "mixed history",
-			mutate: func(input *SessionInput) {
-				input.Events[0].Historical.IsHistorical = true
-				input.Events[0].Source.Kind = "artifact"
-			},
-		},
-		{
-			name: "mixed harness",
-			mutate: func(input *SessionInput) {
-				input.Events[0].Source.Agent = "claude-code"
-			},
-		},
-		{
-			name: "missing command coverage",
-			mutate: func(input *SessionInput) {
-				input.Events = input.Events[1:]
-			},
-		},
-		{
-			name: "missing mutation coverage",
-			mutate: func(input *SessionInput) {
-				input.Events[1].Coverage.Depth = "lifecycle"
-			},
-		},
-		{
-			name: "missing terminal coverage",
-			mutate: func(input *SessionInput) {
-				input.Events[2].Coverage.Depth = "tool_call"
-			},
-		},
-		{
-			name: "terminal before mutation",
-			mutate: func(input *SessionInput) {
-				input.Events[1].Source.Sequence = 4
+			name: "mutation after terminal",
+			events: []model.Event{
+				func() model.Event {
+					event := testEvent("terminal", 1, "session.end")
+					event.Coverage.Depth = "lifecycle"
+					return event
+				}(),
+				testEvent("mutation", 2, "file.write"),
 			},
 		},
 	}
 	for _, test := range tests {
-		t.Run("disabled "+test.name, func(t *testing.T) {
-			input := base("codex")
-			test.mutate(&input)
-			result := DefaultCatalog().Run(context.Background(), input)
+		t.Run(test.name, func(t *testing.T) {
+			result := DefaultCatalog().Run(context.Background(), testInput(test.events...))
 			requireCurrent(t, result)
-			if _, ok := findMatch(t, result, "verification_not_observed"); ok {
-				t.Fatalf("D4 fired outside matrix: %+v", result.Matches)
+			if _, ok := findMatch(t, result, "retained_verification_gap_after_changes"); ok {
+				t.Fatalf("gap fired without ordered boundaries: %+v", result.Matches)
 			}
 		})
 	}
 }
 
-func TestVerificationAfterFinalMutationSuppressesGap(t *testing.T) {
-	for _, eventType := range []string{"command.exec", "command.result"} {
-		t.Run(eventType, func(t *testing.T) {
-			commandCoverage := testEvent("command-coverage", 1, "command.exec")
-			mutation := testEvent("mutation", 2, "file.write")
-			verification := testEvent("verification", 3, eventType)
-			terminal := testEvent("terminal", 4, "session.end")
-			terminal.Coverage.Depth = "lifecycle"
-			input := testInput(commandCoverage, mutation, verification, terminal)
-			enrichCommand(&input, "command-coverage", "sig-other", CommandClassOther)
-			enrichCommand(&input, "verification", "sig-test", CommandClassTest)
-			result := DefaultCatalog().Run(context.Background(), input)
-			requireCurrent(t, result)
-			if _, ok := findMatch(t, result, "verification_not_observed"); ok {
-				t.Fatalf("observed verification did not suppress D4: %+v", result.Matches)
-			}
-		})
+func TestRecognizedVerificationAfterFinalMutationSuppressesRetainedGap(t *testing.T) {
+	classes := []string{
+		CommandClassTest,
+		CommandClassBuild,
+		CommandClassTypecheck,
+		CommandClassLint,
+		CommandClassFormatCheck,
+	}
+	for _, class := range classes {
+		for _, eventType := range []string{"command.exec", "command.result"} {
+			t.Run(class+"/"+eventType, func(t *testing.T) {
+				earlierMutation := testEvent("earlier-mutation", 1, "file.write")
+				earlierVerification := testEvent("earlier-verification", 2, eventType)
+				finalMutation := testEvent("final-mutation", 3, "file.delete")
+				verification := testEvent("verification", 4, eventType)
+				terminal := testEvent("terminal", 5, "session.end")
+				terminal.Coverage.Depth = "lifecycle"
+				input := testInput(
+					earlierMutation,
+					earlierVerification,
+					finalMutation,
+					verification,
+					terminal,
+				)
+				enrichCommand(&input, "earlier-verification", "sig-other", CommandClassOther)
+				enrichCommand(&input, "verification", "sig-verify", class)
+				result := DefaultCatalog().Run(context.Background(), input)
+				requireCurrent(t, result)
+				if _, ok := findMatch(
+					t,
+					result,
+					"retained_verification_gap_after_changes",
+				); ok {
+					t.Fatalf("recognized verification did not suppress gap: %+v", result.Matches)
+				}
+			})
+		}
 	}
 }
 
-func TestVerificationGapDisabledWhenCoalescedEvidenceIncludesHistory(t *testing.T) {
-	commandHook := testEvent("command-hook", 1, "command.exec")
-	commandArtifact := commandHook
-	commandArtifact.EventID = "command-artifact"
-	commandArtifact.Source.Kind = "artifact"
-	commandArtifact.Source.Sequence = 2
-	commandArtifact.Historical.IsHistorical = true
-	commandArtifact.Coverage.Depth = "artifact"
-	mutation := testEvent("mutation", 3, "file.write")
-	terminal := testEvent("terminal", 4, "session.end")
+func TestVerificationBeforeFinalMutationDoesNotSuppressRetainedGap(t *testing.T) {
+	verification := testEvent("verification", 1, "command.exec")
+	finalMutation := testEvent("final-mutation", 2, "file.write")
+	terminal := testEvent("terminal", 3, "session.end")
 	terminal.Coverage.Depth = "lifecycle"
-	input := testInput(commandHook, commandArtifact, mutation, terminal)
-	enrichCommand(&input, "command-hook", "sig-other", CommandClassOther)
-	enrichCommand(&input, "command-artifact", "sig-other", CommandClassOther)
+	input := testInput(verification, finalMutation, terminal)
+	enrichCommand(&input, "verification", "sig-test", CommandClassTest)
 
-	session, err := prepareSession(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(session.events) != 3 || !session.events[0].historical || !session.events[0].live {
-		t.Fatalf("coalesced provenance not retained: %+v", session.events)
-	}
 	result := DefaultCatalog().Run(context.Background(), input)
 	requireCurrent(t, result)
-	if _, ok := findMatch(t, result, "verification_not_observed"); ok {
-		t.Fatalf("D4 fired for mixed historical/live evidence: %+v", result.Matches)
+	match, ok := findMatch(t, result, "retained_verification_gap_after_changes")
+	if !ok || !reflect.DeepEqual(
+		match.CitedEventIDs,
+		[]string{"final-mutation", "terminal"},
+	) {
+		t.Fatalf("retained gap = %+v, present = %v", match, ok)
 	}
 }
 
@@ -855,7 +1019,7 @@ func TestNegativeCorpusDoesNotOverclaim(t *testing.T) {
 				testEvent("mutation", 1, "file.write"),
 				testEvent("terminal", 2, "session.end"),
 			),
-			forbidden: []string{"verification_not_observed"},
+			forbidden: []string{"retained_verification_gap_after_changes"},
 		},
 		{
 			name: "deliberate permission denial is only attention signal",
@@ -864,7 +1028,7 @@ func TestNegativeCorpusDoesNotOverclaim(t *testing.T) {
 			),
 			forbidden: []string{
 				"explicit_command_failure",
-				"verification_not_observed",
+				"retained_verification_gap_after_changes",
 				"unresolved_verification_failure_at_completion",
 			},
 		},
@@ -881,4 +1045,28 @@ func TestNegativeCorpusDoesNotOverclaim(t *testing.T) {
 			}
 		})
 	}
+}
+
+func withToolIdentity(event model.Event, server, tool string) model.Event {
+	event.Observation.Details = &model.Details{
+		MCPServer: server,
+		MCPTool:   tool,
+	}
+	event.Observation.Resource = &model.Resource{
+		Kind: "mcp",
+		Name: server + "/" + tool,
+	}
+	return event
+}
+
+func withToolResource(event model.Event, name string) model.Event {
+	event.Observation.Resource = &model.Resource{Kind: "tool", Name: name}
+	return event
+}
+
+func withHistorical(event model.Event) model.Event {
+	event.Source.Kind = "artifact"
+	event.Historical.IsHistorical = true
+	event.Coverage.Depth = "artifact"
+	return event
 }

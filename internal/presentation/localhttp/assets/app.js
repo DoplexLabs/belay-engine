@@ -20,6 +20,13 @@
       explanation: "The agent reported that a command failed.",
       action: "Inspect failed command evidence",
     }),
+    "issue.explicit_tool_failure": Object.freeze({
+      title: "Tool call failed",
+      explanation: "The agent reported that a tool call failed.",
+      caveat:
+        "Belay does not know why it failed or whether a later attempt succeeded.",
+      action: "Inspect cited events",
+    }),
     "issue.repeated_command_attempts": Object.freeze({
       title: "Command repeatedly attempted",
       explanation:
@@ -37,6 +44,15 @@
       explanation:
         "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
       action: "Inspect verification evidence",
+      evidenceGap: true,
+    }),
+    "issue.retained_verification_gap_after_changes": Object.freeze({
+      title: "No recognized verification retained after changes",
+      explanation:
+        "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended.",
+      caveat:
+        "This does not show that verification did not occur; Belay only checks supported commands in retained activity.",
+      action: "Inspect cited events",
       evidenceGap: true,
     }),
     "issue.unresolved_verification_failure_at_completion": Object.freeze({

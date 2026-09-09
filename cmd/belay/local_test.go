@@ -227,33 +227,170 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	}
 	if !captured[0].installHooks || !captured[0].historicalScan ||
 		!captured[0].installMCP || !captured[0].openBrowser ||
-		captured[0].allowCodexMCPAdd ||
+		captured[0].allowCodexMCPAdd || !captured[0].waitForScan ||
 		captured[0].commandName != "quickstart" {
 		t.Fatalf("quickstart launch = %+v", captured[0])
 	}
 	if captured[1].openBrowser || !captured[1].installHooks ||
-		!captured[1].installMCP || !captured[1].historicalScan {
+		!captured[1].installMCP || !captured[1].historicalScan ||
+		!captured[1].waitForScan {
 		t.Fatalf("quickstart --no-open launch = %+v", captured[1])
 	}
 	if !captured[2].installHooks || captured[2].installMCP ||
-		!captured[2].historicalScan || !captured[2].openBrowser {
+		!captured[2].historicalScan || !captured[2].waitForScan ||
+		!captured[2].openBrowser {
 		t.Fatalf("quickstart --no-mcp launch = %+v", captured[2])
 	}
 	if !captured[3].installHooks || !captured[3].installMCP ||
 		!captured[3].allowCodexMCPAdd || !captured[3].historicalScan ||
-		!captured[3].openBrowser || captured[3].commandName != "quickstart" {
+		!captured[3].waitForScan || !captured[3].openBrowser ||
+		captured[3].commandName != "quickstart" {
 		t.Fatalf("quickstart Codex opt-in launch = %+v", captured[3])
 	}
 	if captured[4].installHooks || captured[4].installMCP ||
 		captured[4].allowCodexMCPAdd || captured[4].openBrowser ||
-		!captured[4].historicalScan || captured[4].commandName != "local" {
+		!captured[4].historicalScan || captured[4].waitForScan ||
+		captured[4].commandName != "local" {
 		t.Fatalf("normal local launch changed = %+v", captured[4])
 	}
 	if !captured[5].installHooks || captured[5].installMCP ||
 		captured[5].allowCodexMCPAdd || captured[5].historicalScan ||
-		captured[5].openBrowser || captured[5].commandName != "local" {
+		captured[5].waitForScan || captured[5].openBrowser ||
+		captured[5].commandName != "local" {
 		t.Fatalf("explicit local flags changed = %+v", captured[5])
 	}
+}
+
+func TestQuickstartCompletesInitialScanBeforeBrowserAndFailsOpen(t *testing.T) {
+	previousScan := discoverAndScan
+	previousStartServer := startLocalHTTPServer
+	previousOpenStore := openLocalCommandStore
+	previousOpenBrowser := openBrowser
+	t.Cleanup(func() {
+		discoverAndScan = previousScan
+		startLocalHTTPServer = previousStartServer
+		openLocalCommandStore = previousOpenStore
+		openBrowser = previousOpenBrowser
+	})
+
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	discoverAndScan = func(
+		context.Context,
+		*numbat.Client,
+		*local.Store,
+		localapp.Config,
+	) (numbat.Inventory, []localapp.HarnessScan, error) {
+		close(scanStarted)
+		<-releaseScan
+		return numbat.Inventory{}, nil, errors.New("private scan failure")
+	}
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.OpenWithOptions(path, local.OpenOptions{KeyProvider: keyProvider})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startLocalHTTPServer = func(
+		serverCtx context.Context,
+		_ *local.Store,
+		_ string,
+		_ string,
+	) (runningLocalServer, error) {
+		return fakeRunningLocalServer{
+			url: "http://127.0.0.1:12345/#token=test",
+			wait: func() error {
+				<-serverCtx.Done()
+				return nil
+			},
+		}, nil
+	}
+	browserOpened := make(chan struct{})
+	openBrowser = func(context.Context, string) error {
+		close(browserOpened)
+		cancel()
+		return nil
+	}
+	binary := filepath.Join(t.TempDir(), "numbat")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runLocalLaunch(
+			ctx,
+			localLaunchOptions{
+				runtime:        testRuntimeFlags(home, binary, "", "", true),
+				listen:         "127.0.0.1:0",
+				historicalScan: true,
+				waitForScan:    true,
+				openBrowser:    true,
+				commandName:    "quickstart",
+			},
+			&stdout,
+			&stderr,
+		)
+	}()
+
+	select {
+	case <-scanStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial scan did not start")
+	}
+	select {
+	case <-browserOpened:
+		t.Fatal("browser opened before initial scan completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseScan)
+	select {
+	case <-browserOpened:
+	case err := <-done:
+		t.Fatalf(
+			"scan failure prevented browser launch: error=%v stdout=%q stderr=%q",
+			err,
+			stdout.String(),
+			stderr.String(),
+		)
+	case <-time.After(5 * time.Second):
+		t.Fatalf(
+			"scan failure delayed fail-open Local launch: stdout=%q stderr=%q",
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("runLocalLaunch() error = %v", err)
+	}
+	if !strings.Contains(
+		stderr.String(),
+		"belay quickstart: initial historical scan incomplete; Local will continue",
+	) {
+		t.Fatalf("quickstart scan warning = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "private scan failure") {
+		t.Fatalf("quickstart scan warning leaked error payload: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "http://127.0.0.1:") {
+		t.Fatalf("quickstart Local URL = %q", stdout.String())
+	}
+}
+
+type fakeRunningLocalServer struct {
+	url  string
+	wait func() error
+}
+
+func (server fakeRunningLocalServer) BrowserURL() string {
+	return server.url
+}
+
+func (server fakeRunningLocalServer) Wait() error {
+	return server.wait()
 }
 
 func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {

@@ -721,6 +721,19 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 			wantSourceCatalogStatus: "not_applicable",
 		},
 		{
+			name: "explicit tool failure",
+			issue: model.IssueSummary{
+				TitleCode: "issue.explicit_tool_failure",
+				Origin:    "belay",
+			},
+			wantTitle:               "Tool call failed",
+			wantObservation:         "The agent reported that a tool call failed.",
+			wantCaveat:              "Belay does not know why it failed or whether a later attempt succeeded.",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
 			name: "repeated command attempts",
 			issue: model.IssueSummary{
 				TitleCode: "issue.repeated_command_attempts",
@@ -756,6 +769,19 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 			wantObservation:         "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
 			wantCaveat:              "Verification may have happened outside the activity Belay recorded.",
 			wantAction:              "inspect_verification_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "retained verification gap",
+			issue: model.IssueSummary{
+				TitleCode: "issue.retained_verification_gap_after_changes",
+				Origin:    "belay",
+			},
+			wantTitle:               "No recognized verification retained after changes",
+			wantObservation:         "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended.",
+			wantCaveat:              "This does not show that verification did not occur; Belay only checks supported commands in retained activity.",
+			wantAction:              "inspect_cited_events",
 			wantCatalogStatus:       "known",
 			wantSourceCatalogStatus: "not_applicable",
 		},

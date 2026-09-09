@@ -99,11 +99,17 @@ func TestBuiltinAbsenceCapabilitiesRequireObservedPrerequisites(t *testing.T) {
 	if byID["explicit_command_failure"].AbsenceCapability != AbsenceSupported {
 		t.Fatalf("command applicability = %+v", byID["explicit_command_failure"])
 	}
+	if byID["explicit_tool_failure"].AbsenceCapability != AbsenceIncomplete ||
+		byID["explicit_tool_failure"].UnavailableReason != "tool_failure_absence_unsupported" {
+		t.Fatalf("tool failure applicability = %+v", byID["explicit_tool_failure"])
+	}
 	if byID["repeated_command_attempts"].AbsenceCapability != AbsenceNotApplicable {
 		t.Fatalf("experimental applicability = %+v", byID["repeated_command_attempts"])
 	}
-	if byID["verification_not_observed"].AbsenceCapability != AbsenceNotApplicable {
-		t.Fatalf("verification applicability = %+v", byID["verification_not_observed"])
+	if byID["retained_verification_gap_after_changes"].AbsenceCapability !=
+		AbsenceNotApplicable {
+		t.Fatalf("verification applicability = %+v",
+			byID["retained_verification_gap_after_changes"])
 	}
 	if byID["unresolved_verification_failure_at_completion"].AbsenceCapability !=
 		AbsenceIncomplete {

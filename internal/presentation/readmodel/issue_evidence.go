@@ -156,6 +156,11 @@ func issueCatalog(issue model.IssueSummary) IssueCatalogMetadata {
 		result.ObservationStatement = "The agent reported that a command failed."
 		result.Caveat = "This does not identify why the command failed or whether a later attempt succeeded."
 		result.NextEvidenceAction = "inspect_cited_events"
+	case "issue.explicit_tool_failure":
+		result.DisplayTitle = "Tool call failed"
+		result.ObservationStatement = "The agent reported that a tool call failed."
+		result.Caveat = "Belay does not know why it failed or whether a later attempt succeeded."
+		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.repeated_command_attempts":
 		result.DisplayTitle = "Command repeatedly attempted"
 		result.ObservationStatement = "Belay recorded the same minimized command pattern several times close together."
@@ -171,6 +176,11 @@ func issueCatalog(issue model.IssueSummary) IssueCatalogMetadata {
 		result.ObservationStatement = "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended."
 		result.Caveat = "Verification may have happened outside the activity Belay recorded."
 		result.NextEvidenceAction = "inspect_verification_events"
+	case "issue.retained_verification_gap_after_changes":
+		result.DisplayTitle = "No recognized verification retained after changes"
+		result.ObservationStatement = "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended."
+		result.Caveat = "This does not show that verification did not occur; Belay only checks supported commands in retained activity."
+		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.unresolved_verification_failure_at_completion":
 		result.DisplayTitle = "Verification still failed at session end"
 		result.ObservationStatement = "A test or verification command Belay recognizes failed, and Belay did not see a later successful run before the session ended."

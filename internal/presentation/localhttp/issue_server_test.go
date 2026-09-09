@@ -174,6 +174,94 @@ func TestIssueHTTPReturnsFixedSourceSignalCatalog(t *testing.T) {
 	}
 }
 
+func TestIssueHTTPReturnsExplicitToolFailureCatalog(t *testing.T) {
+	repository := &issueHTTPRepository{
+		issueSummary: &model.IssueSummary{
+			FingerprintID:  httpTestFingerprintID("b"),
+			Origin:         "belay",
+			DetectorID:     "explicit_tool_failure",
+			TitleCode:      "issue.explicit_tool_failure",
+			Category:       "tool_failure",
+			Severity:       "low",
+			SessionCount:   1,
+			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
+		},
+	}
+	server, err := New(readmodel.New(
+		repository,
+		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
+	), "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := issueHTTPRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/"+httpTestIssueID("a")+"/occurrences?limit=1",
+		true,
+	)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var detail readmodel.IssueDetail
+	if err := json.NewDecoder(response.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Catalog.DisplayTitle != "Tool call failed" ||
+		detail.Catalog.ObservationStatement != "The agent reported that a tool call failed." ||
+		detail.Catalog.Caveat != "Belay does not know why it failed or whether a later attempt succeeded." ||
+		detail.Catalog.NextEvidenceAction != "inspect_cited_events" {
+		t.Fatalf("catalog = %+v", detail.Catalog)
+	}
+}
+
+func TestIssueHTTPReturnsRetainedVerificationGapCatalog(t *testing.T) {
+	repository := &issueHTTPRepository{
+		issueSummary: &model.IssueSummary{
+			FingerprintID:  httpTestFingerprintID("b"),
+			Origin:         "belay",
+			DetectorID:     "retained_verification_gap_after_changes",
+			TitleCode:      "issue.retained_verification_gap_after_changes",
+			Category:       "evidence_gap",
+			Severity:       "info",
+			SessionCount:   1,
+			LastObservedAt: time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC),
+		},
+	}
+	server, err := New(readmodel.New(
+		repository,
+		readmodel.WithIssueRepository(repository),
+		readmodel.WithIssueCursorCodec(issueHTTPCursorCodec{}),
+	), "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := issueHTTPRequest(
+		http.MethodGet,
+		"http://127.0.0.1/v1/issues/"+httpTestIssueID("a")+"/occurrences?limit=1",
+		true,
+	)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var detail readmodel.IssueDetail
+	if err := json.NewDecoder(response.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Catalog.DisplayTitle != "No recognized verification retained after changes" ||
+		detail.Catalog.ObservationStatement != "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended." ||
+		detail.Catalog.Caveat != "This does not show that verification did not occur; Belay only checks supported commands in retained activity." ||
+		detail.Catalog.NextEvidenceAction != "inspect_cited_events" {
+		t.Fatalf("catalog = %+v", detail.Catalog)
+	}
+}
+
 func issueHTTPPageMetadata(
 	query model.IssueQuery,
 	now time.Time,

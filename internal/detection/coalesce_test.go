@@ -83,6 +83,33 @@ func TestHistoricalLiveCoalescingCannotInflateRepetitionThreshold(t *testing.T) 
 	}
 }
 
+func TestHistoricalLiveToolFailuresCoalesceWithoutInflatingSeverity(t *testing.T) {
+	var events []model.Event
+	for index := 0; index < 2; index++ {
+		hook := withToolResource(
+			withOutcome(
+				testEvent(fmt.Sprintf("hook-%d", index), int64(index*2+1), "tool.result"),
+				"failed",
+				nil,
+			),
+			"read_file",
+		)
+		artifact := withHistorical(hook)
+		artifact.EventID = fmt.Sprintf("artifact-%d", index)
+		artifact.Source.Sequence = int64(index*2 + 2)
+		events = append(events, artifact, hook)
+	}
+
+	result := DefaultCatalog().Run(context.Background(), testInput(events...))
+	requireCurrent(t, result)
+	match, ok := findMatch(t, result, "explicit_tool_failure")
+	if !ok ||
+		match.Severity != SeverityLow ||
+		len(match.CitedEventIDs) != 4 {
+		t.Fatalf("coalesced tool failure = %+v, present = %v", match, ok)
+	}
+}
+
 func TestHistoricalLiveUnsignedResultsCoalesceAndPair(t *testing.T) {
 	hookExec := withToolCall(testEvent("hook-exec", 1, "command.exec"), "call-1")
 	artifactExec := hookExec

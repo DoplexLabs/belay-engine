@@ -56,16 +56,37 @@ type localLaunchOptions struct {
 	installMCP       bool
 	allowCodexMCPAdd bool
 	historicalScan   bool
+	waitForScan      bool
 	openBrowser      bool
 	commandName      string
 }
 
+type runningLocalServer interface {
+	BrowserURL() string
+	Wait() error
+}
+
 var (
-	launchLocal           = runLocalLaunch
+	launchLocal          = runLocalLaunch
+	discoverAndScan      = localapp.DiscoverAndScan
+	startLocalHTTPServer = func(
+		ctx context.Context,
+		store *local.Store,
+		token string,
+		address string,
+	) (runningLocalServer, error) {
+		server, err := newLocalHTTPServer(store, token)
+		if err != nil {
+			return nil, err
+		}
+		return server.Start(ctx, address)
+	}
 	openLocalCommandStore = func(path string) (*local.Store, error) {
 		return local.Open(path, local.NewMacOSKeychainProvider())
 	}
 )
+
+const initialQuickstartScanTimeout = 15 * time.Minute
 
 func addLocalRuntimeFlags(flags *flag.FlagSet) localRuntimeFlags {
 	return localRuntimeFlags{
@@ -265,6 +286,7 @@ Options:`)
 		installMCP:       !*noMCP,
 		allowCodexMCPAdd: *allowCodexMCPAdd,
 		historicalScan:   true,
+		waitForScan:      true,
 		openBrowser:      !*noOpen,
 		commandName:      "quickstart",
 	}, stdout, stderr)
@@ -279,7 +301,7 @@ func runLocalLaunch(
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
@@ -317,15 +339,38 @@ func runLocalLaunch(
 			options.commandName,
 		)
 	}
+	if options.historicalScan && options.waitForScan {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: initial historical scan in progress\n",
+			options.commandName,
+		)
+		scanCtx, cancelScan := context.WithTimeout(ctx, initialQuickstartScanTimeout)
+		scanErr := runHistoricalScan(
+			scanCtx,
+			runtime,
+			store,
+			options.commandName,
+			"initial historical scan",
+			stderr,
+		)
+		cancelScan()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if scanErr == nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: initial historical scan complete\n",
+				options.commandName,
+			)
+		}
+	}
 	token, err := localhttp.NewLaunchToken()
 	if err != nil {
 		return err
 	}
-	localServer, err := newLocalHTTPServer(store, token)
-	if err != nil {
-		return err
-	}
-	running, err := localServer.Start(ctx, options.listen)
+	running, err := startLocalHTTPServer(ctx, store, token, options.listen)
 	if err != nil {
 		return err
 	}
@@ -353,18 +398,16 @@ func runLocalLaunch(
 	go localapp.PollLive(ctx, runtime.paths, store, runtime.config, 2*time.Second, func(error) {
 		fmt.Fprintf(stderr, "belay %s: live import retry pending\n", options.commandName)
 	})
-	if options.historicalScan {
+	if options.historicalScan && !options.waitForScan {
 		go func() {
-			_, reports, scanErr := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
-			if scanErr != nil {
-				fmt.Fprintf(
-					stderr,
-					"belay %s: historical discovery failed; Local remains available\n",
-					options.commandName,
-				)
-				return
-			}
-			_ = writeJSON(stderr, reports)
+			_ = runHistoricalScan(
+				ctx,
+				runtime,
+				store,
+				options.commandName,
+				"historical scan",
+				stderr,
+			)
 		}()
 	}
 	browserURL := running.BrowserURL()
@@ -376,6 +419,32 @@ func runLocalLaunch(
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
+}
+
+func runHistoricalScan(
+	ctx context.Context,
+	runtime preparedRuntime,
+	store *local.Store,
+	commandName string,
+	label string,
+	stderr io.Writer,
+) error {
+	_, reports, scanErr := discoverAndScan(
+		ctx,
+		runtime.client,
+		store,
+		runtime.config,
+	)
+	_ = writeJSON(stderr, reports)
+	if scanErr != nil {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: %s incomplete; Local will continue\n",
+			commandName,
+			label,
+		)
+	}
+	return scanErr
 }
 
 func newLocalHTTPServer(store *local.Store, token string) (*localhttp.Server, error) {

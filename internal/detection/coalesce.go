@@ -159,6 +159,12 @@ func coalesceIdentity(item preparedEvent) string {
 			return ""
 		}
 		return base + "\x00resource\x00" + resource.Kind + "\x00" + resource.Name
+	case "tool.result":
+		identity := safeToolIdentity(event)
+		if identity == "" {
+			return ""
+		}
+		return base + "\x00tool-result\x00" + identity
 	default:
 		return ""
 	}

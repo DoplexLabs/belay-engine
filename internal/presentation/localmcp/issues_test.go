@@ -247,6 +247,76 @@ func TestIssueSourceSignalCatalogSemanticsAndPrivacy(t *testing.T) {
 	}
 }
 
+func TestIssueToolsProjectExplicitToolFailureCatalog(t *testing.T) {
+	summary := testIssueSummary()
+	summary.DetectorID = "explicit_tool_failure"
+	summary.Category = "tool_failure"
+	summary.TitleCode = "issue.explicit_tool_failure"
+	summary.Severity = "low"
+	occurrence := testIssueOccurrence()
+	occurrence.Provenance.DetectorID = "explicit_tool_failure"
+	occurrence.Category = "tool_failure"
+	occurrence.TitleCode = "issue.explicit_tool_failure"
+	occurrence.Severity = "low"
+
+	session := newTestClient(t, &testRepository{
+		issueSummary:    &summary,
+		issueOccurrence: &occurrence,
+	})
+	listResult := callTool(t, session, "list_issues", map[string]any{})
+	assertStrictSuccess(t, listResult)
+	list := asObject(t, asObject(t, listResult.StructuredContent)["readmodel"])
+	viewCursor := list["view_cursor"].(string)
+	detailResult := callTool(t, session, "get_issue", map[string]any{
+		"issue_id":    testIssueID,
+		"view_cursor": viewCursor,
+	})
+	assertStrictSuccess(t, detailResult)
+	detail := asObject(t, asObject(t, detailResult.StructuredContent)["readmodel"])
+	catalog := asObject(t, detail["catalog"])
+	if catalog["display_title"] != "Tool call failed" ||
+		catalog["observation_statement"] != "The agent reported that a tool call failed." ||
+		catalog["caveat"] != "Belay does not know why it failed or whether a later attempt succeeded." ||
+		catalog["next_evidence_action"] != "inspect_cited_events" {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+}
+
+func TestIssueToolsProjectRetainedVerificationGapCatalog(t *testing.T) {
+	summary := testIssueSummary()
+	summary.DetectorID = "retained_verification_gap_after_changes"
+	summary.Category = "evidence_gap"
+	summary.TitleCode = "issue.retained_verification_gap_after_changes"
+	summary.Severity = "info"
+	occurrence := testIssueOccurrence()
+	occurrence.Provenance.DetectorID = "retained_verification_gap_after_changes"
+	occurrence.Category = "evidence_gap"
+	occurrence.TitleCode = "issue.retained_verification_gap_after_changes"
+	occurrence.Severity = "info"
+
+	session := newTestClient(t, &testRepository{
+		issueSummary:    &summary,
+		issueOccurrence: &occurrence,
+	})
+	listResult := callTool(t, session, "list_issues", map[string]any{})
+	assertStrictSuccess(t, listResult)
+	list := asObject(t, asObject(t, listResult.StructuredContent)["readmodel"])
+	viewCursor := list["view_cursor"].(string)
+	detailResult := callTool(t, session, "get_issue", map[string]any{
+		"issue_id":    testIssueID,
+		"view_cursor": viewCursor,
+	})
+	assertStrictSuccess(t, detailResult)
+	detail := asObject(t, asObject(t, detailResult.StructuredContent)["readmodel"])
+	catalog := asObject(t, detail["catalog"])
+	if catalog["display_title"] != "No recognized verification retained after changes" ||
+		catalog["observation_statement"] != "Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended." ||
+		catalog["caveat"] != "This does not show that verification did not occur; Belay only checks supported commands in retained activity." ||
+		catalog["next_evidence_action"] != "inspect_cited_events" {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+}
+
 func TestIssueSchemasProjectAuthoritativeCatalogUnchanged(t *testing.T) {
 	schemas, err := getIssueSchemas()
 	if err != nil {

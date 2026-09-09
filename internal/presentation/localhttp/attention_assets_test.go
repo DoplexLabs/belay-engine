@@ -54,6 +54,11 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 			"Command failed",
 			"The agent reported that a command failed.",
 		},
+		"issue.explicit_tool_failure": {
+			"Tool call failed",
+			"The agent reported that a tool call failed.",
+			"Belay does not know why it failed or whether a later attempt succeeded.",
+		},
 		"issue.repeated_command_attempts": {
 			"Command repeatedly attempted",
 			"Belay recorded the same minimized command pattern several times close together.",
@@ -65,6 +70,11 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 		"issue.verification_not_observed": {
 			"No recognized verification command observed",
 			"After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
+		},
+		"issue.retained_verification_gap_after_changes": {
+			"No recognized verification retained after changes",
+			"Belay's retained evidence contains no recognized verification command after the final recorded file change and before the session ended.",
+			"This does not show that verification did not occur; Belay only checks supported commands in retained activity.",
 		},
 		"issue.unresolved_verification_failure_at_completion": {
 			"Verification still failed at session end",
