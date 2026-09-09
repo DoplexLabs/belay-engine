@@ -1099,6 +1099,32 @@ select:focus-visible {
   line-height: 1.55;
 }
 
+.cost-issue-fix-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cost-issue-fix-status {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cost-issue-fix-diff {
+  max-height: 260px;
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .cost-issue-evidence {
   margin-top: 12px;
 }

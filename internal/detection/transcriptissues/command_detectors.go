@@ -257,7 +257,7 @@ func detectPermissionChurn(
 		if len(values) < 5 || denials[pattern] {
 			continue
 		}
-		target := ".codex/config.toml"
+		target := ".codex/rules/default.rules"
 		claude := 0
 		for _, value := range values {
 			if value.session.metadata.Agent == "claude-code" {

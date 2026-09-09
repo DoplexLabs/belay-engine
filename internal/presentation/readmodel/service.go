@@ -113,6 +113,7 @@ type Service struct {
 	fixMonitoringRepository   FixMonitoringRepository
 	transcriptRepository      TranscriptRepository
 	costIssueRepository       CostIssueRepository
+	insightRepository         InsightRepository
 	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }

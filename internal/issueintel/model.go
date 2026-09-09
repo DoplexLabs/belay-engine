@@ -117,3 +117,67 @@ type Query struct {
 	ProjectIdentity string
 	DetectorID      string
 }
+
+type SemanticInput struct {
+	Project              Project               `json:"project"`
+	Issues               []Issue               `json:"issues"`
+	CorrectionCandidates []CorrectionCandidate `json:"correction_candidates"`
+}
+
+type InsightCluster struct {
+	CandidateIDs []string `json:"candidate_ids"`
+	Topic        string   `json:"topic"`
+	RuleText     string   `json:"rule_text"`
+	TargetFile   string   `json:"target_file"`
+	Confidence   float64  `json:"confidence"`
+}
+
+type InsightFix struct {
+	IssueID    string  `json:"issue_id"`
+	RuleText   string  `json:"rule_text"`
+	TargetFile string  `json:"target_file"`
+	Confidence float64 `json:"confidence"`
+}
+
+type InsightResult struct {
+	Clusters []InsightCluster `json:"clusters"`
+	Fixes    []InsightFix     `json:"fixes"`
+}
+
+type InsightRecord struct {
+	InsightID     string        `json:"insight_id"`
+	Project       Project       `json:"project"`
+	Harness       string        `json:"harness"`
+	Model         string        `json:"model,omitempty"`
+	PromptVersion string        `json:"prompt_version"`
+	InputHash     string        `json:"input_hash"`
+	GeneratedAt   time.Time     `json:"generated_at"`
+	Result        InsightResult `json:"result"`
+}
+
+type FixRecord struct {
+	FixID         string     `json:"fix_id"`
+	IssueID       string     `json:"issue_id"`
+	Project       Project    `json:"project"`
+	Kind          string     `json:"kind"`
+	TargetFile    string     `json:"target_file"`
+	RuleText      string     `json:"rule_text"`
+	UnifiedDiff   string     `json:"unified_diff"`
+	State         string     `json:"state"`
+	ContentSHA256 string     `json:"content_sha256,omitempty"`
+	AppliedPath   string     `json:"applied_path,omitempty"`
+	GitCommit     string     `json:"git_commit,omitempty"`
+	ProposedAt    time.Time  `json:"proposed_at"`
+	AppliedAt     *time.Time `json:"applied_at,omitempty"`
+}
+
+type FixStatus struct {
+	Fix                 FixRecord `json:"fix"`
+	Applied             bool      `json:"applied"`
+	VerificationState   string    `json:"verification_state"`
+	StillPresent        *bool     `json:"still_present"`
+	Reverted            *bool     `json:"reverted"`
+	RecurrenceSinceFix  *int      `json:"recurrence_since_applied"`
+	WeeklyCostBeforeUSD *float64  `json:"weekly_cost_before_usd"`
+	WeeklyCostAfterUSD  *float64  `json:"weekly_cost_after_usd"`
+}

@@ -620,7 +620,7 @@ func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {
 		"loopback-only",
 		"Full local transcripts are retained encrypted on-device",
 		"Nothing is uploaded",
-		"read-only user-scoped MCP registration",
+		"user-scoped Local MCP registration",
 		"--no-mcp",
 		"--allow-codex-mcp-add",
 		"non-atomic",

@@ -42,6 +42,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runScan(ctx, args[1:], stdout, stderr)
 	case "agents":
 		return runAgents(ctx, args[1:], stdout, stderr)
+	case "analyze":
+		return runAnalyze(ctx, args[1:], stdout, stderr)
 	case "hooks":
 		return runHooks(ctx, args[1:], stdout, stderr)
 	case "mcp":
@@ -232,9 +234,10 @@ Commands:
   local           scan agents and run the offline Local browser
   scan            discover and backfill supported local agent history
   agents          show Numbat's local agent inventory
+  analyze         refine deterministic issues with your installed agent
   hooks           install, inspect, or remove monitor-only live hooks
-  mcp             run the read-only Local MCP server over stdio
-  mcp-config      install, inspect, or remove read-only MCP registration
+  mcp             run the Local MCP server over stdio
+  mcp-config      install, inspect, or remove Local MCP registration
   doctor          verify Local configuration, storage, and Numbat discovery
   import          import strict Numbat 0.3.0 NDJSON into Belay Local
   sessions        list Local session summaries
@@ -242,9 +245,10 @@ Commands:
   prune           inspect retention bounds; deletion requires --apply
   verify-numbat   verify a pinned Numbat binary checksum and version marker
 
-belay quickstart changes only local Belay state and detected Codex/Claude hook
-and user-scoped MCP configuration. Hooks are monitor-only, MCP is read-only,
-and neither blocks agent actions. Belay Local retains full local transcripts
+belay quickstart changes only local Belay state and detected Codex/Claude hook,
+skill, and user-scoped MCP configuration. Hooks are monitor-only. MCP can read
+local evidence and store bounded fix proposals or application records, but it
+does not apply file changes. Belay Local retains full local transcripts
 encrypted on-device. Nothing is uploaded. Use --no-mcp to skip MCP registration
 and --no-open to print the loopback URL without opening a browser.`)
 }

@@ -2275,6 +2275,61 @@
           "Add a concrete project rule that prevents this pattern.",
       ),
     );
+    const fixActions = createElement("div", "cost-issue-fix-actions");
+    const prepareButton = createElement(
+      "button",
+      "secondary-button",
+      "Prepare fix",
+    );
+    prepareButton.type = "button";
+    const fixStatus = createElement("p", "cost-issue-fix-status");
+    fixStatus.setAttribute("aria-live", "polite");
+    const diff = createElement("pre", "cost-issue-fix-diff");
+    diff.hidden = true;
+    prepareButton.addEventListener("click", async () => {
+      const issueID = readText(issue.issue_id);
+      const kind = readText(issue.suggested_fix.kind);
+      const targetFile = readText(issue.suggested_fix.target_file);
+      const idempotencyKey = createUUIDv4();
+      if (!issueID || !kind || !targetFile || !idempotencyKey) {
+        fixStatus.textContent = "This fix could not be prepared.";
+        return;
+      }
+      prepareButton.disabled = true;
+      prepareButton.textContent = "Preparing…";
+      fixStatus.textContent = "";
+      try {
+        const response = await apiMutation(
+          `/v1/cost-issues/${encodeURIComponent(issueID)}/fixes`,
+          { kind, target_file: targetFile },
+          idempotencyKey,
+          "propose-cost-issue-fix.v1",
+        );
+        if (
+          readText(response && response.schema_version) !==
+            "belay.cost-issue-fix.v1" ||
+          !isRecord(response && response.data) ||
+          !readText(response.data.fix_id) ||
+          !readText(response.data.unified_diff)
+        ) {
+          throw new Error("Local API returned an invalid fix proposal.");
+        }
+        diff.textContent = readText(response.data.unified_diff);
+        diff.hidden = false;
+        fixStatus.textContent =
+          "Proposal ready. Review this diff, then use /belay to apply it with approval.";
+        prepareButton.textContent = "Prepared";
+      } catch (error) {
+        fixStatus.textContent =
+          error instanceof Error
+            ? error.message
+            : "This fix could not be prepared.";
+        prepareButton.disabled = false;
+        prepareButton.textContent = "Try preparing again";
+      }
+    });
+    fixActions.append(prepareButton);
+    fix.append(fixActions, fixStatus, diff);
     card.append(fix);
 
     const evidence = createElement("details", "cost-issue-evidence");
@@ -9229,7 +9284,12 @@
       throw new Error("A canonical UUIDv4 retry key is required.");
     }
     if (
-      !["record-fix-attempt.v1", "retract-fix-attempt.v1"].includes(intent)
+      ![
+        "record-fix-attempt.v1",
+        "retract-fix-attempt.v1",
+        "propose-cost-issue-fix.v1",
+        "record-cost-issue-fix.v1",
+      ].includes(intent)
     ) {
       throw new Error("The Local write intent is invalid.");
     }

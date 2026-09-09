@@ -194,6 +194,10 @@ func (s *Store) Prune(
 				statement = "DELETE FROM cost_issues WHERE issue_id = ?"
 			case "correction_candidate":
 				statement = "DELETE FROM correction_candidates WHERE candidate_id = ?"
+			case "insight":
+				statement = "DELETE FROM insights WHERE insight_id = ?"
+			case "cost_issue_fix":
+				statement = "DELETE FROM cost_issue_fixes WHERE fix_id = ?"
 			default:
 				continue
 			}
@@ -573,6 +577,26 @@ func readRetentionItems(ctx context.Context, querier retentionQuerier) ([]retent
 				NULL AS protection_base,
 				0 AS pinned
 			FROM correction_candidates
+			UNION ALL
+			SELECT
+				'insight' AS record_type,
+				insight_id AS record_id,
+				generated_at AS occurred_at,
+				0 AS source_sequence,
+				LENGTH(payload) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM insights
+			UNION ALL
+			SELECT
+				'cost_issue_fix' AS record_type,
+				fix_id AS record_id,
+				COALESCE(applied_at, proposed_at) AS occurred_at,
+				0 AS source_sequence,
+				LENGTH(payload) AS payload_bytes,
+				NULL AS protection_base,
+				0 AS pinned
+			FROM cost_issue_fixes
 		)
 		ORDER BY occurred_at ASC, source_sequence ASC, record_id ASC, record_type ASC`)
 	if err != nil {

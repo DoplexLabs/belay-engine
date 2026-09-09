@@ -20,6 +20,13 @@ type CostIssueRepository interface {
 	GetCostIssue(context.Context, string) (issueintel.Issue, error)
 }
 
+type InsightRepository interface {
+	GetProjectInsight(
+		context.Context,
+		string,
+	) (issueintel.InsightRecord, error)
+}
+
 type CostIssueListRequest struct {
 	Limit           int
 	ProjectIdentity string
@@ -41,6 +48,9 @@ type CostIssueDetail struct {
 func WithCostIssueRepository(repository CostIssueRepository) Option {
 	return func(service *Service) {
 		service.costIssueRepository = repository
+		if insights, ok := repository.(InsightRepository); ok {
+			service.insightRepository = insights
+		}
 	}
 }
 
@@ -66,6 +76,7 @@ func (s *Service) ListCostIssues(
 	if err != nil {
 		return CostIssueList{}, err
 	}
+	values = s.applyInsightFixes(ctx, values)
 	return CostIssueList{
 		SchemaVersion: CostIssueProjectionVersion,
 		Data:          values,
@@ -91,9 +102,45 @@ func (s *Service) GetCostIssue(
 		}
 		return CostIssueDetail{}, err
 	}
+	values := s.applyInsightFixes(ctx, []issueintel.Issue{value})
+	if len(values) == 1 {
+		value = values[0]
+	}
 	return CostIssueDetail{
 		SchemaVersion: CostIssueProjectionVersion,
 		Data:          value,
 		GeneratedAt:   s.now().UTC(),
 	}, nil
+}
+
+func (s *Service) applyInsightFixes(
+	ctx context.Context,
+	issues []issueintel.Issue,
+) []issueintel.Issue {
+	if s.insightRepository == nil || len(issues) == 0 {
+		return issues
+	}
+	records := make(map[string]issueintel.InsightRecord)
+	for index := range issues {
+		project := issues[index].Project.Identity
+		record, ok := records[project]
+		if !ok {
+			value, err := s.insightRepository.GetProjectInsight(ctx, project)
+			if err != nil {
+				records[project] = issueintel.InsightRecord{}
+				continue
+			}
+			record = value
+			records[project] = record
+		}
+		for _, fix := range record.Result.Fixes {
+			if fix.IssueID != issues[index].IssueID {
+				continue
+			}
+			issues[index].SuggestedFix.Rationale = fix.RuleText
+			issues[index].SuggestedFix.TargetFile = fix.TargetFile
+			break
+		}
+	}
+	return issues
 }

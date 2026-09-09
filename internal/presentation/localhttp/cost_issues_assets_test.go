@@ -29,6 +29,7 @@ func TestCostIssueAttentionAssetsExposeRankedIssuesAndSeparateSafety(t *testing.
 		`What keeps going wrong`,
 		`Safety`,
 		`Show evidence`,
+		`Prepare fix`,
 	} {
 		if !strings.Contains(index+app, required) {
 			t.Fatalf("cost issue assets missing %q", required)
@@ -40,6 +41,9 @@ func TestCostIssueAttentionAssetsExposeRankedIssuesAndSeparateSafety(t *testing.
 		`formatIssueDollarCost(issue.cost)`,
 		`readText(excerpt && excerpt.text)`,
 		`setAttentionMode("safety")`,
+		`"propose-cost-issue-fix.v1"`,
+		`"belay.cost-issue-fix.v1"`,
+		`use /belay to apply it with approval`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Fatalf("cost issue application missing %q", required)
@@ -49,6 +53,7 @@ func TestCostIssueAttentionAssetsExposeRankedIssuesAndSeparateSafety(t *testing.
 		`.attention-workspace.cost-mode`,
 		`.cost-issue-card`,
 		`.cost-issue-excerpt blockquote`,
+		`.cost-issue-fix-diff`,
 	} {
 		if !strings.Contains(styles, required) {
 			t.Fatalf("cost issue styles missing %q", required)

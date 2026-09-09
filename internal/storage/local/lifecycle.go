@@ -162,6 +162,10 @@ func (s *Store) payloadEncodingCounts(ctx context.Context) (int, int, error) {
 			SELECT payload_encoding AS encoding FROM cost_issues
 			UNION ALL
 			SELECT payload_encoding AS encoding FROM correction_candidates
+			UNION ALL
+			SELECT payload_encoding AS encoding FROM insights
+			UNION ALL
+			SELECT payload_encoding AS encoding FROM cost_issue_fixes
 			)`,
 		payloadEncodingPlaintext,
 		payloadEncodingAESGCM,

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode"
 
@@ -59,6 +60,8 @@ type localLaunchOptions struct {
 	installMCP       bool
 	allowCodexMCPAdd bool
 	historicalScan   bool
+	analyze          bool
+	analyzeAgent     string
 	openBrowser      bool
 	commandName      string
 }
@@ -294,8 +297,9 @@ func runQuickstart(ctx context.Context, args []string, stdout, stderr io.Writer)
 
 Explicitly initializes private Belay Local state, verifies packaged Numbat,
 installs monitor-only hooks for detected Codex and Claude Code installations,
-installs read-only user-scoped MCP registration for detected CLIs, imports
-local activity, scans local history, and opens a loopback-only browser.
+installs user-scoped Local MCP registration and the Belay skill for detected
+harnesses, imports local activity, scans local history, and opens a
+loopback-only browser.
 Full local transcripts are retained encrypted on-device. Nothing is uploaded.
 Use --no-mcp to opt out only from MCP registration.
 Codex MCP add is disabled by default because its CLI can replace duplicate
@@ -314,6 +318,16 @@ Options:`)
 	)
 	noOpen := flags.Bool("no-open", false, "print the Local URL without opening a browser")
 	noMCP := flags.Bool("no-mcp", false, "do not modify Codex or Claude MCP configuration")
+	noAnalyze := flags.Bool(
+		"no-analyze",
+		false,
+		"skip semantic issue refinement with an installed Claude Code or Codex harness",
+	)
+	analyzeAgent := flags.String(
+		"analyze-agent",
+		"auto",
+		"semantic analysis harness: auto, claude, or codex",
+	)
 	allowCodexMCPAdd := flags.Bool(
 		"allow-codex-mcp-add",
 		false,
@@ -334,6 +348,8 @@ Options:`)
 		installMCP:       !*noMCP,
 		allowCodexMCPAdd: *allowCodexMCPAdd,
 		historicalScan:   true,
+		analyze:          !*noAnalyze,
+		analyzeAgent:     *analyzeAgent,
 		openBrowser:      !*noOpen,
 		commandName:      "quickstart",
 	}, stdout, stderr)
@@ -383,6 +399,11 @@ func runLocalLaunch(
 		}
 	} else if options.commandName == "quickstart" {
 		fmt.Fprintln(stderr, "belay quickstart: mcp skipped_by_user")
+	}
+	if options.commandName == "quickstart" && options.installHooks {
+		if !onboardBelaySkills(ctx, runtime.client, stderr) {
+			onboardingComplete = false
+		}
 	}
 	if !onboardingComplete && options.commandName == "quickstart" {
 		fmt.Fprintf(
@@ -473,7 +494,7 @@ func runLocalLaunch(
 			runtimeCtx,
 			initializationTracker,
 			func(scanCtx context.Context) error {
-				return runHistoricalScan(
+				scanErr := runHistoricalScan(
 					scanCtx,
 					runtime,
 					store,
@@ -481,6 +502,22 @@ func runLocalLaunch(
 					"historical scan",
 					stderr,
 				)
+				if options.analyze && scanCtx.Err() == nil {
+					if err := runQuickstartSemanticAnalysis(
+						scanCtx,
+						runtime,
+						store,
+						options.analyzeAgent,
+						stderr,
+					); err != nil {
+						fmt.Fprintf(
+							stderr,
+							"belay %s: semantic analysis incomplete; Local will continue\n",
+							options.commandName,
+						)
+					}
+				}
+				return scanErr
 			},
 		)
 	}
@@ -498,6 +535,79 @@ func runLocalLaunch(
 	stopRecovery()
 	<-recoveryDone
 	return waitErr
+}
+
+func onboardBelaySkills(
+	ctx context.Context,
+	client *numbat.Client,
+	stderr io.Writer,
+) bool {
+	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	inventory, _, discoveryErr := client.Discover(discoveryCtx)
+	cancel()
+	if discoveryErr != nil {
+		fmt.Fprintln(
+			stderr,
+			"belay quickstart: skill codex=unavailable claude=unavailable",
+		)
+		return false
+	}
+	results, installErr := localapp.InstallBelaySkills(inventory)
+	statuses := map[string]string{
+		"codex":  "unavailable",
+		"claude": "unavailable",
+	}
+	for _, result := range results {
+		statuses[result.Agent] = result.Status
+	}
+	fmt.Fprintf(
+		stderr,
+		"belay quickstart: skill codex=%s claude=%s\n",
+		statuses["codex"],
+		statuses["claude"],
+	)
+	return installErr == nil
+}
+
+func runQuickstartSemanticAnalysis(
+	ctx context.Context,
+	runtime preparedRuntime,
+	store *local.Store,
+	preferred string,
+	stderr io.Writer,
+) error {
+	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	inventory, _, err := runtime.client.Discover(discoveryCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	harness, err := selectSemanticHarness(inventory, preferred)
+	if err != nil {
+		if strings.Contains(err.Error(), "no Claude Code or Codex harness") {
+			fmt.Fprintln(
+				stderr,
+				"belay quickstart: semantic analysis skipped; no supported harness detected",
+			)
+			return nil
+		}
+		return err
+	}
+	if _, err := localapp.AnalyzeTranscriptIssuesOnce(ctx, store, 100); err != nil {
+		return err
+	}
+	fmt.Fprintf(
+		stderr,
+		"belay quickstart: Analyzing with your %s\n",
+		semanticHarnessDisplayName(harness),
+	)
+	_, err = localapp.AnalyzeSemanticProjects(
+		ctx,
+		store,
+		harness,
+		localapp.RunInstalledSemanticHarness,
+	)
+	return err
 }
 
 func closedSignal() <-chan struct{} {
@@ -593,6 +703,10 @@ func newLocalHTTPServer(
 	if err != nil {
 		return nil, err
 	}
+	costFixes, err := localapp.NewCostIssueFixService(store)
+	if err != nil {
+		return nil, err
+	}
 	readOptions := []readmodel.Option{
 		readmodel.WithIssueRepository(store),
 		readmodel.WithIssueCursorCodec(store),
@@ -610,6 +724,7 @@ func newLocalHTTPServer(
 		readmodel.New(store, readOptions...),
 		token,
 		localhttp.WithFixService(actions),
+		localhttp.WithCostIssueFixService(costFixes),
 		localhttp.WithExperience(experience),
 	)
 }
@@ -627,11 +742,16 @@ func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
 	if store == nil {
 		return nil, errors.New("local MCP server requires a store")
 	}
+	fixService, err := localapp.NewCostIssueFixService(store)
+	if err != nil {
+		return nil, err
+	}
 	return localmcp.New(readmodel.New(
 		store,
 		readmodel.WithIssueRepository(store),
 		readmodel.WithIssueCursorCodec(store),
-	))
+		readmodel.WithCostIssueRepository(store),
+	), localmcp.WithCostIssueFixService(fixService))
 }
 
 func onboardLocalHooks(
