@@ -1292,6 +1292,65 @@
       </main>
     </div>
 
+    <div
+      class="modal-layer report-evidence-layer"
+      id="report-evidence-modal-layer"
+      hidden
+    >
+      <section
+        class="modal-dialog report-evidence-drawer"
+        id="report-evidence-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="report-evidence-dialog-title"
+        aria-describedby="report-evidence-dialog-description"
+        tabindex="-1"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Issue evidence</p>
+            <h2 id="report-evidence-dialog-title">Issue details</h2>
+          </div>
+          <button
+            class="modal-close"
+            id="report-evidence-close"
+            type="button"
+            aria-label="Close issue evidence"
+          >
+            ×
+          </button>
+        </header>
+        <div class="modal-scroll report-evidence-scroll">
+          <p id="report-evidence-dialog-description">
+            Full local transcript excerpts and the complete suggested fix.
+          </p>
+          <section
+            class="report-evidence-section"
+            aria-labelledby="report-evidence-excerpts-heading"
+          >
+            <h3 id="report-evidence-excerpts-heading">Verbatim evidence</h3>
+            <div id="report-evidence-excerpts"></div>
+          </section>
+          <section
+            class="report-evidence-section report-evidence-fix"
+            aria-labelledby="report-evidence-fix-heading"
+          >
+            <h3 id="report-evidence-fix-heading">Suggested fix</h3>
+            <dl id="report-evidence-fix"></dl>
+          </section>
+        </div>
+        <footer class="modal-actions">
+          <button
+            class="secondary-button"
+            id="report-evidence-done"
+            type="button"
+          >
+            Close
+          </button>
+        </footer>
+      </section>
+    </div>
+
     <div class="modal-layer" id="fix-attempt-modal-layer" hidden>
       <section
         class="modal-dialog"

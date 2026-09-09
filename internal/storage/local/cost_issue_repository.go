@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/issueintel"
 	"github.com/DoplexLabs/belay-engine/internal/transcript"
@@ -20,6 +21,7 @@ const (
 	maxDirtyProjectLimit         = 500
 	maxTranscriptProjectSessions = 500
 	maxTranscriptProjectTurns    = 500000
+	transcriptProjectTurnBatch   = 500
 	maxCostIssuePayloadBytes     = 1 << 20
 	maxCorrectionPayloadBytes    = 256 << 10
 	maxCostIssueIdentityBytes    = 512
@@ -438,70 +440,171 @@ func (s *Store) LoadTranscriptProjectData(
 		)
 	}
 
-	sessionIndexes := make(map[string]int, len(result.Sessions))
-	for index := range result.Sessions {
-		sessionIndexes[result.Sessions[index].Metadata.SessionKey] = index
-	}
-	turnRows, err := s.db.QueryContext(ctx, `
-		SELECT turn.turn_id, turn.source_record_key, turn.session_key,
-			turn.turn_index, turn.occurred_at, turn.role, turn.tool_name,
-			turn.model, turn.input_tokens, turn.output_tokens,
-			turn.cache_read_tokens, turn.cache_write_tokens, turn.cost_usd,
-			turn.payload, turn.payload_encoding
-		FROM transcript_turns turn
-		JOIN transcript_sessions session
-			ON session.session_key = turn.session_key
-		WHERE session.project_identity = ?
-		ORDER BY COALESCE(
-				session.started_at,
-				session.ended_at,
-				session.updated_at
-			) ASC,
-			session.session_key ASC,
-			turn.turn_index ASC,
-			turn.occurred_at ASC,
-			turn.turn_id ASC
-		LIMIT ?`,
-		projectIdentity,
-		maxTranscriptProjectTurns+1,
-	)
-	if err != nil {
-		return issueintel.ProjectInput{}, errors.New("load transcript project turns")
-	}
 	turnCount := 0
-	for turnRows.Next() {
-		turn, err := s.scanTranscriptTurn(turnRows)
-		if err != nil {
-			turnRows.Close()
-			return issueintel.ProjectInput{}, err
-		}
-		turnCount++
-		if turnCount > maxTranscriptProjectTurns {
-			turnRows.Close()
-			return issueintel.ProjectInput{}, errors.New(
-				"transcript project turn safety limit exceeded",
+	for sessionIndex := range result.Sessions {
+		sessionKey := result.Sessions[sessionIndex].Metadata.SessionKey
+		var cursor transcriptProjectTurnCursor
+		for {
+			batch, err := s.loadEncryptedTranscriptProjectTurnBatch(
+				ctx,
+				sessionKey,
+				cursor,
 			)
+			if err != nil {
+				return issueintel.ProjectInput{}, err
+			}
+			if turnCount+len(batch) > maxTranscriptProjectTurns {
+				return issueintel.ProjectInput{}, errors.New(
+					"transcript project turn safety limit exceeded",
+				)
+			}
+			for _, encrypted := range batch {
+				turn, err := s.decryptTranscriptProjectTurn(encrypted)
+				if err != nil {
+					return issueintel.ProjectInput{}, err
+				}
+				if turn.SessionKey != sessionKey {
+					return issueintel.ProjectInput{}, errors.New(
+						"transcript project turn has no loaded session",
+					)
+				}
+				result.Sessions[sessionIndex].Turns = append(
+					result.Sessions[sessionIndex].Turns,
+					turn,
+				)
+			}
+			turnCount += len(batch)
+			if len(batch) < transcriptProjectTurnBatch {
+				break
+			}
+			last := batch[len(batch)-1]
+			cursor = transcriptProjectTurnCursor{
+				set:        true,
+				turnIndex:  last.turn.TurnIndex,
+				occurredAt: last.occurredAt,
+				turnID:     last.turn.TurnID,
+			}
 		}
-		sessionIndex, ok := sessionIndexes[turn.SessionKey]
-		if !ok {
-			turnRows.Close()
-			return issueintel.ProjectInput{}, errors.New(
-				"transcript project turn has no loaded session",
-			)
-		}
-		result.Sessions[sessionIndex].Turns = append(
-			result.Sessions[sessionIndex].Turns,
-			turn,
-		)
-	}
-	if err := turnRows.Err(); err != nil {
-		turnRows.Close()
-		return issueintel.ProjectInput{}, errors.New("load transcript project turns")
-	}
-	if err := turnRows.Close(); err != nil {
-		return issueintel.ProjectInput{}, errors.New("close transcript project turns")
 	}
 	return result, nil
+}
+
+type transcriptProjectTurnCursor struct {
+	set        bool
+	turnIndex  int64
+	occurredAt string
+	turnID     string
+}
+
+type encryptedTranscriptProjectTurn struct {
+	turn       transcript.Turn
+	occurredAt string
+	payload    []byte
+	encoding   string
+}
+
+func (s *Store) loadEncryptedTranscriptProjectTurnBatch(
+	ctx context.Context,
+	sessionKey string,
+	cursor transcriptProjectTurnCursor,
+) ([]encryptedTranscriptProjectTurn, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT turn_id, source_record_key, session_key, turn_index,
+			occurred_at, role, tool_name, model, input_tokens, output_tokens,
+			cache_read_tokens, cache_write_tokens, cost_usd, payload,
+			payload_encoding
+		FROM transcript_turns
+		WHERE session_key = ?
+			AND (
+				? = 0
+				OR turn_index > ?
+				OR (turn_index = ? AND occurred_at > ?)
+				OR (
+					turn_index = ?
+					AND occurred_at = ?
+					AND turn_id > ?
+				)
+			)
+		ORDER BY turn_index ASC, occurred_at ASC, turn_id ASC
+		LIMIT ?`,
+		sessionKey,
+		boolInt(cursor.set),
+		cursor.turnIndex,
+		cursor.turnIndex,
+		cursor.occurredAt,
+		cursor.turnIndex,
+		cursor.occurredAt,
+		cursor.turnID,
+		transcriptProjectTurnBatch,
+	)
+	if err != nil {
+		return nil, errors.New("load transcript project turns")
+	}
+	result := make([]encryptedTranscriptProjectTurn, 0, transcriptProjectTurnBatch)
+	for rows.Next() {
+		var value encryptedTranscriptProjectTurn
+		var inputTokens, outputTokens sql.NullInt64
+		var cacheReadTokens, cacheWriteTokens sql.NullInt64
+		var costUSD sql.NullFloat64
+		if err := rows.Scan(
+			&value.turn.TurnID,
+			&value.turn.SourceRecordKey,
+			&value.turn.SessionKey,
+			&value.turn.TurnIndex,
+			&value.occurredAt,
+			&value.turn.Role,
+			&value.turn.ToolName,
+			&value.turn.Model,
+			&inputTokens,
+			&outputTokens,
+			&cacheReadTokens,
+			&cacheWriteTokens,
+			&costUSD,
+			&value.payload,
+			&value.encoding,
+		); err != nil {
+			rows.Close()
+			return nil, errors.New("read transcript turn")
+		}
+		value.turn.InputTokens = nullableInt64Pointer(inputTokens)
+		value.turn.OutputTokens = nullableInt64Pointer(outputTokens)
+		value.turn.CacheReadTokens = nullableInt64Pointer(cacheReadTokens)
+		value.turn.CacheWriteTokens = nullableInt64Pointer(cacheWriteTokens)
+		value.turn.CostUSD = nullableFloat64Pointer(costUSD)
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, errors.New("load transcript project turns")
+	}
+	if err := rows.Close(); err != nil {
+		return nil, errors.New("close transcript project turns")
+	}
+	return result, nil
+}
+
+func (s *Store) decryptTranscriptProjectTurn(
+	value encryptedTranscriptProjectTurn,
+) (transcript.Turn, error) {
+	var err error
+	value.turn.OccurredAt, err = time.Parse(time.RFC3339Nano, value.occurredAt)
+	if err != nil {
+		return transcript.Turn{}, errors.New("decode transcript turn timestamp")
+	}
+	payload, err := s.cipher.open(
+		"transcript_turn",
+		value.turn.TurnID,
+		"payload",
+		value.encoding,
+		value.payload,
+	)
+	if err != nil {
+		return transcript.Turn{}, err
+	}
+	if err := json.Unmarshal(payload, &value.turn.Payload); err != nil {
+		return transcript.Turn{}, errors.New("decode transcript turn payload")
+	}
+	return value.turn, nil
 }
 
 func markTranscriptProjectDirtyTx(

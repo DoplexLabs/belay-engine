@@ -444,6 +444,19 @@
     briefSources: document.querySelector("#brief-sources"),
     briefOpenAttention: document.querySelector("#brief-open-attention"),
     briefOpenSessions: document.querySelector("#brief-open-sessions"),
+    reportEvidenceModalLayer: document.querySelector(
+      "#report-evidence-modal-layer",
+    ),
+    reportEvidenceDialog: document.querySelector("#report-evidence-dialog"),
+    reportEvidenceTitle: document.querySelector(
+      "#report-evidence-dialog-title",
+    ),
+    reportEvidenceClose: document.querySelector("#report-evidence-close"),
+    reportEvidenceDone: document.querySelector("#report-evidence-done"),
+    reportEvidenceExcerpts: document.querySelector(
+      "#report-evidence-excerpts",
+    ),
+    reportEvidenceFix: document.querySelector("#report-evidence-fix"),
     attentionNavCount: document.querySelector("#attention-nav-count"),
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
@@ -757,6 +770,7 @@
 
   const focusRegistry = {
     briefActions: new Map(),
+    reportEvidenceTriggers: new Map(),
     briefSessions: new Map(),
     diagnosisActions: new Map(),
     monitoringCards: new Map(),
@@ -1312,6 +1326,7 @@
   }
 
   function renderReportIssues(issues) {
+    focusRegistry.reportEvidenceTriggers.clear();
     const fragment = document.createDocumentFragment();
     issues.forEach((issue) => {
       fragment.append(createReportIssueCard(issue));
@@ -1323,10 +1338,10 @@
   function createReportIssueCard(issue) {
     const card = createElement("article", "brief-action-card report-issue-card");
     card.append(
-      createElement("h3", "", readText(issue.headline)),
+      createElement("h3", "report-issue-headline", readText(issue.headline)),
       createElement(
         "p",
-        "brief-evidence",
+        "brief-evidence report-issue-metrics",
         [
           formatIssueDollarCost(issue.cost),
           formatIssueMinutes(issue.cost),
@@ -1339,28 +1354,23 @@
       ),
     );
     if (issue.excerpts.length) {
-      card.append(createCostIssueExcerpt(issue.excerpts[0], true));
+      card.append(createReportIssuePreview(issue.excerpts[0]));
     }
     const fix = createElement("div", "report-issue-fix");
     fix.append(
       createElement(
         "strong",
-        "",
+        "report-issue-fix-target",
         readText(issue.suggested_fix.target_file) || "Agent instructions",
       ),
       createElement(
         "p",
-        "",
+        "report-issue-fix-rationale",
         readText(issue.suggested_fix.rationale) ||
           "Add a durable project instruction for this pattern.",
       ),
     );
     card.append(fix);
-    const evidence = createElement("div", "report-issue-evidence");
-    evidence.hidden = true;
-    issue.excerpts.forEach((excerpt) => {
-      evidence.append(createCostIssueExcerpt(excerpt, false));
-    });
     const actions = createElement("div", "report-card-actions");
     const fixButton = createElement(
       "button",
@@ -1377,15 +1387,148 @@
       "Show evidence",
     );
     evidenceButton.type = "button";
+    evidenceButton.setAttribute("aria-haspopup", "dialog");
+    evidenceButton.setAttribute("aria-controls", "report-evidence-dialog");
     evidenceButton.addEventListener("click", () => {
-      evidence.hidden = !evidence.hidden;
-      evidenceButton.textContent = evidence.hidden
-        ? "Show evidence"
-        : "Hide evidence";
+      openReportEvidenceDrawer(issue);
     });
+    const issueID = readText(issue.issue_id);
+    if (issueID) {
+      focusRegistry.reportEvidenceTriggers.set(issueID, evidenceButton);
+    }
     actions.append(fixButton, evidenceButton);
-    card.append(actions, evidence);
+    card.append(actions);
     return card;
+  }
+
+  function createReportIssuePreview(excerpt) {
+    const wrapper = createElement("div", "report-issue-preview");
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = compactID(citation.session_key);
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "";
+    wrapper.append(
+      createElement(
+        "p",
+        "report-issue-preview-citation",
+        [role, tool, session, turn].filter(Boolean).join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        truncateReportPreview(
+          readText(excerpt && excerpt.text) || "Excerpt unavailable",
+        ),
+      ),
+    );
+    return wrapper;
+  }
+
+  function truncateReportPreview(value) {
+    const characters = Array.from(readText(value));
+    if (characters.length <= 220) return characters.join("");
+    const candidate = characters.slice(0, 220).join("");
+    const boundary = candidate.search(/\s+\S*$/);
+    const clipped = boundary >= 160 ? candidate.slice(0, boundary) : candidate;
+    return `${clipped.trimEnd()}…`;
+  }
+
+  function openReportEvidenceDrawer(issue) {
+    const issueID = readText(issue && issue.issue_id);
+    state.dialogReturnFocus = { type: "report-evidence", issueID };
+    state.activeModal = "report-evidence";
+    elements.reportEvidenceTitle.textContent =
+      readText(issue && issue.headline) || "Issue details";
+    const excerpts = Array.isArray(issue && issue.excerpts)
+      ? issue.excerpts
+      : [];
+    const excerptFragment = document.createDocumentFragment();
+    excerpts.forEach((excerpt) => {
+      excerptFragment.append(createReportEvidenceExcerpt(excerpt));
+    });
+    if (!excerpts.length) {
+      excerptFragment.append(
+        createElement("p", "overview-empty", "No transcript excerpts available."),
+      );
+    }
+    elements.reportEvidenceExcerpts.replaceChildren(excerptFragment);
+    renderReportEvidenceFix(issue && issue.suggested_fix);
+    openModalLayer(
+      elements.reportEvidenceModalLayer,
+      elements.reportEvidenceDialog,
+      elements.reportEvidenceClose,
+    );
+  }
+
+  function createReportEvidenceExcerpt(excerpt) {
+    const wrapper = createElement("article", "cost-issue-excerpt");
+    const citation = isRecord(excerpt && excerpt.citation)
+      ? excerpt.citation
+      : {};
+    const role = readableLabel(excerpt && excerpt.role, "Transcript");
+    const tool = readText(excerpt && excerpt.tool_name);
+    const session = readText(citation.session_key) || "session unavailable";
+    const turn = Number.isFinite(Number(citation.turn_index))
+      ? `turn ${formatNumber(citation.turn_index)}`
+      : "turn unavailable";
+    const occurredAt =
+      formatFullDate(parseDate(citation.occurred_at)) || "time unavailable";
+    const source = readText(citation.source_file_id) || "source unavailable";
+    const offset = Number.isFinite(Number(citation.jsonl_byte_offset))
+      ? `byte ${formatNumber(citation.jsonl_byte_offset)}`
+      : "byte offset unavailable";
+    wrapper.append(
+      createElement(
+        "p",
+        "cost-issue-citation report-evidence-citation",
+        [role, tool, session, turn, occurredAt, source, offset]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+      createElement(
+        "blockquote",
+        "",
+        readText(excerpt && excerpt.text) || "Excerpt unavailable",
+      ),
+    );
+    return wrapper;
+  }
+
+  function renderReportEvidenceFix(value) {
+    const fix = isRecord(value) ? value : {};
+    const fragment = document.createDocumentFragment();
+    [
+      ["Kind", readableLabel(fix.kind, "Project instruction")],
+      ["Target file", readText(fix.target_file) || "Agent instructions"],
+      [
+        "Rationale",
+        readText(fix.rationale) ||
+          "Add a durable project instruction for this pattern.",
+      ],
+    ].forEach(([label, detail]) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", "", detail),
+      );
+      fragment.append(row);
+    });
+    elements.reportEvidenceFix.replaceChildren(fragment);
+  }
+
+  function closeReportEvidenceDrawer(restoreFocus) {
+    closeModalLayer(
+      "report-evidence",
+      elements.reportEvidenceModalLayer,
+      restoreFocus,
+    );
+    elements.reportEvidenceExcerpts.replaceChildren();
+    elements.reportEvidenceFix.replaceChildren();
   }
 
   function reportTrendSummary(trend) {
@@ -2055,6 +2198,16 @@
       setActiveView("sessions", true);
       if (!state.sessions.length) void refreshSessions(false);
     });
+    elements.reportEvidenceClose.addEventListener("click", () => {
+      closeReportEvidenceDrawer(true);
+    });
+    elements.reportEvidenceDone.addEventListener("click", () => {
+      closeReportEvidenceDrawer(true);
+    });
+    elements.reportEvidenceModalLayer.addEventListener(
+      "keydown",
+      handleModalKeydown,
+    );
     elements.refreshButton.addEventListener("click", () => refreshAll(true));
     elements.issuesLoadMore.addEventListener("click", () => {
       loadIssueBucket(state.issues, true);
@@ -2761,6 +2914,11 @@
 
   function resolveFocusReference(reference) {
     if (!reference) return null;
+    if (reference.type === "report-evidence") {
+      return (
+        focusRegistry.reportEvidenceTriggers.get(reference.issueID) || null
+      );
+    }
     if (reference.type === "brief-action") {
       return focusRegistry.briefActions.get(reference.key) || null;
     }
@@ -7020,7 +7178,9 @@
     if (event.key === "Escape") {
       if (state.modalSubmitting) return;
       event.preventDefault();
-      if (state.activeModal === "fix-attempt") {
+      if (state.activeModal === "report-evidence") {
+        closeReportEvidenceDrawer(true);
+      } else if (state.activeModal === "fix-attempt") {
         closeFixAttemptDialog(true);
       } else {
         closeFixRetractionDialog(true);
@@ -7029,9 +7189,11 @@
     }
     if (event.key !== "Tab") return;
     const dialog =
-      state.activeModal === "fix-attempt"
-        ? elements.fixAttemptDialog
-        : elements.fixRetractionDialog;
+      state.activeModal === "report-evidence"
+        ? elements.reportEvidenceDialog
+        : state.activeModal === "fix-attempt"
+          ? elements.fixAttemptDialog
+          : elements.fixRetractionDialog;
     const focusable = Array.from(
       dialog.querySelectorAll(
         'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
