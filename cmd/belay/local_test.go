@@ -21,6 +21,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/detection"
 	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
@@ -226,6 +227,16 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	if len(captured) != 6 {
 		t.Fatalf("captured launches = %d, want 6", len(captured))
 	}
+	for index, options := range captured {
+		if options.experience != localhttp.ExperienceCurrent {
+			t.Fatalf(
+				"launch %d experience = %q, want %q",
+				index,
+				options.experience,
+				localhttp.ExperienceCurrent,
+			)
+		}
+	}
 	if !captured[0].installHooks || !captured[0].historicalScan ||
 		!captured[0].installMCP || !captured[0].openBrowser ||
 		captured[0].allowCodexMCPAdd ||
@@ -262,6 +273,134 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	}
 }
 
+func TestLocalCommandsPropagateValueFirstExperience(t *testing.T) {
+	original := launchLocal
+	t.Cleanup(func() { launchLocal = original })
+	var captured []localLaunchOptions
+	launchLocal = func(
+		_ context.Context,
+		options localLaunchOptions,
+		_, _ io.Writer,
+	) error {
+		captured = append(captured, options)
+		return nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runLocal(
+		context.Background(),
+		[]string{"--experience", "value-first"},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := runQuickstart(
+		context.Background(),
+		[]string{"--experience=value-first"},
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured launches = %d, want 2", len(captured))
+	}
+	for index, options := range captured {
+		if options.experience != localhttp.ExperienceValueFirst {
+			t.Fatalf(
+				"launch %d experience = %q, want %q",
+				index,
+				options.experience,
+				localhttp.ExperienceValueFirst,
+			)
+		}
+	}
+}
+
+func TestLocalCommandsRejectInvalidExperienceBeforeLaunch(t *testing.T) {
+	original := launchLocal
+	t.Cleanup(func() { launchLocal = original })
+	launches := 0
+	launchLocal = func(
+		_ context.Context,
+		_ localLaunchOptions,
+		_, _ io.Writer,
+	) error {
+		launches++
+		return nil
+	}
+
+	tests := []struct {
+		name string
+		run  func(context.Context, []string, io.Writer, io.Writer) error
+		args []string
+	}{
+		{
+			name: "local invalid",
+			run:  runLocal,
+			args: []string{"--experience=PRIVATE_MODE_CANARY"},
+		},
+		{
+			name: "local empty",
+			run:  runLocal,
+			args: []string{"--experience="},
+		},
+		{
+			name: "quickstart invalid",
+			run:  runQuickstart,
+			args: []string{"--experience=PRIVATE_MODE_CANARY"},
+		},
+		{
+			name: "quickstart empty",
+			run:  runQuickstart,
+			args: []string{"--experience="},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := test.run(
+				context.Background(),
+				test.args,
+				&stdout,
+				&stderr,
+			)
+			if !errors.Is(err, localhttp.ErrInvalidExperience) {
+				t.Fatalf("error = %v, want fixed invalid-experience error", err)
+			}
+			if err.Error() != "invalid Local experience" {
+				t.Fatalf("error text = %q", err.Error())
+			}
+			if strings.Contains(err.Error(), "PRIVATE_MODE_CANARY") ||
+				strings.Contains(stderr.String(), "PRIVATE_MODE_CANARY") {
+				t.Fatalf(
+					"invalid experience reflected input: err=%q stderr=%q",
+					err,
+					stderr.String(),
+				)
+			}
+		})
+	}
+	if launches != 0 {
+		t.Fatalf("invalid experience launched Local %d times", launches)
+	}
+}
+
+func TestRunLocalLaunchRejectsInvalidExperienceBeforeRuntimePreparation(t *testing.T) {
+	err := runLocalLaunch(
+		context.Background(),
+		localLaunchOptions{
+			experience: localhttp.Experience("PRIVATE_MODE_CANARY"),
+		},
+		io.Discard,
+		io.Discard,
+	)
+	if !errors.Is(err, localhttp.ErrInvalidExperience) {
+		t.Fatalf("runLocalLaunch() error = %v, want invalid experience", err)
+	}
+}
+
 func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	previousScan := discoverAndScan
 	previousStartServer := startLocalHTTPServer
@@ -295,14 +434,17 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	t.Cleanup(cancel)
 	serverStarted := make(chan struct{})
 	var provider initialization.Provider
+	var experience localhttp.Experience
 	startLocalHTTPServer = func(
 		serverCtx context.Context,
 		_ *local.Store,
 		_ string,
 		_ string,
 		initializationProvider initialization.Provider,
+		launchExperience localhttp.Experience,
 	) (runningLocalServer, error) {
 		provider = initializationProvider
+		experience = launchExperience
 		close(serverStarted)
 		return fakeRunningLocalServer{
 			url: "http://127.0.0.1:12345/#token=test",
@@ -331,6 +473,7 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 			localLaunchOptions{
 				runtime:        testRuntimeFlags(home, binary, "", "", true),
 				listen:         "127.0.0.1:0",
+				experience:     localhttp.ExperienceValueFirst,
 				historicalScan: true,
 				openBrowser:    true,
 				commandName:    "quickstart",
@@ -357,6 +500,9 @@ func TestQuickstartStartsBrowserBeforeHistoricalScanCompletes(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("Local server did not receive initialization provider")
+	}
+	if experience != localhttp.ExperienceValueFirst {
+		t.Fatalf("Local server experience = %q", experience)
 	}
 	if status := provider.InitializationStatus(); status.State != initialization.StateInitializing {
 		t.Fatalf("blocked scan status = %+v", status)
@@ -675,7 +821,11 @@ func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server, err := newLocalHTTPServer(store, "launch-secret")
+	server, err := newLocalHTTPServer(
+		store,
+		"launch-secret",
+		localhttp.ExperienceCurrent,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

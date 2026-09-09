@@ -14,6 +14,55 @@
   });
   const mutationRequestDeadlineMilliseconds = 15_000;
   const initializationPollMilliseconds = 2_000;
+  const runtimeSchemaVersion = "belay.local-runtime.v1";
+  const experienceCopy = Object.freeze({
+    current: Object.freeze({
+      navBrief: "Brief",
+      navAttention: "Attention",
+      navSessions: "Sessions",
+      briefEyebrow: "Developer Brief",
+      briefLoading: "Preparing your local brief…",
+      briefErrorTitle: "Brief unavailable",
+      briefErrorDetail:
+        "Belay could not prepare the brief. Attention and Sessions remain available.",
+      briefOpenAttention: "Open Attention",
+      briefOpenSessions: "Open Sessions",
+      briefRecentEmptyDetail:
+        "Older stored sessions remain available in Sessions.",
+      attentionAriaLabel: "Attention inbox",
+      attentionEyebrow: "Findings",
+      attentionHeading: "Attention",
+      attentionStatus: "Attention status",
+      attentionBackLabel: "Back to Attention list",
+      attentionEmptyDetail:
+        "Refresh Attention before relying on this result.",
+      attentionFilterSummary: "Filter Attention",
+      sessionsHeading: "Sessions",
+    }),
+    "value-first": Object.freeze({
+      navBrief: "Home",
+      navAttention: "Review",
+      navSessions: "History",
+      briefEyebrow: "Home",
+      briefLoading: "Preparing Home…",
+      briefErrorTitle: "Home unavailable",
+      briefErrorDetail:
+        "Belay could not prepare Home. Review and History remain available.",
+      briefOpenAttention: "Open Review",
+      briefOpenSessions: "Open History",
+      briefRecentEmptyDetail:
+        "Older stored sessions remain available in History.",
+      attentionAriaLabel: "Review findings",
+      attentionEyebrow: "Findings and evidence gaps",
+      attentionHeading: "Review",
+      attentionStatus: "Review status",
+      attentionBackLabel: "Back to Review list",
+      attentionEmptyDetail:
+        "Refresh Review before relying on this result.",
+      attentionFilterSummary: "Filter Review",
+      sessionsHeading: "History",
+    }),
+  });
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
   const issueCatalog = Object.freeze({
     "issue.explicit_command_failure": Object.freeze({
@@ -209,6 +258,7 @@
   const state = {
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
+    experience: "current",
     activeView: "brief",
     initialization: null,
     initializationRequestInFlight: false,
@@ -323,9 +373,13 @@
     appShell: document.querySelector("#app-shell"),
     initializationBanner: document.querySelector("#initialization-banner"),
     navBrief: document.querySelector("#nav-brief"),
+    navBriefLabel: document.querySelector("#nav-brief-label"),
     navAttention: document.querySelector("#nav-attention"),
+    navAttentionLabel: document.querySelector("#nav-attention-label"),
     navSessions: document.querySelector("#nav-sessions"),
+    navSessionsLabel: document.querySelector("#nav-sessions-label"),
     briefView: document.querySelector("#brief-view"),
+    briefEyebrow: document.querySelector("#brief-eyebrow"),
     briefHeading: document.querySelector("#brief-heading"),
     briefWindow: document.querySelector("#brief-window"),
     briefStatus: document.querySelector("#brief-status"),
@@ -334,7 +388,9 @@
     briefOutcomeCount: document.querySelector("#brief-outcome-count"),
     briefLatestActivity: document.querySelector("#brief-latest-activity"),
     briefLoading: document.querySelector("#brief-loading"),
+    briefLoadingText: document.querySelector("#brief-loading-text"),
     briefError: document.querySelector("#brief-error"),
+    briefErrorTitle: document.querySelector("#brief-error-title"),
     briefErrorDetail: document.querySelector("#brief-error-detail"),
     briefRetry: document.querySelector("#brief-retry"),
     briefContent: document.querySelector("#brief-content"),
@@ -365,6 +421,9 @@
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
     attentionListPane: document.querySelector("#attention-list-pane"),
+    attentionEyebrow: document.querySelector("#attention-eyebrow"),
+    attentionHeading: document.querySelector("#attention-heading"),
+    attentionStatusLabel: document.querySelector("#attention-status-label"),
     attentionDetailPane: document.querySelector("#attention-detail-pane"),
     attentionScroll: document.querySelector(".attention-scroll"),
     stableIssuesSection: document.querySelector("#stable-issues-section"),
@@ -483,6 +542,9 @@
     familyMemberList: document.querySelector("#family-member-list"),
     familyMembersLoading: document.querySelector("#family-members-loading"),
     familyMembersEmpty: document.querySelector("#family-members-empty"),
+    familyMembersEmptyDetail: document.querySelector(
+      "#family-members-empty-detail",
+    ),
     familyMembersPagination: document.querySelector(
       "#family-members-pagination",
     ),
@@ -565,6 +627,7 @@
     sessionsPagination: document.querySelector("#sessions-pagination"),
     sessionsPageStatus: document.querySelector("#sessions-page-status"),
     sessionsLoadMore: document.querySelector("#sessions-load-more"),
+    sessionsHeading: document.querySelector("#sessions-heading"),
     sessionsLoading: document.querySelector("#sessions-loading"),
     sessionsEmpty: document.querySelector("#sessions-empty"),
     welcomeState: document.querySelector("#welcome-state"),
@@ -676,6 +739,7 @@
   let searchTimer = 0;
   let issueFilterTimer = 0;
   const mobileQuery = globalThis.matchMedia("(max-width: 680px)");
+  const runtimeReady = loadRuntimeExperience();
   prepareValueFirstAttentionLayout();
   renderFixDialogChoices();
   renderFixMonitoringFilters();
@@ -743,9 +807,92 @@
   }
 
   async function startProgressiveInitialization() {
+    await runtimeReady;
     await requestInitializationStatus();
     await refreshActiveViewForInitialization(false);
     scheduleInitializationPoll();
+  }
+
+  async function loadRuntimeExperience() {
+    let experience = "current";
+    try {
+      const response = await apiGet("/v1/runtime");
+      experience = requireRuntimeExperience(response);
+    } catch {
+      experience = "current";
+    }
+    applyExperience(experience);
+    return experience;
+  }
+
+  function requireRuntimeExperience(response) {
+    const experience = readText(response && response.experience);
+    if (
+      !isRecord(response) ||
+      readText(response.schema_version) !== runtimeSchemaVersion ||
+      !["current", "value-first"].includes(experience)
+    ) {
+      throw new Error("Local API returned an invalid runtime experience.");
+    }
+    return experience;
+  }
+
+  function applyExperience(experience) {
+    const selected = experience === "value-first" ? experience : "current";
+    const copy = experienceCopy[selected];
+    state.experience = selected;
+    document.body.dataset.experience = selected;
+    elements.appShell.dataset.experience = selected;
+    elements.navBriefLabel.textContent = copy.navBrief;
+    elements.navAttentionLabel.textContent = copy.navAttention;
+    elements.navSessionsLabel.textContent = copy.navSessions;
+    elements.briefEyebrow.textContent = copy.briefEyebrow;
+    elements.briefLoadingText.textContent = copy.briefLoading;
+    elements.briefErrorTitle.textContent = copy.briefErrorTitle;
+    elements.briefErrorDetail.textContent = copy.briefErrorDetail;
+    elements.briefOpenAttention.textContent = copy.briefOpenAttention;
+    elements.briefOpenSessions.textContent = copy.briefOpenSessions;
+    elements.briefRecentEmptyDetail.textContent = copy.briefRecentEmptyDetail;
+    elements.attentionListPane.setAttribute(
+      "aria-label",
+      copy.attentionAriaLabel,
+    );
+    elements.attentionEyebrow.textContent = copy.attentionEyebrow;
+    elements.attentionHeading.textContent = copy.attentionHeading;
+    elements.attentionStatusLabel.textContent = copy.attentionStatus;
+    elements.familyBackButton.setAttribute(
+      "aria-label",
+      copy.attentionBackLabel,
+    );
+    elements.issueBackButton.setAttribute(
+      "aria-label",
+      copy.attentionBackLabel,
+    );
+    elements.familyMembersEmptyDetail.textContent =
+      copy.attentionEmptyDetail;
+    elements.sessionsHeading.textContent = copy.sessionsHeading;
+    const filterSummary = document.querySelector(
+      "#attention-filter-disclosure > summary",
+    );
+    if (filterSummary) {
+      filterSummary.textContent = copy.attentionFilterSummary;
+    }
+  }
+
+  // Only pass fixed, locally authored UI copy here. This rewrites nav terms
+  // unconditionally, so event-, catalog-, API-error-, and provider-derived text
+  // must render verbatim and never flow through this function.
+  function experiencePageText(value) {
+    const text = readText(value);
+    if (state.experience !== "value-first") return text;
+    return text
+      .replaceAll("Developer Brief", "Home")
+      .replaceAll("Brief", "Home")
+      .replaceAll("The brief", "Home")
+      .replaceAll("the brief", "Home")
+      .replaceAll("local brief", "Home")
+      .replaceAll("Attention", "Review")
+      .replaceAll("Sessions", "History");
   }
 
   async function requestInitializationStatus() {
@@ -905,7 +1052,7 @@
       state.briefStatus = "error";
       state.briefError = customerErrorMessage(
         error,
-        "Belay could not prepare the brief. Attention and Sessions remain available.",
+        experienceCopy[state.experience].briefErrorDetail,
       );
       renderDeveloperBrief();
       return false;
@@ -944,8 +1091,7 @@
     elements.briefError.hidden = !failed;
     elements.briefContent.hidden = !brief || loading || failed;
     elements.briefErrorDetail.textContent =
-      state.briefError ||
-      "Belay could not prepare the brief. Attention and Sessions remain available.";
+      state.briefError || experienceCopy[state.experience].briefErrorDetail;
     if (!brief) {
       if (loading) {
         elements.briefWindow.textContent =
@@ -961,12 +1107,13 @@
       start && end
         ? `${formatFullDate(start)} to ${formatFullDate(end)}`
         : "Rolling 24-hour window";
-    elements.briefStatus.textContent =
+    elements.briefStatus.textContent = experiencePageText(
       initializationInProgress()
         ? "Initial import is still in progress; these values are partial."
         : readText(brief.status) === "limited"
-        ? "Brief is limited. Review the coverage notes before relying on it."
-        : "Based on the activity Belay could evaluate.";
+          ? "Brief is limited. Review the coverage notes before relying on it."
+          : "Based on the activity Belay could evaluate.",
+    );
     renderBriefSummary(brief.recent_summary);
     renderBriefActions(brief);
     renderBriefRecentWork(brief);
@@ -1025,16 +1172,17 @@
           : complete
             ? "No reviewed action was identified in the evaluated activity"
             : "No reviewed action is available from the activity evaluated so far";
-      elements.briefActionsEmptyDetail.textContent =
+      elements.briefActionsEmptyDetail.textContent = experiencePageText(
         !sessionsAvailable
           ? "Attention may still contain reviewed findings, and stored activity remains available in Sessions."
           : initializing && sessionCount === 0
             ? "Initial import is still in progress; this result is partial and will update automatically."
-          : sessionCount === 0
-          ? "Older stored sessions remain available in Sessions."
-          : complete
-            ? "This is not a claim that all activity was successful or problem-free."
-            : "The brief is limited; review Coverage and limitations for what was not fully evaluated.";
+            : sessionCount === 0
+              ? "Older stored sessions remain available in Sessions."
+              : complete
+                ? "This is not a claim that all activity was successful or problem-free."
+                : "The brief is limited; review Coverage and limitations for what was not fully evaluated.",
+      );
     }
   }
 
@@ -1139,11 +1287,13 @@
         : initializing
           ? "No recent activity has been imported yet"
           : "No recorded agent activity in the last 24 hours";
-      elements.briefRecentEmptyDetail.textContent = !sessionsAvailable
-        ? "Open Sessions to inspect stored activity directly."
-        : initializing
-          ? "Initial import is still in progress; this result is partial and will update automatically."
-          : "Older stored sessions remain available in Sessions.";
+      elements.briefRecentEmptyDetail.textContent = experiencePageText(
+        !sessionsAvailable
+          ? "Open Sessions to inspect stored activity directly."
+          : initializing
+            ? "Initial import is still in progress; this result is partial and will update automatically."
+            : "Older stored sessions remain available in Sessions.",
+      );
     }
   }
 
@@ -1281,7 +1431,9 @@
       readText(brief.status) === "limited" || coverage.complete !== true;
     elements.briefCoverageSummary.textContent =
       coverage.complete === true
-        ? "All bounded brief sources completed for this view."
+        ? state.experience === "value-first"
+          ? "All bounded Home sources completed for this view."
+          : "All bounded brief sources completed for this view."
         : "Some activity or analysis could not be fully evaluated.";
     const limitationFragment = document.createDocumentFragment();
     limitations.forEach((limitation) => {
@@ -1293,7 +1445,9 @@
         createElement(
           "li",
           "",
-          "Some sources were limited; use Attention or Sessions for the available detail.",
+          experiencePageText(
+            "Some sources were limited; use Attention or Sessions for the available detail.",
+          ),
         ),
       );
     }
@@ -1316,7 +1470,8 @@
 
   function briefSourceLabel(value) {
     const labels = {
-      sessions: "Sessions",
+      sessions:
+        state.experience === "value-first" ? "History" : "Sessions",
       attention_families: "Reviewed findings",
       evidence_gaps: "Evidence gaps",
     };
@@ -1463,7 +1618,11 @@
     );
     filterDisclosure.id = "attention-filter-disclosure";
     filterDisclosure.append(
-      createElement("summary", "", "Filter Attention"),
+      createElement(
+        "summary",
+        "",
+        experienceCopy[state.experience].attentionFilterSummary,
+      ),
       elements.attentionFilters,
     );
     elements.attentionScroll.replaceChildren(
@@ -2961,7 +3120,7 @@
     if (bucket.status === "error") {
       title.textContent = isGap
         ? "Evidence gaps unavailable"
-        : "Attention grouping is unavailable";
+        : experiencePageText("Attention grouping is unavailable");
       detail.textContent = isGap
         ? "The Local read failed. Existing session data remains available."
         : "Session data remains available.";
@@ -2982,7 +3141,9 @@
         : "No findings were reported in completed local analysis";
       detail.textContent = isGap
         ? "Supported completed analysis did not report a verification evidence gap."
-        : "No reviewed finding type produced a stable Attention item.";
+        : experiencePageText(
+            "No reviewed finding type produced a stable Attention item.",
+          );
       return;
     }
     title.textContent = isGap
@@ -3395,8 +3556,9 @@
         return false;
       }
       state.familyMemberStatus = "error";
-      state.familyMemberError =
-        "Sessions with this finding could not be loaded. Refresh Attention and try again.";
+      state.familyMemberError = experiencePageText(
+        "Sessions with this finding could not be loaded. Refresh Attention and try again.",
+      );
       renderAttentionFamilyDetail();
       return false;
     }
@@ -3463,7 +3625,9 @@
           "p",
           "family-member-error",
           state.familyMemberError ||
-            "Sessions with this finding could not be loaded. Other Attention data remains available.",
+            experiencePageText(
+              "Sessions with this finding could not be loaded. Other Attention data remains available.",
+            ),
         ),
       );
     }
@@ -6051,7 +6215,9 @@
         return "This request conflicts with an earlier unresolved submission. Abandon that submission before choosing different input.";
       }
       if (error.problemType === "belay.local/ineligible-fix-annotation") {
-        return "An attempt can no longer be recorded for this finding. Refresh Attention before continuing.";
+        return experiencePageText(
+          "An attempt can no longer be recorded for this finding. Refresh Attention before continuing.",
+        );
       }
       return `The ${verb} conflicted with newer local state. The unresolved submission is still available to retry unchanged or abandon.`;
     }
@@ -6569,7 +6735,8 @@
       ? tone
       : "status";
     globalThis.clearTimeout(state.refreshNoticeTimer);
-    elements.attentionRefreshNotice.textContent = message;
+    elements.attentionRefreshNotice.textContent =
+      experiencePageText(message);
     elements.attentionRefreshNotice.dataset.tone = safeTone;
     elements.attentionRefreshNotice.setAttribute(
       "role",
@@ -7287,8 +7454,10 @@
       state.sessionReturnView === "attention"
         ? "Back to issue detail"
         : state.sessionReturnView === "brief"
-          ? "Back to Developer Brief"
-          : "Back to sessions",
+          ? experiencePageText("Back to Developer Brief")
+          : state.experience === "value-first"
+            ? "Back to History"
+            : "Back to sessions",
     );
     document.body.classList.add("is-timeline-open");
     applyPaneAccessibility();
@@ -8759,7 +8928,7 @@
   }
 
   function showError(title, error) {
-    elements.errorTitle.textContent = title;
+    elements.errorTitle.textContent = experiencePageText(title);
     elements.errorDetail.textContent = customerErrorMessage(
       error,
       "Belay Local could not complete this request. Try again.",

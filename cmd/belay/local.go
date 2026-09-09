@@ -53,6 +53,7 @@ type preparedRuntime struct {
 type localLaunchOptions struct {
 	runtime          localRuntimeFlags
 	listen           string
+	experience       localhttp.Experience
 	installHooks     bool
 	installMCP       bool
 	allowCodexMCPAdd bool
@@ -75,8 +76,14 @@ var (
 		token string,
 		address string,
 		initializationProvider initialization.Provider,
+		experience localhttp.Experience,
 	) (runningLocalServer, error) {
-		server, err := newLocalHTTPServer(store, token, initializationProvider)
+		server, err := newLocalHTTPServer(
+			store,
+			token,
+			experience,
+			initializationProvider,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -233,14 +240,24 @@ func runLocal(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	flags.SetOutput(stderr)
 	runtimeFlags := addLocalRuntimeFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:0", "loopback listen address")
+	experienceValue := flags.String(
+		"experience",
+		string(localhttp.ExperienceCurrent),
+		"Local experience: current or value-first",
+	)
 	installHooks := flags.Bool("install-hooks", false, "explicitly install monitor-only live hooks for Codex and Claude Code")
 	noScan := flags.Bool("no-scan", false, "skip the initial historical scan")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	experience, err := localhttp.ParseExperience(*experienceValue)
+	if err != nil {
+		return err
+	}
 	return launchLocal(ctx, localLaunchOptions{
 		runtime:        runtimeFlags,
 		listen:         *listen,
+		experience:     experience,
 		installHooks:   *installHooks,
 		historicalScan: !*noScan,
 		commandName:    "local",
@@ -268,6 +285,11 @@ Options:`)
 	}
 	runtimeFlags := addLocalRuntimeFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:0", "loopback listen address")
+	experienceValue := flags.String(
+		"experience",
+		string(localhttp.ExperienceCurrent),
+		"Local experience: current or value-first",
+	)
 	noOpen := flags.Bool("no-open", false, "print the Local URL without opening a browser")
 	noMCP := flags.Bool("no-mcp", false, "do not modify Codex or Claude MCP configuration")
 	allowCodexMCPAdd := flags.Bool(
@@ -278,9 +300,14 @@ Options:`)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	experience, err := localhttp.ParseExperience(*experienceValue)
+	if err != nil {
+		return err
+	}
 	return launchLocal(ctx, localLaunchOptions{
 		runtime:          runtimeFlags,
 		listen:           *listen,
+		experience:       experience,
 		installHooks:     true,
 		installMCP:       !*noMCP,
 		allowCodexMCPAdd: *allowCodexMCPAdd,
@@ -295,6 +322,11 @@ func runLocalLaunch(
 	options localLaunchOptions,
 	stdout, stderr io.Writer,
 ) error {
+	experience, err := normalizeLaunchExperience(options.experience)
+	if err != nil {
+		return err
+	}
+	options.experience = experience
 	runtime, err := prepareRuntime(ctx, options.runtime)
 	if err != nil {
 		return err
@@ -350,6 +382,7 @@ func runLocalLaunch(
 		token,
 		options.listen,
 		initializationTracker,
+		options.experience,
 	)
 	if err != nil {
 		return err
@@ -444,6 +477,7 @@ func runHistoricalScan(
 func newLocalHTTPServer(
 	store *local.Store,
 	token string,
+	experience localhttp.Experience,
 	providers ...initialization.Provider,
 ) (*localhttp.Server, error) {
 	actions, err := localaction.New(store, store)
@@ -465,7 +499,17 @@ func newLocalHTTPServer(
 		readmodel.New(store, readOptions...),
 		token,
 		localhttp.WithFixService(actions),
+		localhttp.WithExperience(experience),
 	)
+}
+
+func normalizeLaunchExperience(
+	experience localhttp.Experience,
+) (localhttp.Experience, error) {
+	if experience == "" {
+		return localhttp.ExperienceCurrent, nil
+	}
+	return localhttp.ParseExperience(string(experience))
 }
 
 func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {

@@ -25,9 +25,10 @@ import (
 var assetFiles embed.FS
 
 type Server struct {
-	read  *readmodel.Service
-	fix   FixService
-	token string
+	read       *readmodel.Service
+	fix        FixService
+	token      string
+	experience Experience
 }
 
 type RunningServer struct {
@@ -53,6 +54,12 @@ func WithFixService(service FixService) Option {
 	}
 }
 
+func WithExperience(experience Experience) Option {
+	return func(server *Server) {
+		server.experience = experience
+	}
+}
+
 func New(read *readmodel.Service, token string, options ...Option) (*Server, error) {
 	if read == nil {
 		return nil, errors.New("local HTTP server requires a read service")
@@ -60,11 +67,18 @@ func New(read *readmodel.Service, token string, options ...Option) (*Server, err
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("local HTTP server requires a launch token")
 	}
-	server := &Server{read: read, token: token}
+	server := &Server{
+		read:       read,
+		token:      token,
+		experience: ExperienceCurrent,
+	}
 	for _, option := range options {
 		if option != nil {
 			option(server)
 		}
+	}
+	if !server.experience.Valid() {
+		return nil, ErrInvalidExperience
 	}
 	return server, nil
 }
@@ -86,6 +100,7 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.Handle("GET /v1/runtime", s.authorize(http.HandlerFunc(s.getRuntime)))
 	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
 	mux.Handle("GET /v1/sessions", s.authorize(http.HandlerFunc(s.listSessions)))
 	mux.Handle("GET /v1/sessions/{id}", s.authorize(http.HandlerFunc(s.getSession)))

@@ -14,8 +14,8 @@
     <script src="./bootstrap.js"></script>
     <script src="./app.js" defer></script>
   </head>
-  <body>
-    <div class="app-shell" id="app-shell">
+  <body data-experience="current">
+    <div class="app-shell" id="app-shell" data-experience="current">
       <header class="topbar">
         <div class="brand" aria-label="Belay Local">
           <span class="brand-mark" aria-hidden="true">
@@ -35,14 +35,14 @@
             type="button"
             aria-current="page"
           >
-            Brief
+            <span id="nav-brief-label">Brief</span>
           </button>
           <button
             class="primary-nav-button"
             id="nav-attention"
             type="button"
           >
-            Attention
+            <span id="nav-attention-label">Attention</span>
             <span class="nav-count" id="attention-nav-count" hidden></span>
           </button>
           <button
@@ -50,7 +50,7 @@
             id="nav-sessions"
             type="button"
           >
-            Sessions
+            <span id="nav-sessions-label">Sessions</span>
           </button>
         </nav>
 
@@ -83,7 +83,7 @@
           <div class="brief-scroll">
             <header class="brief-header">
               <div>
-                <p class="eyebrow">Developer Brief</p>
+                <p class="eyebrow" id="brief-eyebrow">Developer Brief</p>
                 <h1 id="brief-heading" tabindex="-1">Your last 24 hours</h1>
                 <p id="brief-window">Loading the latest recorded activity…</p>
               </div>
@@ -118,11 +118,11 @@
 
             <div class="brief-loading" id="brief-loading">
               <span class="spinner" aria-hidden="true"></span>
-              <p>Preparing your local brief…</p>
+              <p id="brief-loading-text">Preparing your local brief…</p>
             </div>
 
             <div class="brief-error" id="brief-error" role="alert" hidden>
-              <h2>Brief unavailable</h2>
+              <h2 id="brief-error-title">Brief unavailable</h2>
               <p id="brief-error-detail">
                 Belay could not prepare the brief. Attention and Sessions remain available.
               </p>
@@ -210,8 +210,8 @@
           >
             <div class="panel-heading attention-heading">
               <div>
-                <p class="eyebrow">Findings</p>
-                <h1>Attention</h1>
+                <p class="eyebrow" id="attention-eyebrow">Findings</p>
+                <h1 id="attention-heading">Attention</h1>
               </div>
               <span class="count-pill" id="attention-count">—</span>
             </div>
@@ -320,7 +320,7 @@
               aria-live="polite"
               hidden
             >
-              Attention status
+              <span id="attention-status-label">Attention status</span>
             </div>
 
             <div class="attention-scroll">
@@ -630,7 +630,9 @@
                   >
                     <span class="empty-glyph" aria-hidden="true">◇</span>
                     <p>No sessions with this finding were returned</p>
-                    <small>Refresh Attention before relying on this result.</small>
+                    <small id="family-members-empty-detail">
+                      Refresh Attention before relying on this result.
+                    </small>
                   </div>
                   <div
                     class="pagination-bar"
@@ -863,7 +865,7 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Activity</p>
-              <h1>Sessions</h1>
+              <h1 id="sessions-heading">Sessions</h1>
             </div>
             <span class="count-pill" id="session-count">—</span>
           </div>
