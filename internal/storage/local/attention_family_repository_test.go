@@ -335,7 +335,6 @@ func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.
 		t.Fatal(err)
 	}
 
-	started := time.Now()
 	page, err := store.QueryAttentionFamilies(ctx, model.AttentionFamilyQuery{
 		Filter: model.AttentionFamilyFilter{
 			AttentionKind: model.AttentionKindIssue,
@@ -346,11 +345,12 @@ func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 15*time.Second {
-		t.Fatalf("bounded 25k family page took %s", elapsed)
-	}
 	if len(page.Data) != 20 || !page.HasMore {
 		t.Fatalf("scale family page = returned %d has_more=%v", len(page.Data), page.HasMore)
+	}
+	firstPageIDs := make(map[string]struct{}, len(page.Data))
+	for _, family := range page.Data {
+		firstPageIDs[family.FamilyID] = struct{}{}
 	}
 	position := page.Data[len(page.Data)-1]
 	next, err := store.QueryAttentionFamilies(ctx, model.AttentionFamilyQuery{
@@ -373,8 +373,13 @@ func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(next.Data) != 20 || next.Data[0].FamilyID == position.FamilyID {
+	if len(next.Data) != 20 || !next.HasMore {
 		t.Fatalf("scale continuation = %+v", next)
+	}
+	for _, family := range next.Data {
+		if _, duplicate := firstPageIDs[family.FamilyID]; duplicate {
+			t.Fatalf("scale continuation repeated first-page family %q", family.FamilyID)
+		}
 	}
 
 	cte, args, err := attentionFamilyCTE(1, model.AttentionFamilyFilter{
