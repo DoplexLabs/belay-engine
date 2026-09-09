@@ -19,7 +19,7 @@ type attentionFamilyHTTPRepository struct {
 	familyQuery model.AttentionFamilyQuery
 	memberQuery model.AttentionFamilyMemberQuery
 	family      model.AttentionFamilySummary
-	member      model.IssueSummary
+	member      model.AttentionFamilyMemberRecord
 	memberErr   error
 }
 
@@ -50,7 +50,7 @@ func (repository *attentionFamilyHTTPRepository) QueryAttentionFamilyMembers(
 	}
 	return model.AttentionFamilyMemberPage{
 		Family:              repository.family,
-		Data:                []model.IssueSummary{repository.member},
+		Data:                []model.AttentionFamilyMemberRecord{repository.member},
 		Analysis:            model.IssueAnalysisCoverage{CurrentSessions: 2, Complete: true},
 		CursorEpoch:         query.CursorEpoch,
 		Snapshot:            query.Snapshot,
@@ -89,27 +89,36 @@ func TestAttentionFamilyHTTPListDetailAndStrictShapes(t *testing.T) {
 			AnalysisStatus:        model.AnalysisCurrent,
 			EvidenceComplete:      true,
 		},
-		member: model.IssueSummary{
-			IssueID:             issueID,
-			FingerprintID:       httpTestFingerprintID("c"),
-			FingerprintVersion:  "1",
-			Origin:              "numbat",
-			DetectorID:          "numbat_finding",
-			DetectorVersion:     sourcecatalog.OpaqueRuleVersion("1.1"),
-			Category:            "numbat_finding",
-			TitleCode:           "issue.numbat_finding",
-			SourceSignalCode:    &code,
-			Severity:            "high",
-			Confidence:          "high",
-			ScopeQuality:        model.ScopeUnscoped,
-			FirstObservedAt:     now.Add(-time.Hour),
-			LastObservedAt:      now.Add(-time.Minute),
-			OccurrenceCount:     1,
-			SessionCount:        1,
-			Harnesses:           []string{"codex"},
-			AnalysisStatus:      model.AnalysisCurrent,
-			EvidenceComplete:    true,
-			RetainedHistoryOnly: false,
+		member: model.AttentionFamilyMemberRecord{
+			IssueSummary: model.IssueSummary{
+				IssueID:             issueID,
+				FingerprintID:       httpTestFingerprintID("c"),
+				FingerprintVersion:  "1",
+				Origin:              "numbat",
+				DetectorID:          "numbat_finding",
+				DetectorVersion:     sourcecatalog.OpaqueRuleVersion("1.1"),
+				Category:            "numbat_finding",
+				TitleCode:           "issue.numbat_finding",
+				SourceSignalCode:    &code,
+				Severity:            "high",
+				Confidence:          "high",
+				ScopeQuality:        model.ScopeUnscoped,
+				FirstObservedAt:     now.Add(-time.Hour),
+				LastObservedAt:      now.Add(-time.Minute),
+				OccurrenceCount:     2,
+				SessionCount:        2,
+				Harnesses:           []string{"codex"},
+				AnalysisStatus:      model.AnalysisCurrent,
+				EvidenceComplete:    true,
+				RetainedHistoryOnly: false,
+			},
+			SessionKey:          "session-latest",
+			SessionSelection:    model.AttentionFamilyMemberSessionSelectionLatest,
+			SessionStartedAt:    timePointerHTTP(now.Add(-2 * time.Hour)),
+			SessionLastActiveAt: timePointerHTTP(now.Add(-30 * time.Second)),
+			CitedEventCount:     2,
+			EvidenceFirstAt:     timePointerHTTP(now.Add(-2 * time.Minute)),
+			EvidenceLastAt:      timePointerHTTP(now.Add(-time.Minute)),
 		},
 	}
 	server, err := New(readmodel.New(
@@ -140,6 +149,10 @@ func TestAttentionFamilyHTTPListDetailAndStrictShapes(t *testing.T) {
 		list.Data[0].ViewCursor == "" ||
 		list.NextCursor == nil ||
 		list.ProjectionVersion != readmodel.AttentionFamilyProjectionVersion ||
+		list.Data[0].Catalog.DisplayTitle != sourcecatalog.GuardrailsDisplayTitle ||
+		list.Data[0].Catalog.ObservationStatement != sourcecatalog.GuardrailsObservationStatement ||
+		list.Data[0].Catalog.Caveat != sourcecatalog.GuardrailsCaveat ||
+		list.Data[0].Catalog.NextEvidenceAction != sourcecatalog.GuardrailsNextEvidenceAction ||
 		repository.familyQuery.Filter.Severity != "low" ||
 		repository.familyQuery.Filter.Harness != "Codex" ||
 		repository.familyQuery.Filter.ObservedAfter == nil ||
@@ -164,6 +177,13 @@ func TestAttentionFamilyHTTPListDetailAndStrictShapes(t *testing.T) {
 	}
 	if detail.Data.Family.FamilyID != familyID ||
 		len(detail.Data.Members) != 1 ||
+		detail.Data.Members[0].SessionID != "session-latest" ||
+		detail.Data.Members[0].SessionSelection != model.AttentionFamilyMemberSessionSelectionLatest ||
+		detail.Data.Members[0].CitedEventCount != 2 ||
+		detail.Data.Members[0].EvidenceFirstAt == nil ||
+		detail.Data.Members[0].Catalog.DisplayTitle != sourcecatalog.GuardrailsDisplayTitle ||
+		detail.Data.Members[0].Catalog.ObservationStatement != sourcecatalog.GuardrailsObservationStatement ||
+		detail.Data.Members[0].Catalog.Caveat != sourcecatalog.GuardrailsCaveat ||
 		detail.Data.Members[0].ViewCursor == "" ||
 		detail.NextCursor == nil ||
 		repository.memberQuery.Snapshot != 31 {
@@ -198,6 +218,10 @@ func TestAttentionFamilyHTTPListDetailAndStrictShapes(t *testing.T) {
 		t.Fatalf("expired detail status=%d body=%s",
 			expiredResponse.Code, expiredResponse.Body.String())
 	}
+}
+
+func timePointerHTTP(value time.Time) *time.Time {
+	return &value
 }
 
 type issueV2HTTPRepository struct {

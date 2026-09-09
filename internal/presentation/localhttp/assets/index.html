@@ -31,9 +31,16 @@
         <nav class="primary-nav" aria-label="Belay Local views">
           <button
             class="primary-nav-button"
-            id="nav-attention"
+            id="nav-brief"
             type="button"
             aria-current="page"
+          >
+            Brief
+          </button>
+          <button
+            class="primary-nav-button"
+            id="nav-attention"
+            type="button"
           >
             Attention
             <span class="nav-count" id="attention-nav-count" hidden></span>
@@ -59,7 +66,134 @@
       </header>
 
       <main class="view-stack">
-        <section class="workspace attention-workspace" id="attention-view">
+        <section
+          class="brief-workspace"
+          id="brief-view"
+          aria-labelledby="brief-heading"
+        >
+          <div class="brief-scroll">
+            <header class="brief-header">
+              <div>
+                <p class="eyebrow">Developer Brief</p>
+                <h1 id="brief-heading" tabindex="-1">Your last 24 hours</h1>
+                <p id="brief-window">Loading the latest recorded activity…</p>
+              </div>
+              <p
+                class="brief-status"
+                id="brief-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </header>
+
+            <section class="brief-summary" aria-label="Recent activity summary">
+              <dl>
+                <div>
+                  <dt>Evaluated sessions</dt>
+                  <dd id="brief-session-count">—</dd>
+                </div>
+                <div>
+                  <dt>Agents represented</dt>
+                  <dd id="brief-agent-count">—</dd>
+                </div>
+                <div>
+                  <dt>Reported outcomes</dt>
+                  <dd id="brief-outcome-count">—</dd>
+                </div>
+                <div>
+                  <dt>Latest activity</dt>
+                  <dd id="brief-latest-activity">—</dd>
+                </div>
+              </dl>
+            </section>
+
+            <div class="brief-loading" id="brief-loading">
+              <span class="spinner" aria-hidden="true"></span>
+              <p>Preparing your local brief…</p>
+            </div>
+
+            <div class="brief-error" id="brief-error" role="alert" hidden>
+              <h2>Brief unavailable</h2>
+              <p id="brief-error-detail">
+                Belay could not prepare the brief. Attention and Sessions remain available.
+              </p>
+              <button class="secondary-button" id="brief-retry" type="button">
+                Try again
+              </button>
+            </div>
+
+            <div class="brief-content" id="brief-content" hidden>
+              <section class="brief-section" aria-labelledby="brief-actions-heading">
+                <div class="brief-section-heading">
+                  <div>
+                    <p class="eyebrow">Decisions</p>
+                    <h2 id="brief-actions-heading">What to review now</h2>
+                  </div>
+                  <button
+                    class="text-button"
+                    id="brief-open-attention"
+                    type="button"
+                  >
+                    Open Attention
+                  </button>
+                </div>
+                <div class="brief-card-grid" id="brief-action-list"></div>
+                <div class="brief-empty" id="brief-actions-empty" hidden>
+                  <p id="brief-actions-empty-title"></p>
+                  <small id="brief-actions-empty-detail"></small>
+                </div>
+              </section>
+
+              <section class="brief-section" aria-labelledby="brief-recent-heading">
+                <div class="brief-section-heading">
+                  <div>
+                    <p class="eyebrow">Recent activity</p>
+                    <h2 id="brief-recent-heading">Recent work</h2>
+                  </div>
+                  <button
+                    class="text-button"
+                    id="brief-open-sessions"
+                    type="button"
+                  >
+                    Open Sessions
+                  </button>
+                </div>
+                <div class="brief-recent-list" id="brief-recent-list"></div>
+                <div class="brief-empty" id="brief-recent-empty" hidden>
+                  <p id="brief-recent-empty-title">
+                    No recorded agent activity in the last 24 hours
+                  </p>
+                  <small id="brief-recent-empty-detail">
+                    Older stored sessions remain available in Sessions.
+                  </small>
+                </div>
+              </section>
+
+              <section class="brief-section" aria-labelledby="brief-agents-heading">
+                <div class="brief-section-heading">
+                  <div>
+                    <p class="eyebrow">Activity mix</p>
+                    <h2 id="brief-agents-heading">Across agents</h2>
+                  </div>
+                </div>
+                <div class="brief-agent-summary" id="brief-agent-summary"></div>
+              </section>
+
+              <details class="brief-coverage" id="brief-coverage">
+                <summary>Coverage and limitations</summary>
+                <p id="brief-coverage-summary"></p>
+                <ul id="brief-limitations"></ul>
+                <dl id="brief-sources"></dl>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <section
+          class="workspace attention-workspace"
+          id="attention-view"
+          hidden
+        >
           <aside
             class="attention-panel"
             id="attention-list-pane"
@@ -67,7 +201,7 @@
           >
             <div class="panel-heading attention-heading">
               <div>
-                <p class="eyebrow">Deterministic signals</p>
+                <p class="eyebrow">Findings</p>
                 <h1>Attention</h1>
               </div>
               <span class="count-pill" id="attention-count">—</span>
@@ -81,7 +215,7 @@
               <div class="coverage-heading-row">
                 <div>
                   <p class="eyebrow">Analysis coverage</p>
-                  <h2 id="coverage-heading">Retained sessions</h2>
+                  <h2 id="coverage-heading">Stored sessions</h2>
                 </div>
                 <p id="coverage-completeness">Loading…</p>
               </div>
@@ -121,14 +255,14 @@
                   </select>
                 </label>
                 <label>
-                  <span>Harness</span>
+                  <span>Agent name</span>
                   <input
                     id="issue-filter-harness"
                     type="text"
                     maxlength="128"
                     autocomplete="off"
                     spellcheck="false"
-                    placeholder="Exact harness"
+                    placeholder="Exact agent name"
                   >
                 </label>
               </div>
@@ -137,11 +271,11 @@
                 <summary>Advanced filters</summary>
                 <div class="advanced-filter-grid">
                   <label>
-                    <span>Origin</span>
+                    <span>Source</span>
                     <select id="issue-filter-origin">
-                      <option value="">Belay + Numbat</option>
-                      <option value="belay">Belay</option>
-                      <option value="numbat">Numbat</option>
+                      <option value="">All findings</option>
+                      <option value="belay">Belay checks</option>
+                      <option value="numbat">Imported checks</option>
                     </select>
                   </label>
                   <label>
@@ -158,14 +292,14 @@
                 <label class="experimental-filter">
                   <input id="issue-filter-experimental" type="checkbox">
                   <span>
-                    <strong>Include experimental signals</strong>
+                    <strong>Include experimental findings</strong>
                     Precision is still being validated.
                   </span>
                 </label>
               </details>
 
               <div class="filter-footer attention-filter-footer">
-                <p id="attention-filter-note">Showing stable signals.</p>
+                <p id="attention-filter-note">Showing reviewed findings.</p>
                 <button id="clear-attention-filters" type="button">Clear</button>
               </div>
             </form>
@@ -188,15 +322,15 @@
               >
                 <div class="attention-section-heading">
                   <div>
-                    <p class="eyebrow">Post-attempt evidence</p>
+                    <p class="eyebrow">Follow-up evidence</p>
                     <h2 id="fix-monitoring-heading">After attempts</h2>
                   </div>
                   <span class="count-pill" id="fix-monitoring-count">—</span>
                 </div>
                 <p class="section-disclosure">
-                  Exact matching evidence is monitored locally after recorded
-                  attempts. It does not establish causality or whether an
-                  attempted change worked.
+                  Belay checks later local activity for the same finding after
+                  recorded attempts. This does not establish causality or
+                  whether an attempted change worked.
                 </p>
                 <form
                   class="monitoring-filters"
@@ -206,11 +340,11 @@
                     <span>Monitoring state</span>
                     <select id="fix-monitoring-filter-state">
                       <option value="">All active states</option>
-                      <option value="matching_evidence_observed">Matching evidence observed</option>
+                      <option value="matching_evidence_observed">Same finding observed later</option>
                       <option value="monitoring_incomplete">Monitoring incomplete</option>
-                      <option value="awaiting_later_evidence">Awaiting later evidence</option>
-                      <option value="no_later_match_observed">No later exact match observed</option>
-                      <option value="comparison_unavailable">Comparison unavailable</option>
+                      <option value="awaiting_later_evidence">Waiting for later sessions</option>
+                      <option value="no_later_match_observed">No later matching evidence</option>
+                      <option value="comparison_unavailable">Later sessions cannot be compared</option>
                       <option value="retracted">Retracted</option>
                     </select>
                   </label>
@@ -225,7 +359,7 @@
                       <option value="environment_change">Environment change</option>
                       <option value="agent_instruction">Agent instruction</option>
                       <option value="project_rule">Project rule</option>
-                      <option value="monitor_hook">Monitor hook</option>
+                      <option value="monitor_hook">Agent monitoring setup</option>
                       <option value="other">Other</option>
                     </select>
                   </label>
@@ -241,14 +375,14 @@
                     </select>
                   </label>
                   <label>
-                    <span>Harness</span>
+                    <span>Agent name</span>
                     <input
                       id="fix-monitoring-filter-harness"
                       type="text"
                       maxlength="128"
                       autocomplete="off"
                       spellcheck="false"
-                      placeholder="Exact harness"
+                      placeholder="Exact agent name"
                     >
                   </label>
                   <label>
@@ -332,8 +466,8 @@
               >
                 <div class="attention-section-heading">
                   <div>
-                    <p class="eyebrow">Stable signals</p>
-                    <h2 id="stable-issues-heading">Supported signals</h2>
+                    <p class="eyebrow">Stable findings</p>
+                    <h2 id="stable-issues-heading">Findings</h2>
                   </div>
                   <span class="count-pill" id="issue-count">—</span>
                 </div>
@@ -341,17 +475,17 @@
                 <div class="issue-list" id="issue-list" aria-live="polite"></div>
                 <div class="panel-state compact-state" id="issues-loading">
                   <span class="spinner" aria-hidden="true"></span>
-                  <p>Loading supported signals…</p>
+                  <p>Loading findings…</p>
                 </div>
                 <div class="panel-state compact-state" id="issues-empty" hidden>
                   <span class="empty-glyph" aria-hidden="true">◇</span>
-                  <p id="issues-empty-title">No supported signals available</p>
+                  <p id="issues-empty-title">No findings available</p>
                   <small id="issues-empty-detail"></small>
                 </div>
                 <div class="pagination-bar" id="issues-pagination" hidden>
                   <p id="issues-page-status"></p>
                   <button id="issues-load-more" type="button">
-                    Load more signal families
+                    Load more findings
                   </button>
                 </div>
               </section>
@@ -369,8 +503,8 @@
                   <span class="count-pill" id="evidence-gap-count">—</span>
                 </div>
                 <p class="section-disclosure">
-                  Missing verification evidence is shown separately from issue
-                  claims.
+                  Sessions where Belay did not see expected verification are
+                  listed separately from other findings.
                 </p>
                 <div
                   class="issue-list"
@@ -418,13 +552,11 @@
                 <span></span>
                 <span></span>
               </div>
-              <p class="eyebrow">Evidence first</p>
-              <h2>Select a signal to inspect exact matching sessions</h2>
+              <p class="eyebrow">Findings and evidence gaps</p>
+              <h2>Choose something Belay found</h2>
               <p>
-                Belay groups supported deterministic signals from retained
-                Local evidence. A family may contain unrelated sessions or
-                projects and does not establish recurrence, one cause, or
-                whether a fix worked.
+                Review why it may matter, what to do next, and the sessions
+                that support it.
               </p>
             </div>
 
@@ -439,8 +571,8 @@
                   ←
                 </button>
                 <div>
-                  <p class="eyebrow">Signal family</p>
-                  <h2 id="family-detail-heading" tabindex="-1">Supported signal</h2>
+                  <p class="eyebrow">Finding</p>
+                  <h2 id="family-detail-heading" tabindex="-1">Finding</h2>
                   <div class="issue-detail-badges" id="family-detail-badges"></div>
                 </div>
               </header>
@@ -451,7 +583,7 @@
                   aria-labelledby="family-observation-heading"
                 >
                   <p class="analysis-qualifier" id="family-analysis-qualifier"></p>
-                  <h3 id="family-observation-heading">What Belay observed</h3>
+                  <h3 id="family-observation-heading">Recorded activity</h3>
                   <p id="family-observation"></p>
                   <p class="section-disclosure" id="family-caveat"></p>
                   <p class="issue-next-action" id="family-next-action"></p>
@@ -463,8 +595,8 @@
                 >
                   <div class="matching-heading">
                     <div>
-                      <p class="eyebrow">Affected retained records</p>
-                      <h3 id="family-members-heading">Choose one record to inspect</h3>
+                      <p class="eyebrow">Evidence</p>
+                      <h3 id="family-members-heading">Sessions with this finding</h3>
                     </div>
                     <span class="count-pill" id="family-member-count">—</span>
                   </div>
@@ -480,7 +612,7 @@
                     hidden
                   >
                     <span class="spinner" aria-hidden="true"></span>
-                    <p>Loading affected retained records…</p>
+                    <p>Loading sessions with this finding…</p>
                   </div>
                   <div
                     class="panel-state compact-state"
@@ -488,8 +620,8 @@
                     hidden
                   >
                     <span class="empty-glyph" aria-hidden="true">◇</span>
-                    <p>No affected retained records were returned</p>
-                    <small>Refresh Attention before relying on this family.</small>
+                    <p>No sessions with this finding were returned</p>
+                    <small>Refresh Attention before relying on this result.</small>
                   </div>
                   <div
                     class="pagination-bar"
@@ -498,7 +630,7 @@
                   >
                     <p id="family-members-page-status" aria-live="polite"></p>
                     <button id="family-members-load-more" type="button">
-                      Load more affected records
+                      Load more sessions
                     </button>
                   </div>
                 </section>
@@ -551,7 +683,7 @@
                     class="section-disclosure"
                     id="issue-evidence-preview-disclosure"
                   >
-                    Loading retained cited evidence…
+                    Loading cited evidence…
                   </p>
                   <div
                     class="issue-evidence-preview-list"
@@ -575,14 +707,14 @@
                 >
                   <div class="matching-heading">
                     <div>
-                      <p class="eyebrow">Observed pattern</p>
-                      <h3 id="matching-sessions-heading">Matching sessions</h3>
+                      <p class="eyebrow">Related evidence</p>
+                      <h3 id="matching-sessions-heading">Supporting sessions</h3>
                     </div>
                     <span class="count-pill" id="occurrence-count">—</span>
                   </div>
                   <p class="section-disclosure">
-                    These sessions share the exact private fingerprint within a
-                    compatible scope. They are not semantic matches.
+                    These sessions contain evidence for the same finding under
+                    Belay's current comparison rules.
                   </p>
                   <div
                     class="occurrence-list"
@@ -617,7 +749,7 @@
                 >
                   <div class="fix-attempts-heading">
                     <div>
-                      <p class="eyebrow">Developer declarations</p>
+                      <p class="eyebrow">Changes you recorded</p>
                       <h3 id="fix-attempts-heading">Fix attempts</h3>
                     </div>
                     <button
@@ -630,9 +762,9 @@
                     </button>
                   </div>
                   <p class="fix-recurrence-disclosure">
-                    Belay compares later retained Local analysis using exact
-                    private fingerprints. It does not verify resolution or
-                    establish that an attempted change caused an outcome.
+                    Belay compares later local analysis for the same finding.
+                    It does not verify resolution or establish that an
+                    attempted change caused an outcome.
                   </p>
                   <p
                     class="monitoring-status"
@@ -647,7 +779,7 @@
                     role="status"
                     aria-live="polite"
                   >
-                    Checking whether this issue can anchor a declaration…
+                    Checking whether an attempt can be recorded for this finding…
                   </p>
                   <div
                     class="fix-action-status"
@@ -676,7 +808,7 @@
                     hidden
                   >
                     <span class="empty-glyph" aria-hidden="true">◇</span>
-                    <p>No fix-attempt declarations recorded</p>
+                    <p>No change attempts recorded</p>
                     <small>
                       Recording is optional and does not verify an outcome.
                     </small>
@@ -706,7 +838,7 @@
                     aria-labelledby="fingerprint-heading"
                   >
                     <div>
-                      <h3 id="fingerprint-heading">Opaque exact-match identifier</h3>
+                      <h3 id="fingerprint-heading">Exact-match ID</h3>
                       <code id="issue-fingerprint"></code>
                     </div>
                     <button id="copy-issue-fingerprint" type="button">Copy</button>
@@ -742,21 +874,24 @@
                 <dd id="overview-finding-count">—</dd>
               </div>
             </dl>
-            <p id="overview-harnesses">Harness coverage unavailable</p>
-            <p id="overview-freshness">Data freshness unavailable</p>
+            <p id="overview-harnesses">Agent activity unavailable</p>
+            <p id="overview-freshness">
+              Last retained data received by Belay · Unavailable
+            </p>
             <p class="overview-explanation">
-              <strong>Reconstructed</strong> sessions come from imported local
-              history. <strong>Live</strong> sessions arrive through enabled hooks.
+              <strong>Imported history</strong> sessions were discovered from
+              prior local agent activity. <strong>Live</strong> sessions arrive
+              through enabled hooks.
             </p>
           </section>
 
           <label class="search-field">
             <span class="search-icon" aria-hidden="true">⌕</span>
-            <span class="sr-only">Search by session ID or harness</span>
+            <span class="sr-only">Search by session ID or agent name</span>
             <input
               id="session-search"
               type="search"
-              placeholder="Search session ID or harness"
+              placeholder="Search session ID or agent name"
               maxlength="128"
               autocomplete="off"
               spellcheck="false"
@@ -765,25 +900,25 @@
 
           <div class="filter-grid" aria-label="Filter sessions">
             <label>
-              <span>Harness</span>
+              <span>Agent</span>
               <select id="filter-harness">
-                <option value="">All harnesses</option>
+                <option value="">All agents</option>
               </select>
             </label>
             <label>
-              <span>Capture</span>
+              <span>Collection</span>
               <select id="filter-capture">
-                <option value="">Live + reconstructed</option>
+                <option value="">Live + imported history</option>
                 <option value="live">Live</option>
-                <option value="historical">Reconstructed</option>
+                <option value="historical">Imported history</option>
               </select>
             </label>
             <label>
               <span>Outcome</span>
               <select id="filter-outcome">
-                <option value="">Any availability</option>
-                <option value="reported">Explicitly reported</option>
-                <option value="unavailable">Unavailable</option>
+                <option value="">Any outcome</option>
+                <option value="reported">Outcome reported</option>
+                <option value="unavailable">Outcome not reported</option>
               </select>
             </label>
             <label>
@@ -830,8 +965,8 @@
             <p class="eyebrow">Your agents, one timeline</p>
             <h2>Select a session to inspect its activity</h2>
             <p>
-              Belay reconstructs minimized events from your local development
-              harnesses without showing prompts, completions, or file contents.
+              Belay shows minimized events from your local agent activity
+              without showing prompt text, response text, or file contents.
             </p>
           </div>
 
@@ -852,7 +987,7 @@
                     <h2 id="selected-harness" tabindex="-1">Session</h2>
                     <span class="status-badge" id="selected-outcome"></span>
                     <span class="meta-badge" id="selected-historical" hidden>
-                      Reconstructed
+                      Imported history
                     </span>
                   </div>
                   <div class="selected-id-line">
@@ -878,6 +1013,35 @@
               </dl>
             </header>
 
+            <section
+              class="session-diagnosis"
+              id="session-diagnosis"
+              aria-labelledby="session-diagnosis-heading"
+              hidden
+            >
+              <div class="session-diagnosis-heading">
+                <div>
+                  <p class="eyebrow">Session diagnosis</p>
+                  <h3 id="session-diagnosis-heading" tabindex="-1">
+                    What deserves review
+                  </h3>
+                </div>
+                <span class="meta-badge" id="session-diagnosis-status"></span>
+              </div>
+              <div class="session-diagnosis-summary">
+                <strong id="session-diagnosis-title"></strong>
+                <p id="session-diagnosis-detail"></p>
+              </div>
+              <div
+                class="session-diagnosis-actions"
+                id="session-diagnosis-actions"
+              ></div>
+              <ul
+                class="session-diagnosis-limitations"
+                id="session-diagnosis-limitations"
+              ></ul>
+            </section>
+
             <details
               class="session-overview"
               id="session-overview"
@@ -886,16 +1050,16 @@
             >
               <summary class="section-heading">
                 <span>
-                  <span class="eyebrow overview-eyebrow">Deterministic overview</span>
-                  <strong id="session-overview-title">What Belay observed</strong>
+                  <span class="eyebrow overview-eyebrow">Session overview</span>
+                  <strong id="session-overview-title">Recorded activity</strong>
                 </span>
                 <span class="overview-state" id="overview-state">
-                  Loading full-session overview…
+                  Loading the complete session summary…
                 </span>
               </summary>
               <div class="overview-body">
                 <section class="story-section story-attention" aria-labelledby="needs-attention-heading">
-                  <h4 id="needs-attention-heading">Needs attention</h4>
+                  <h4 id="needs-attention-heading">Notable findings</h4>
                   <div id="needs-attention-summary"></div>
                   <div class="finding-list" id="finding-list"></div>
                   <div
@@ -910,18 +1074,18 @@
                   </div>
                 </section>
                 <section class="story-section" aria-labelledby="observed-work-heading">
-                  <h4 id="observed-work-heading">Work observed</h4>
+                  <h4 id="observed-work-heading">Recorded activity</h4>
                   <div id="observed-work-summary"></div>
                 </section>
                 <section class="story-section" aria-labelledby="highlights-heading">
-                  <h4 id="highlights-heading">Key sequence</h4>
+                  <h4 id="highlights-heading">Selected notable events</h4>
                   <p class="overview-caveat">
-                    Highlights from the currently loaded retained events.
+                    Up to five notable events from the loaded timeline.
                   </p>
                   <ol class="session-highlights" id="session-highlights"></ol>
                 </section>
                 <section class="story-section" aria-labelledby="resources-heading">
-                  <h4 id="resources-heading">Resources touched</h4>
+                  <h4 id="resources-heading">Referenced resources</h4>
                   <div class="resource-list" id="resource-list"></div>
                   <p class="overview-caveat" id="resource-disclosure"></p>
                 </section>
@@ -945,7 +1109,7 @@
                   type="button"
                   aria-pressed="false"
                 >
-                  All events
+                  All loaded events
                 </button>
                 <span class="privacy-label">Minimized metadata</span>
               </div>
@@ -957,7 +1121,7 @@
 
               <div class="panel-state timeline-loading" id="timeline-loading" hidden>
                 <span class="spinner" aria-hidden="true"></span>
-                <p>Loading first timeline page…</p>
+                <p>Loading timeline…</p>
               </div>
 
               <div class="panel-state" id="events-empty" hidden>
@@ -997,7 +1161,7 @@
       >
         <header class="modal-header">
           <div>
-            <p class="eyebrow">Private Local declaration</p>
+            <p class="eyebrow">Private change record</p>
             <h2 id="fix-attempt-dialog-title">Record fix attempt</h2>
           </div>
           <button
@@ -1011,12 +1175,12 @@
         </header>
         <div class="modal-scroll">
           <p id="fix-attempt-dialog-description">
-            Records your declaration that you attempted an external change.
-            Belay cannot verify the change or its effect.
+            Records that you attempted an external change. Belay cannot verify
+            the change or its effect.
           </p>
           <p class="fix-recurrence-disclosure">
-            Belay may monitor later exact matching evidence locally. This does
-            not verify the attempted change or establish causality.
+            Belay may check later local activity for the same finding. This
+            does not verify the attempted change or establish causality.
           </p>
           <div
             class="modal-alert"
@@ -1035,17 +1199,17 @@
             <div class="choice-list" id="fix-category-options"></div>
           </fieldset>
           <div class="draft-recovery" id="fix-draft-recovery" hidden>
-            <strong>Unresolved submission retained</strong>
+            <strong>Previous submission not confirmed</strong>
             <p>
-              Retrying uses the same private idempotency key. Abandon it
-              explicitly before changing category or starting a new attempt.
+              Retry it unchanged, or abandon it before changing the category
+              or starting a new attempt.
             </p>
             <button
               class="secondary-button"
               id="abandon-fix-draft"
               type="button"
             >
-              Abandon unresolved submission
+              Discard pending submission
             </button>
           </div>
         </div>
@@ -1062,7 +1226,7 @@
             id="fix-attempt-confirm"
             type="button"
           >
-            Record declaration
+              Record attempt
           </button>
         </footer>
       </section>
@@ -1080,8 +1244,8 @@
       >
         <header class="modal-header">
           <div>
-            <p class="eyebrow">Append-only correction</p>
-            <h2 id="fix-retraction-dialog-title">Retract fix attempt</h2>
+            <p class="eyebrow">Correct attempt history</p>
+            <h2 id="fix-retraction-dialog-title">Retract attempt record</h2>
           </div>
           <button
             class="modal-close"
@@ -1094,9 +1258,9 @@
         </header>
         <div class="modal-scroll">
           <p id="fix-retraction-dialog-description">
-            Retraction preserves the original declaration in history and
-            excludes it from active monitoring. Previously recorded matching
-            evidence remains visible.
+            Retraction keeps the original attempt in history and stops active
+            monitoring for it. Previously recorded matching evidence remains
+            visible.
           </p>
           <div
             class="modal-alert"
@@ -1111,17 +1275,16 @@
             <div class="choice-list" id="fix-retraction-options"></div>
           </fieldset>
           <div class="draft-recovery" id="fix-retraction-recovery" hidden>
-            <strong>Unresolved retraction retained</strong>
+            <strong>Previous retraction not confirmed</strong>
             <p>
-              Retrying uses the same private idempotency key. Abandon it
-              explicitly before changing the reason.
+              Retry it unchanged, or abandon it before changing the reason.
             </p>
             <button
               class="secondary-button"
               id="abandon-fix-retraction"
               type="button"
             >
-              Abandon unresolved retraction
+              Discard pending retraction
             </button>
           </div>
         </div>
@@ -1138,7 +1301,7 @@
             id="fix-retraction-confirm"
             type="button"
           >
-            Retract declaration
+              Retract attempt record
           </button>
         </footer>
       </section>

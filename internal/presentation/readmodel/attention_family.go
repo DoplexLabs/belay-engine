@@ -72,6 +72,7 @@ type AttentionFamilySummary struct {
 	Experimental          bool                             `json:"experimental"`
 	Catalog               AttentionFamilyCatalogMetadata   `json:"catalog"`
 	ViewCursor            string                           `json:"view_cursor"`
+	CatalogStatus         string                           `json:"-"`
 }
 
 type AttentionFamilyList struct {
@@ -87,9 +88,16 @@ type AttentionFamilyList struct {
 }
 
 type AttentionFamilyMember struct {
-	Issue      model.IssueSummary   `json:"issue"`
-	Catalog    IssueCatalogMetadata `json:"catalog"`
-	ViewCursor string               `json:"view_cursor"`
+	Issue               model.IssueSummary   `json:"issue"`
+	Catalog             IssueCatalogMetadata `json:"catalog"`
+	SessionID           string               `json:"session_id"`
+	SessionSelection    string               `json:"session_selection"`
+	SessionStartedAt    *time.Time           `json:"session_started_at"`
+	SessionLastActiveAt *time.Time           `json:"session_last_active_at"`
+	CitedEventCount     int                  `json:"cited_event_count"`
+	EvidenceFirstAt     *time.Time           `json:"evidence_first_at"`
+	EvidenceLastAt      *time.Time           `json:"evidence_last_at"`
+	ViewCursor          string               `json:"view_cursor"`
 }
 
 type AttentionFamilyDetailData struct {
@@ -396,7 +404,12 @@ func (s *Service) GetAttentionFamily(
 	members, hasMore := boundedAttentionFamilyMembers(page.Data, limit, page.HasMore)
 	presentedMembers := make([]AttentionFamilyMember, 0, len(members))
 	for _, member := range members {
-		normalizeIssueSummary(&member)
+		if strings.TrimSpace(member.SessionKey) == "" ||
+			member.SessionSelection != model.AttentionFamilyMemberSessionSelectionLatest ||
+			member.CitedEventCount < 0 {
+			return AttentionFamilyDetail{}, errors.New("family repository returned invalid member context")
+		}
+		normalizeIssueSummary(&member.IssueSummary)
 		viewCursor, err := s.sealExactIssueViewCursor(
 			page.CursorEpoch,
 			page.Snapshot,
@@ -407,9 +420,16 @@ func (s *Service) GetAttentionFamily(
 			return AttentionFamilyDetail{}, err
 		}
 		presentedMembers = append(presentedMembers, AttentionFamilyMember{
-			Issue:      member,
-			Catalog:    issueCatalog(member),
-			ViewCursor: viewCursor,
+			Issue:               member.IssueSummary,
+			Catalog:             issueCatalog(member.IssueSummary),
+			SessionID:           member.SessionKey,
+			SessionSelection:    member.SessionSelection,
+			SessionStartedAt:    utcTime(member.SessionStartedAt),
+			SessionLastActiveAt: utcTime(member.SessionLastActiveAt),
+			CitedEventCount:     member.CitedEventCount,
+			EvidenceFirstAt:     utcTime(member.EvidenceFirstAt),
+			EvidenceLastAt:      utcTime(member.EvidenceLastAt),
+			ViewCursor:          viewCursor,
 		})
 	}
 	family, err := s.presentAttentionFamily(
@@ -468,13 +488,15 @@ func (s *Service) presentAttentionFamily(
 		return AttentionFamilySummary{}, errors.New("family repository returned invalid summary")
 	}
 	var (
-		catalog    AttentionFamilyCatalogMetadata
-		viewCursor string
-		err        error
+		catalog       AttentionFamilyCatalogMetadata
+		catalogStatus string
+		viewCursor    string
+		err           error
 	)
 	switch family.Kind {
 	case model.AttentionFamilyKindExactIssue:
 		issueMetadata := issueCatalog(family.Representative)
+		catalogStatus = issueMetadata.CatalogStatus
 		catalog = AttentionFamilyCatalogMetadata{
 			CatalogVersion:       issueMetadata.CatalogVersion,
 			GroupingVersion:      family.GroupingVersion,
@@ -490,6 +512,7 @@ func (s *Service) presentAttentionFamily(
 			page.IssuedAt,
 		)
 	case model.AttentionFamilyKindMappedUpstream:
+		catalogStatus = "known"
 		mapping, ok := sourcecatalog.MappingByKey(
 			family.MappingKey,
 			family.MappingVersion,
@@ -547,6 +570,7 @@ func (s *Service) presentAttentionFamily(
 		Experimental:          family.Experimental,
 		Catalog:               catalog,
 		ViewCursor:            viewCursor,
+		CatalogStatus:         catalogStatus,
 	}, nil
 }
 
@@ -609,7 +633,7 @@ func (s *Service) attentionFamilyNextCursor(
 }
 
 func (s *Service) attentionFamilyMemberNextCursor(
-	data []model.IssueSummary,
+	data []model.AttentionFamilyMemberRecord,
 	hasMore bool,
 	limit int,
 	family model.AttentionFamilySummary,
@@ -731,10 +755,10 @@ func boundedAttentionFamilyPage(
 }
 
 func boundedAttentionFamilyMembers(
-	data []model.IssueSummary,
+	data []model.AttentionFamilyMemberRecord,
 	limit int,
 	repositoryHasMore bool,
-) ([]model.IssueSummary, bool) {
+) ([]model.AttentionFamilyMemberRecord, bool) {
 	if len(data) > limit {
 		return data[:limit], true
 	}

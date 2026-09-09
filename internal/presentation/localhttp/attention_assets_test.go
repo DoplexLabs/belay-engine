@@ -28,7 +28,7 @@ func TestAttentionBrowserShellContract(t *testing.T) {
 		`id="findings-load-more"`,
 		`id="attention-refresh-notice"`,
 		`aria-live="polite"`,
-		`Include experimental signals`,
+		`Include experimental findings`,
 		`Precision is still being validated.`,
 	} {
 		if !strings.Contains(index, required) {
@@ -52,27 +52,27 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 	catalog := map[string][]string{
 		"issue.explicit_command_failure": {
 			"Command failed",
-			"The source explicitly reported a failed command result.",
+			"The agent reported that a command failed.",
 		},
 		"issue.repeated_command_attempts": {
 			"Command repeatedly attempted",
-			"The same private command signature was observed multiple times in one bounded interval.",
+			"Belay recorded the same minimized command pattern several times close together.",
 		},
 		"issue.explicit_permission_denial": {
 			"Permission denied",
-			"The source explicitly reported a denied permission event.",
+			"The agent reported that a permission request was denied.",
 		},
 		"issue.verification_not_observed": {
-			"Verification evidence not observed",
-			"A supported live session ended without the required verification evidence.",
+			"No recognized verification command observed",
+			"After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
 		},
 		"issue.unresolved_verification_failure_at_completion": {
 			"Verification still failed at session end",
 			"A verification command explicitly failed and no later successful verification was observed before session end.",
 		},
 		"issue.numbat_finding": {
-			"Upstream Numbat finding",
-			"A configured Numbat rule reported retained evidence.",
+			"Imported finding without an explanation",
+			"Belay stored an imported finding, but no reviewed Belay explanation is available for it.",
 		},
 	}
 	for code, values := range catalog {
@@ -108,15 +108,15 @@ func TestAttentionBrowserFrozenContract(t *testing.T) {
 		`return /^[a-z0-9_]{1,64}$/.test(code)`,
 		`return "Evidence completeness is unavailable.";`,
 		`: "unknown";`,
-		`pending: "Prior retained result while reanalysis is pending."`,
-		`failed: "Prior retained result; the latest analysis failed."`,
-		`truncated: "Partial analysis; additional signals may be absent."`,
-		`"Analysis status is unavailable; result freshness and completeness are uncertain."`,
+		`"This result may be out of date while Belay analyzes the session again."`,
+		`failed: "Belay could not refresh this result; it may be out of date."`,
+		`"Only part of the session was analyzed; other findings may be missing."`,
+		`"Belay cannot confirm whether this result is current or complete."`,
 		`return "Analysis status unavailable";`,
 		`return "Session count unavailable";`,
-		`"No supported signals match these filters"`,
-		`"No supported signals were reported in completed retained analysis"`,
-		`"No supported signals are available from completed analysis"`,
+		`"No findings match these filters"`,
+		`"No findings were reported in completed local analysis"`,
+		`"No findings are available from completed analysis"`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("Attention browser data contract is missing %q", required)
@@ -147,7 +147,9 @@ func TestAttentionBrowserAccessibilityAndSafeRendering(t *testing.T) {
 		`element.closest('[aria-hidden="true"]')`,
 		`if (current.inert === true) return false;`,
 		`focusCurrentElement(resolveFocusReference(reference))`,
-		`restoreLogicalFocus(returnFocus, elements.navAttention);`,
+		`returnToBrief`,
+		`elements.briefHeading`,
+		`elements.navAttention`,
 		`inspect.setAttribute("aria-expanded", "false");`,
 		`severity.dataset.tone = severityTone(issue.severity);`,
 		`["critical", "high", "medium", "low", "info"].includes(severity)`,
@@ -232,8 +234,8 @@ func TestAttentionRefreshClosesStaleDetailAndConfirmsCurrentChain(t *testing.T) 
 		`if (!summary) {`,
 		`detailReady = await selectAttentionFamily(summary, false);`,
 		`detailReady = await selectIssue(`,
-		`the selected affected record was not found within the previously loaded bounded pages`,
-		`the selected affected record is no longer visible in this family`,
+		`the selected item was not found in the sessions currently loaded`,
+		`the selected finding is no longer visible in this group`,
 		`if (!detailReady) {`,
 		`selected detail is hidden until current data confirms it.`,
 	} {
@@ -290,8 +292,8 @@ func TestAttentionFamilyCoverageFiltersAndBoundedChildRestoration(t *testing.T) 
 		}
 	}
 	for _, required := range []string{
-		`Displayed family and evidence-gap counts match the active filters.`,
-		`Analysis coverage remains global for the frozen retained snapshot.`,
+		`Displayed finding and evidence-gap counts match the active filters.`,
+		`The analysis summary still covers all stored sessions in this saved view.`,
 	} {
 		if !strings.Contains(filters, required) {
 			t.Errorf("filtered family count disclosure is missing %q", required)
@@ -322,10 +324,10 @@ func TestCursorRefreshNoticeWaitsForRequiredReads(t *testing.T) {
 	)
 
 	for _, required := range []string{
-		`"The issue view changed. Refreshing both Attention lists from a current snapshot…"`,
+		`"The finding view changed. Refreshing Attention with current data…"`,
 		`const refreshed = await refreshAttention(false, true);`,
 		`if (refreshed) {`,
-		`"Attention refreshed from a current snapshot."`,
+		`"Attention refreshed with current data."`,
 		`"Attention refresh failed. Retry before relying on the issue lists."`,
 	} {
 		if !strings.Contains(refresh, required) {
@@ -333,7 +335,7 @@ func TestCursorRefreshNoticeWaitsForRequiredReads(t *testing.T) {
 		}
 	}
 	awaitIndex := strings.Index(refresh, "await refreshAttention(false, true)")
-	successIndex := strings.Index(refresh, `"Attention refreshed from a current snapshot."`)
+	successIndex := strings.Index(refresh, `"Attention refreshed with current data."`)
 	if awaitIndex < 0 || successIndex < 0 || successIndex < awaitIndex {
 		t.Error("cursor refresh reports success before required reads complete")
 	}
@@ -448,13 +450,34 @@ func TestAttentionFamilyBrowserListDetailAndExactChildContract(t *testing.T) {
 		`state.familyMemberHasMore`,
 		`source: "family"`,
 		`returnFocus: { type: "family-member", key }`,
-		`Grouped by one known signal type.`,
-		`do not establish recurrence or one cause`,
+		`const catalog = isRecord(family.catalog) ? family.catalog : {};`,
+		`with this finding`,
+		`cited_event_count`,
+		`session_selection`,
+		`latest_matching_session`,
+		`session_started_at`,
+		`session_last_active_at`,
+		`evidence_first_at`,
+		`evidence_last_at`,
+		`Belay grouped these records because the same permission-mode finding appeared. The sessions may be unrelated.`,
+		`Sessions with this finding could not be loaded. Refresh Attention and try again.`,
 		`clearAttentionFamilyDetailState();`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("Attention family browser contract is missing %q", required)
 		}
+	}
+	if strings.Contains(app, "function attentionFamilyCatalog(") {
+		t.Error("browser overrides the authoritative backend family catalog")
+	}
+	familyLoad := browserSourceBlock(
+		t,
+		app,
+		"  async function loadAttentionFamilyDetail(append) {",
+		"  function requireAttentionFamilyMember(member) {",
+	)
+	if strings.Contains(familyLoad, "error.message") {
+		t.Error("family detail exposes raw API/cursor/snapshot errors")
 	}
 	for _, required := range []string{
 		`id="family-detail" hidden`,
@@ -490,9 +513,9 @@ func TestAttentionConfigAgentCopyIsScopedToMappedCitedEvidence(t *testing.T) {
 	for _, required := range []string{
 		`"config.agent": "Agent configuration observed"`,
 		`evidenceContext === "mapped-guardrail"`,
-		`? "Agent guardrail configuration observed"`,
-		`This configuration event supported the safety-confirmation signal.`,
-		`Configuration metadata was reported by the source.`,
+		`? "Fewer approval prompts enabled"`,
+		`Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time.`,
+		`Agent configuration metadata was reported.`,
 		`createLookupEvent(event, state.selectedIssueEvidenceContext)`,
 		`attention.agent_guardrails_configuration`,
 		`sourceSignalCode === "tamper.guardrails_off"`,
@@ -501,8 +524,9 @@ func TestAttentionConfigAgentCopyIsScopedToMappedCitedEvidence(t *testing.T) {
 			t.Errorf("contextual config.agent presentation is missing %q", required)
 		}
 	}
-	if !strings.Contains(descriptor, `type === "config.agent" && evidenceContext === "mapped-guardrail"`) {
-		t.Error("guardrail copy is not gated by both event type and mapped issue context")
+	if !strings.Contains(descriptor, `["config.agent", "session.start"].includes(type) &&`) ||
+		!strings.Contains(descriptor, `evidenceContext === "mapped-guardrail"`) {
+		t.Error("reduced-approval copy is not gated by cited event type and finding context")
 	}
 	genericTimeline := browserSourceBlock(
 		t,
@@ -514,7 +538,304 @@ func TestAttentionConfigAgentCopyIsScopedToMappedCitedEvidence(t *testing.T) {
 		t.Error("generic session timeline no longer uses the neutral event descriptor")
 	}
 	if strings.Contains(genericTimeline, "mapped-guardrail") {
-		t.Error("generic session timeline opts into mapped guardrail evidence copy")
+		t.Error("generic session timeline opts into reduced-approval evidence copy")
+	}
+}
+
+func TestReducedApprovalFindingUsesPlainCustomerCopy(t *testing.T) {
+	index := readBrowserAsset(t, "assets/index.html")
+	app := readBrowserAsset(t, "assets/app.js")
+
+	for _, required := range []string{
+		`title: "Fewer approval prompts enabled"`,
+		`Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time.`,
+		`This setting may be intentional. The record does not show whether an action bypassed a prompt or caused harm.`,
+		`Review the current agent permission mode. If this was intentional, no change may be needed.`,
+		`"Fewer approval prompts enabled"`,
+		`elements.issueTechnicalDetails.hidden =`,
+		`reducedApprovalMode || historyOnly || currentProjectionPending`,
+		`elements.fixAttemptsSection.hidden = true;`,
+		`elements.recordFixAttempt.hidden = true;`,
+		`function consolidateSessionFindings(findings)`,
+		`new Set(`,
+		`group.cited_event_ids.concat(findingEventIDs(finding))`,
+		`evidence_first_at`,
+		`evidence_last_at`,
+		`additional imported`,
+		`hidden because Belay does not yet have a clear explanation`,
+		`Outcome not reported`,
+		`Imported history`,
+	} {
+		if !strings.Contains(app+index, required) {
+			t.Errorf("plain-language finding contract is missing %q", required)
+		}
+	}
+
+	member := browserSourceBlock(
+		t,
+		app,
+		"  function createAttentionFamilyMember(member) {",
+		"  function attentionEvidenceWindow(member) {",
+	)
+	for _, required := range []string{
+		`session_started_at`,
+		`session_last_active_at`,
+		`session_selection`,
+		`latest_matching_session`,
+		`Latest of ${formatNumber(issueSessionCount)} matching sessions`,
+		`Session start unavailable`,
+		`cited_event_count`,
+		`cited ${`,
+	} {
+		if !strings.Contains(member, required) {
+			t.Errorf("family member presentation is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`compactID(sessionID)`,
+		`Session identifier unavailable`,
+		`issue.first_observed_at`,
+		`operator choice`,
+	} {
+		if strings.Contains(member, forbidden) {
+			t.Errorf("family member exposes customer-irrelevant identifier copy %q", forbidden)
+		}
+	}
+
+	metadata := browserSourceBlock(
+		t,
+		app,
+		"  function renderIssueMetadata(issue) {",
+		"  function issueSourceLabel(value) {",
+	)
+	if !strings.Contains(metadata, `isReducedApprovalIssueContext(issue, state.selectedIssueCatalog)`) ||
+		!strings.Contains(metadata, `elements.issueMetadata.replaceChildren();`) {
+		t.Error("reduced-approval detail does not clear technical metadata")
+	}
+	for _, forbidden := range []string{`Source rule ID`, `source_signal_code`} {
+		if strings.Contains(metadata, forbidden) {
+			t.Errorf("reduced-approval detail metadata retains %q", forbidden)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"Safety confirmations may be turned off",
+		"Agent guardrail configuration observed",
+		"Configured Numbat rule finding",
+		"Source rule ID ·",
+		"Deterministic signals",
+		"Outcome unavailable",
+		"Reconstructed",
+		"Opaque exact-match identifier",
+	} {
+		if strings.Contains(app, forbidden) || strings.Contains(index, forbidden) {
+			t.Errorf("browser retains prohibited customer copy %q", forbidden)
+		}
+	}
+}
+
+func TestBrowserClarityDefaultSurfaceAndSafeErrors(t *testing.T) {
+	index := readBrowserAsset(t, "assets/index.html")
+	app := readBrowserAsset(t, "assets/app.js")
+
+	for _, required := range []string{
+		`<span>Agent name</span>`,
+		`placeholder="Exact agent name"`,
+		`placeholder="Search session ID or agent name"`,
+		`<span>Agent</span>`,
+		`<option value="">All agents</option>`,
+		`<span>Collection</span>`,
+		`<option value="">Live + imported history</option>`,
+		`<option value="">Any outcome</option>`,
+		`<option value="reported">Outcome reported</option>`,
+		`<option value="unavailable">Outcome not reported</option>`,
+		`Session overview`,
+		`Recorded activity`,
+		`Notable findings`,
+		`Selected notable events`,
+		`Up to five notable events from the loaded timeline.`,
+		`Referenced resources`,
+		`All loaded events`,
+		`Private change record`,
+		`Changes you recorded`,
+		`Correct attempt history`,
+		`Retract attempt record`,
+		`Include experimental findings`,
+		`Showing reviewed findings.`,
+		`Follow-up evidence`,
+		`Same finding observed later`,
+		`Waiting for later sessions`,
+		`Later sessions cannot be compared`,
+		`Agent monitoring setup`,
+		`Sessions where Belay did not see expected verification are`,
+		`listed separately from other findings.`,
+		`Findings and evidence gaps`,
+		`Exact-match ID`,
+		`Loading timeline…`,
+		`Discard pending submission`,
+		`Discard pending retraction`,
+	} {
+		if !strings.Contains(index, required) {
+			t.Errorf("plain default browser surface is missing %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		`"Minimized summary"`,
+		`"Detected secrets removed"`,
+		`"Collection detail"`,
+		`function collectionDetailLabel(value)`,
+		`"Imported activity metadata"`,
+		`"Live agent activity"`,
+		`"Tool-call activity"`,
+		`"Tracing activity"`,
+		`"Activity metadata"`,
+		`"Complete session summary"`,
+		`Partial session summary ·`,
+		`"Loading the complete session summary; counts below use the events loaded so far."`,
+		`"More findings are available. Use Load more to view them."`,
+		`"Belay recorded a finding that does not yet have a plain-language explanation."`,
+		`Last retained data received by Belay`,
+		`User input recorded — content not retained`,
+		`Assistant response recorded — content not retained`,
+		`Reasoning started — content not retained`,
+		`Reasoning ended — content not retained`,
+		`notable loaded events`,
+		`lower-priority lifecycle events hidden`,
+		`This page was not opened from a valid Belay Local link. Reopen it using the URL printed by belay local.`,
+		`Imported finding without an explanation`,
+		`no reviewed Belay explanation is available for it`,
+		`"Fewer approval prompts enabled"`,
+		`"Project identified"`,
+		`"Project not identified"`,
+		`"Project information conflicts"`,
+		`return "Unavailable";`,
+		`? "Imported local check"`,
+		`"Load more sessions before treating this outcome filter as complete."`,
+		`"Filters were applied across all stored sessions."`,
+		`"Showing recent sessions. Load more to see older sessions."`,
+		`"History source", "Imported history"`,
+		`"No cited events were provided for this finding."`,
+		`"The cited events are no longer stored."`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("plain browser behavior is missing %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		">Harness<",
+		">Capture<",
+		"All harnesses",
+		"Deterministic overview",
+		"What Belay observed",
+		"Needs attention",
+		"Work observed",
+		"Key sequence",
+		"Resources touched",
+		"Belay reconstructs",
+		">All events<",
+		"Developer declarations",
+		"Private Local declaration",
+		"Record declaration",
+		"Append-only correction",
+		"Retract declaration",
+	} {
+		if strings.Contains(index, forbidden) {
+			t.Errorf("default browser surface retains jargon %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		`"Safe summary"`,
+		`"Secrets removed"`,
+		`"Data current `,
+		`signal events`,
+		`repetitive lifecycle events`,
+		`configured checks`,
+		`API projection`,
+		`salient resources`,
+		`exact active state`,
+		`payload-free monitoring metadata`,
+		`A local check reported activity that Belay can explain.`,
+		`"Capture depth"`,
+		`"Full-session metadata"`,
+		`Partial overview ·`,
+		`"Loading full-session overview`,
+		`More findings are available through explicit pagination.`,
+		`A configured Belay check reported local evidence.`,
+		`No evidence gaps reported by configured detectors`,
+		`private command signature`,
+		`The source explicitly reported a failed command result.`,
+		`The source explicitly reported a denied permission event.`,
+		`This explanation comes from Belay's reviewed finding descriptions`,
+		`Reduced-approval permission mode used`,
+		`Reduced-approval permission mode observed`,
+		`Verification evidence not observed`,
+		`Prior retained result`,
+		`Partial analysis; additional signals`,
+		`Experimental signal`,
+		`Stable signals`,
+		`selected signal`,
+		`selected affected record`,
+		`Post-attempt evidence`,
+		`retained cited event ID`,
+		`No requested cited event remains in this retained session`,
+		`Outcome · Not reported by source`,
+	} {
+		if strings.Contains(app, forbidden) {
+			t.Errorf("browser-rendered copy retains jargon %q", forbidden)
+		}
+	}
+
+	issueCard := browserSourceBlock(
+		t,
+		app,
+		"  function createIssueCard(issue, kind) {",
+		"  function selectIssue(issue, kind, moveFocus, options = {}) {",
+	)
+	if strings.Contains(issueCard, `safeCatalogCode(issue.category)`) {
+		t.Error("default issue card exposes a raw category code")
+	}
+
+	detectorVersion := browserSourceBlock(
+		t,
+		app,
+		"  function detectorVersionLabel(issue) {",
+		"  function projectRelationshipLabel(value) {",
+	)
+	if strings.Contains(detectorVersion, "detector_id") ||
+		strings.Contains(detectorVersion, "Configured detector") {
+		t.Error("check version display exposes a detector identifier")
+	}
+
+	evidenceDetails := browserSourceBlock(
+		t,
+		app,
+		"  function createEvidenceDetails(event) {",
+		"  function appendEvidence(list, label, value) {",
+	)
+	if strings.Contains(evidenceDetails, "reconstruction_source") ||
+		strings.Contains(evidenceDetails, "Reconstruction") {
+		t.Error("history evidence exposes reconstruction protocol metadata")
+	}
+
+	errorPresentation := browserSourceBlock(
+		t,
+		app,
+		"  function showError(title, error) {",
+		"  function hideError() {",
+	)
+	for _, required := range []string{
+		`customerErrorMessage(`,
+		`(api|schema|cursor|snapshot|projection|uuid|idempotency|mutation|listener)`,
+		`return fallback;`,
+	} {
+		if !strings.Contains(errorPresentation, required) {
+			t.Errorf("central customer-safe error mapping is missing %q", required)
+		}
+	}
+	if strings.Contains(errorPresentation, `elements.errorDetail.textContent = error.message`) {
+		t.Error("central error banner exposes raw error text")
 	}
 }
 
@@ -535,7 +856,7 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		`id="needs-attention-summary"`,
 		`id="observed-work-summary"`,
 		`id="session-highlights"`,
-		`Highlights from the currently loaded retained events.`,
+		`Up to five notable events from the loaded timeline.`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("value-first browser shell is missing %q", required)
@@ -585,7 +906,9 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		`state.issueEvidencePreviewRequestGeneration += 1;`,
 		`state.issueEvidencePreview = createIssueEvidencePreview();`,
 		`resetIssueEvidencePreview();`,
-		`Event hydration uses current Local retention, not the frozen issue snapshot.`,
+		`No cited events were provided for this finding.`,
+		`The cited events are no longer stored.`,
+		`Some cited events are no longer stored.`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("evidence preview reset/disclosure is missing %q", required)
@@ -605,7 +928,7 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		`left.priority - right.priority || left.index - right.index`,
 		`.sort((left, right) => left.index - right.index)`,
 		`type.startsWith("command.")`,
-		`? summary || resourceName`,
+		`? commandDisplayDetail(observation)`,
 		`: resourceName || summary`,
 	} {
 		if !strings.Contains(app, required) {
@@ -624,6 +947,22 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 		t.Error("raw event type remains in the primary timeline heading")
 	}
 
+	for _, required := range []string{
+		`"command.result": "Command result"`,
+		`function commandDisplayDetail(observation)`,
+		`if (type === "command.result" && commandDisplayDetail(observation)) return 3;`,
+		`if (type === "command.result") {`,
+		`return Boolean(commandDisplayDetail(observation));`,
+		`"command completed"`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("command timeline cleanup is missing %q", required)
+		}
+	}
+	if strings.Contains(app, `"command.result": "Command completed"`) {
+		t.Error("generic Command completed remains a primary timeline label")
+	}
+
 	familyDetail := browserSourceBlock(
 		t,
 		index,
@@ -636,8 +975,8 @@ func TestValueFirstAttentionAndSessionContracts(t *testing.T) {
 
 	for _, required := range []string{
 		`"config.agent": "Agent configuration observed"`,
-		`? "Agent guardrail configuration observed"`,
-		`This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body.`,
+		`? "Fewer approval prompts enabled"`,
+		`Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time.`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("fixed config.agent presentation is missing %q", required)

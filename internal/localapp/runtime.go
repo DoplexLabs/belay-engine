@@ -96,16 +96,22 @@ func ImportLive(
 		engineVersion = numbat.ResearchCommit
 	}
 	type source struct {
+		agent  string
 		spool  string
 		cursor string
 	}
 	sources := []source{
-		{spool: paths.CodexSpool, cursor: filepath.Join(paths.Root, "live", "codex.cursor.json")},
-		{spool: paths.ClaudeSpool, cursor: filepath.Join(paths.Root, "live", "claude.cursor.json")},
+		{agent: "codex", spool: paths.CodexSpool, cursor: filepath.Join(paths.Root, "live", "codex.cursor.json")},
+		{agent: "claude", spool: paths.ClaudeSpool, cursor: filepath.Join(paths.Root, "live", "claude.cursor.json")},
 	}
 	results := make([]TailResult, 0, len(sources))
+	var importErrors []error
 	reconciler := analysis.NewReconciler(store)
 	for _, item := range sources {
+		if err := ctx.Err(); err != nil {
+			importErrors = append(importErrors, err)
+			break
+		}
 		result, err := ImportSpoolOnceAfterCheckpoint(
 			ctx,
 			item.spool,
@@ -118,15 +124,17 @@ func ImportLive(
 				_, _ = reconciler.Drain(callbackCtx)
 			},
 		)
-		if err != nil {
-			return results, err
-		}
 		results = append(results, result)
+		if err != nil {
+			importErrors = append(importErrors, fmt.Errorf("%s live import: %w", item.agent, err))
+		}
 	}
 	// Retry durable failed/pending analysis even when no spool advanced during
 	// this poll. Newly imported live work has already crossed its cursor save.
-	_, _ = reconciler.Drain(ctx)
-	return results, nil
+	if ctx.Err() == nil {
+		_, _ = reconciler.Drain(ctx)
+	}
+	return results, errors.Join(importErrors...)
 }
 
 func PollLive(

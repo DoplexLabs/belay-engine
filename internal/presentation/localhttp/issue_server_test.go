@@ -140,13 +140,37 @@ func TestIssueHTTPReturnsFixedSourceSignalCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	if detail.Catalog.CatalogVersion != readmodel.IssueCatalogVersion ||
-		detail.Catalog.DisplayTitle != "Agent safety confirmations may be disabled" ||
+		detail.Catalog.DisplayTitle != "Fewer approval prompts enabled" ||
+		detail.Catalog.ObservationStatement != "Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time." ||
+		detail.Catalog.Caveat != "This setting may be intentional. The record does not show whether an action bypassed a prompt or caused harm." ||
 		detail.Catalog.NextEvidenceAction != "review_agent_permissions" ||
 		detail.Catalog.SourceSignalCode == nil ||
 		*detail.Catalog.SourceSignalCode != sourceSignalCode ||
 		detail.Catalog.SourceSignalCatalogVersion != readmodel.SourceSignalCatalogVersion ||
 		detail.Catalog.SourceSignalCatalogStatus != "known" {
 		t.Fatalf("catalog = %+v", detail.Catalog)
+	}
+
+	unknownSourceSignalCode := "custom.imported_signal"
+	repository.issueSummary.SourceSignalCode = &unknownSourceSignalCode
+	unknownResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unknownResponse, request)
+	if unknownResponse.Code != http.StatusOK {
+		t.Fatalf("unknown status = %d body=%s", unknownResponse.Code, unknownResponse.Body.String())
+	}
+	var unknownDetail readmodel.IssueDetail
+	if err := json.NewDecoder(unknownResponse.Body).Decode(&unknownDetail); err != nil {
+		t.Fatal(err)
+	}
+	if unknownDetail.Catalog.DisplayTitle != "Imported finding—not yet explained by Belay" ||
+		unknownDetail.Catalog.ObservationStatement != "Belay retained this imported finding but does not yet have a reviewed explanation." ||
+		unknownDetail.Catalog.Caveat != "Review the cited evidence; Belay does not infer its impact or recommend a change." ||
+		unknownDetail.Catalog.SourceSignalCatalogStatus != "unknown" ||
+		unknownDetail.Catalog.SourceSignalCode == nil ||
+		*unknownDetail.Catalog.SourceSignalCode != unknownSourceSignalCode ||
+		strings.Contains(unknownDetail.Catalog.ObservationStatement, "supported signal") ||
+		unknownDetail.Catalog.NextEvidenceAction == "review_agent_permissions" {
+		t.Fatalf("unknown catalog = %+v", unknownDetail.Catalog)
 	}
 }
 
@@ -325,6 +349,8 @@ func TestIssueAndExactEventRoutesAreAuthorizedAndUseSharedContracts(t *testing.T
 		repository.occurrenceQuery.Snapshot != 31 ||
 		detail.Catalog.TitleCode != "issue.explicit_command_failure" ||
 		detail.Catalog.DisplayTitle != "Command failed" ||
+		detail.Catalog.ObservationStatement != "The agent reported that a command failed." ||
+		detail.Catalog.Caveat != "This does not identify why the command failed or whether a later attempt succeeded." ||
 		detail.Catalog.SourceSignalCode != nil ||
 		detail.Catalog.SourceSignalCatalogStatus != "not_applicable" ||
 		detail.GlobalAnalysisCoverage.CurrentSessions != 1 ||

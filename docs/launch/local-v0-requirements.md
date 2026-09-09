@@ -103,9 +103,18 @@ belay doctor
 explicit consent to initialize private Local state, verify the packaged sibling
 Numbat using the checksum and version marker embedded at build time, install
 reversible monitor-only hooks for detected Codex and Claude Code installations,
-scan supported history, start Local, print the loopback URL, and attempt to open
-the dashboard. Browser-open failure is non-fatal because the URL remains
-printed.
+safely inspect supported MCP configuration, scan supported history, start
+Local, print the loopback URL, and attempt to open the dashboard. Claude MCP
+registration may proceed automatically only when its status is safely
+understood. Normal quickstart does not add an absent Codex MCP entry. The
+explicit one-command Codex path is
+`belay quickstart --allow-codex-mcp-add`; it permits `codex mcp add` only after
+strict absence verification and accepts the CLI's non-atomic duplicate-name
+behavior. It never updates, migrates, replaces, or removes an existing Codex
+entry. A recognized prior Codex registration must be verified with
+`mcp-config status`, explicitly removed with `mcp-config uninstall`, confirmed
+absent, and then reinstalled with the opt-in command. Browser-open failure is
+non-fatal because the URL remains printed.
 
 `belay local` initializes Local state if necessary, performs a historical scan,
 imports any new live records, starts the loopback API, and prints the local URL.
@@ -432,7 +441,9 @@ without exposing browser-only fix recording or P0-04 recurrence monitoring.
 1. On a macOS account with Codex and Claude Code history, one packaged
    `belay quickstart` invocation needs no manual Numbat path or pin flags,
    discovers both harnesses, installs monitor-only hooks, and renders sessions
-   from both without an account.
+   from both without an account. Claude MCP may be configured automatically
+   when safely understood; Codex MCP requires the explicit
+   `--allow-codex-mcp-add` opt-in.
 2. Re-running the scan inserts no duplicate canonical events.
 3. With networking disabled, browser and MCP session reads still work.
 4. Explicit hook installation records a new supported agent action without

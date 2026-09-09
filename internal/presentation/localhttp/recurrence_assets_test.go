@@ -109,26 +109,26 @@ func TestRecurrenceTruthfulStatesHistoryOnlyAndScopedErrors(t *testing.T) {
 	app := readBrowserAsset(t, "assets/app.js")
 
 	for _, required := range []string{
-		"Exact matching evidence was observed after this attempt.",
+		"Same finding observed later",
 		"This does not establish causality or whether the attempted change worked.",
 		"Monitoring is incomplete.",
 		"Some later Local activity is pending, failed, truncated, or only partially analyzed.",
-		"Awaiting later evidence.",
+		"Waiting for later sessions",
 		"No comparable completed Local activity is available yet.",
-		"No later exact match was observed in retained, completed Local analysis.",
+		"No later matching evidence was observed in completed Local analysis.",
 		"This does not verify resolution.",
-		"Comparison unavailable.",
-		"The stored baseline cannot be compared under current exact-match semantics.",
-		"Retracted declaration — excluded from active monitoring.",
+		"Later sessions cannot be compared",
+		"Belay cannot compare this attempt with later activity under the current rules.",
+		"Attempt record retracted — no longer monitored.",
 		"Monitoring status unavailable.",
 		"This may be continuation within the original session.",
-		"Matching evidence was recorded before this declaration was retracted.",
-		"The current issue projection is unavailable.",
-		"Current fix eligibility and matching sessions are unavailable in history-only detail.",
-		"Payload-free monitoring metadata and positive observations may remain after cited evidence is pruned.",
+		"Matching evidence was recorded before this attempt record was retracted.",
+		"This finding is no longer in the current results.",
+		"New attempt recording and supporting sessions are unavailable because this finding is no longer current.",
+		"Attempt dates and matching-event counts may remain even if cited events are later removed.",
 		"belay.local/monitoring-catchup-in-progress",
 		"belay.local/monitoring-catchup-failed",
-		"This monitoring view expired.",
+		"The saved After attempts view is out of date.",
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("truthful recurrence contract is missing %q", required)
@@ -359,7 +359,7 @@ func TestRecurrenceExpiredListPaginationClosesConnectedMonitoringDetail(t *testi
 		`closeIssueDetail(false);`,
 		`resetFixMonitoringBucket();`,
 		`await loadFixMonitoring(false);`,
-		`the connected detail was closed`,
+		`the open detail was closed`,
 	} {
 		if !strings.Contains(list, required) {
 			t.Errorf("expired monitoring pagination recovery is missing %q", required)
@@ -410,8 +410,8 @@ func TestRecurrenceExpiredDetailClearsDependentStateBeforeListRefresh(t *testing
 		`resetFixMonitoringBucket(false);`,
 		`closeIssueDetail(false);`,
 		`await loadFixMonitoring(false);`,
-		`Connected attempt and observation detail was cleared`,
-		`reopen the issue to inspect current evidence`,
+		`The open attempt details were cleared`,
+		`reopen the finding to inspect current evidence`,
 	} {
 		if !strings.Contains(recovery, required) {
 			t.Errorf("expired monitoring-detail recovery is missing %q", required)
@@ -515,7 +515,7 @@ func TestRecurrenceMonitoringViewCursorFailsClosed(t *testing.T) {
 	}
 	for _, required := range []string{
 		`state.fixHistoryStale = true;`,
-		`Connected attempt detail was preserved`,
+		`The open attempt was preserved`,
 		`renderFixAttempts();`,
 	} {
 		if !strings.Contains(refresh, required) {

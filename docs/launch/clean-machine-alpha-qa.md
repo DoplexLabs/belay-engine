@@ -128,12 +128,17 @@ Evidence:
 From the extracted archive, start Belay with the packaged one-command path:
 
 ```bash
-./bin/belay quickstart
+./bin/belay quickstart --allow-codex-mcp-add
 ```
 
-This invocation is explicit consent to install reversible monitor-only hooks in
-detected Codex and Claude Code configurations, scan supported history, start
-Local, print its URL, and attempt to open the dashboard.
+This invocation is explicit consent to install reversible monitor-only hooks
+and the existing read-only Belay MCP server in detected Codex and Claude Code
+user configuration, scan supported history, start Local, print its URL, and
+attempt to open the dashboard. The flag permits Codex `mcp add` only after
+Belay strictly verifies that the `belay` entry is absent and records explicit
+acceptance of the Codex CLI's non-atomic duplicate-name behavior. Run from an
+extracted path containing a space so the executable remains one command
+argument.
 
 Pass criteria:
 
@@ -147,6 +152,14 @@ Pass criteria:
 - `./bin/belay hooks status` reports the detected Codex and Claude Code
   monitor-only hooks installed or reports an objective per-harness reason that
   a hook was not applicable.
+- `./bin/belay mcp-config status` returns schema
+  `belay.mcp-config.v1`, target order Codex then Claude, and reports each
+  available detected target as `owned_current`.
+- Codex add is never invoked while an entry named `belay` is present. Foreign
+  or unverifiable Codex entries are preserved and never overwritten or removed.
+- Quickstart stdout contains only the one-line tokenized Local URL. Fixed hook
+  and MCP summaries appear on stderr without executable paths or raw agent-CLI
+  output.
 - `./bin/belay doctor` reports configuration, encrypted storage, Numbat pin,
   and discovery as healthy.
 
@@ -158,6 +171,8 @@ Evidence:
 - Redacted `${BELAY_HOME:-~/.belay}/config.json`:
 - Redacted `doctor` output:
 - Hook status:
+- MCP configuration status:
+- Redacted quickstart stdout/stderr:
 - Keychain service/account screenshot:
 - Notes/defect:
 
@@ -683,7 +698,7 @@ Pass criteria:
 
 - Only explicit install changes harness configuration.
 - The installed state came from the explicit `quickstart` invocation.
-- Codex hook status reports installed/healthy.
+- Codex hook status reports installed and configured.
 - The Codex action completes normally.
 - A corresponding new minimized event appears within 10 seconds while Belay is
   running.
@@ -704,7 +719,7 @@ test directory.
 
 Pass criteria:
 
-- Claude Code hook status reports installed/healthy.
+- Claude Code hook status reports installed and configured.
 - The Claude Code action completes normally.
 - A corresponding new minimized event appears within 10 seconds while Belay is
   running.
@@ -720,11 +735,19 @@ Evidence:
 
 ## A10 — MCP nine-tool issue-evidence contract
 
-Configure both Codex and Claude Code using the examples in
-`developer-preview.md`, restart each client, and inspect Belay's MCP tools.
+Use the registrations created by A04. Do not manually edit Codex or Claude
+configuration. Run:
+
+```bash
+./bin/belay mcp-config status
+```
+
+Restart each client and inspect Belay's MCP tools.
 
 Pass criteria:
 
+- Status uses schema `belay.mcp-config.v1`, reports Codex before Claude, prints
+  no executable/home path, and classifies each available entry exactly.
 - Both clients connect over stdio.
 - Exactly these tools appear:
   `list_sessions`, `get_session`, `get_session_timeline`, `query_activity`,
@@ -754,6 +777,64 @@ Pass criteria:
 - A filtered `get_stats` request is recorded as an expected alpha limitation;
   unfiltered `get_stats` succeeds.
 
+Cross-agent cited-answer acceptance:
+
+1. Call `list_issues` and select an exact issue whose returned agent coverage
+   includes both Codex and Claude. If the prepared data has no such issue, mark
+   A10 blocked; do not substitute a merely similar issue.
+2. Pass its `view_cursor` to `get_issue`. Confirm the exact occurrences include
+   at least one Codex session and one Claude session.
+3. For one occurrence from each agent, call `lookup_session_events` with that
+   occurrence's session ID and cited event IDs.
+4. Ask the connected agent: “What finding was recorded across Codex and Claude,
+   and which cited events support that answer?”
+
+Pass criteria:
+
+- The answer uses the fixed catalog meaning and caveat, identifies both agents,
+  and cites only evidence returned by `lookup_session_events`.
+- Missing cited IDs are disclosed rather than inferred.
+- The answer does not invent a shared cause, semantic similarity, diagnosis,
+  remediation, or activity that is absent from the returned evidence.
+- The recorded tool chain is `list_issues` → `get_issue` occurrences →
+  `lookup_session_events` cited evidence.
+
+Ownership, idempotency, and opt-out checks:
+
+1. Stop Local, rerun `./bin/belay quickstart --no-open`, and confirm the MCP
+   summary reports `already_installed` without duplicate entries.
+2. Stop Local, run `./bin/belay mcp-config uninstall`, then run
+   `./bin/belay quickstart --no-mcp --no-open`.
+3. Confirm hooks and Local still start, the fixed summary says
+   `belay quickstart: mcp skipped_by_user`, and `mcp-config status` still
+   reports the entries absent.
+4. Run normal `./bin/belay quickstart --no-open` with both entries absent.
+   Confirm Claude may be installed when its status is safely understood, while
+   Codex is not added and onboarding continues with a fixed incomplete summary.
+5. Restore Codex with
+   `./bin/belay mcp-config install --allow-codex-mcp-add`. Confirm the opt-in
+   warning is fixed and payload-free.
+6. In an isolated test account/configuration, create a foreign entry named
+   `belay` with a different command or transport. Confirm install and uninstall
+   preserve it and report `foreign_preserved`/foreign ownership rather than
+   replacing or removing it.
+7. Restore the owned registration, move to a newly extracted approved archive,
+   and run `quickstart --allow-codex-mcp-add`. Confirm Claude may follow its
+   ownership-safe update path, but the recognized prior Codex entry is not
+   updated, migrated, replaced, or removed. Verify Codex is reported
+   unavailable/incomplete. Inspect it with `mcp-config status`, verify that it
+   is the expected Belay-owned prior identity, explicitly run
+   `mcp-config uninstall`, verify absence, and then rerun
+   `quickstart --allow-codex-mcp-add`. Confirm only this final absent-state run
+   installs the new Codex identity.
+8. Supply an approved unsupported/changed status-output fixture and confirm
+   status is `unverifiable`, no mutation occurs, and explicit install/uninstall
+   exits nonzero after writing fixed JSON.
+9. With an isolated empty Belay home, run standalone
+   `mcp-config install --allow-codex-mcp-add`. Confirm private Belay
+   configuration/directories may be initialized for a stable ownership ID, but
+   no Local database or Keychain item is created.
+
 Cursor-expiry check:
 
 1. Open Attention and retain an issue-list cursor, issue `view_cursor`,
@@ -773,6 +854,12 @@ Evidence:
 - Started/finished:
 - Codex tool list/call transcript:
 - Claude Code tool list/call transcript:
+- Cross-agent issue/occurrence/cited-evidence transcript and answer:
+- Repeated quickstart/no-op evidence:
+- `--no-mcp` and restored-registration evidence:
+- Foreign-entry preservation evidence:
+- Archive-move Codex refusal, explicit uninstall, and absent-state reinstall evidence:
+- Unverifiable-output preservation evidence:
 - Notes/defect:
 
 ## A11 — Offline behavior
@@ -788,6 +875,9 @@ Pass criteria:
   retraction can be recorded through loopback without hosted access.
 - All nine MCP tools remain discoverable. Representative session/timeline
   reads and the issue list → detail → cited-event lookup loop succeed.
+- `./bin/belay mcp-config status` completes without a Belay product-network
+  request. If a host CLI wrapper performs its own credential or network check,
+  record that separately; quickstart must remain fail-open.
 - No hosted login or Belay service is requested.
 - A new supported live-hook event can be imported while offline.
 - If the configured client uses a remotely hosted model, distinguish that
@@ -888,12 +978,14 @@ Evidence:
 Run:
 
 ```bash
+./bin/belay mcp-config uninstall
+./bin/belay mcp-config status
 ./bin/belay hooks uninstall
 ./bin/belay hooks status
 ```
 
-Remove Belay from Codex and Claude Code MCP configuration and stop Belay.
-Then run the lower-side-effect path and stop it after the URL is printed:
+Do not manually remove or replace a foreign/unverifiable entry. Stop Belay,
+then run the lower-side-effect path and stop it after the URL is printed:
 
 ```bash
 ./bin/belay local --no-scan
@@ -902,6 +994,11 @@ Then run the lower-side-effect path and stop it after the URL is printed:
 Pass criteria:
 
 - Both monitor hooks are removed or reported absent.
+- Exact current or previously verified Belay MCP entries are removed and status
+  reports them absent. Foreign or unverifiable entries are preserved and make
+  explicit uninstall nonzero.
+- MCP uninstall does not remove hooks, Local history, Keychain data, or the
+  extracted package; hook uninstall does not remove MCP configuration.
 - Running `local --no-scan` does not reinstall either hook and does not open a
   browser.
 - Both clients no longer advertise Belay MCP after restart.
@@ -916,6 +1013,7 @@ Evidence:
 - Result:
 - Started/finished:
 - Hook uninstall/status:
+- MCP uninstall/status JSON:
 - Post-uninstall `local` hook status/browser observation:
 - MCP removal evidence:
 - Post-uninstall harness actions:

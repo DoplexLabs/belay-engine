@@ -86,6 +86,7 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
 	mux.Handle("GET /v1/sessions", s.authorize(http.HandlerFunc(s.listSessions)))
 	mux.Handle("GET /v1/sessions/{id}", s.authorize(http.HandlerFunc(s.getSession)))
 	mux.Handle("GET /v1/sessions/{id}/events", s.authorize(http.HandlerFunc(s.getTimeline)))
@@ -209,8 +210,17 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
-	response, err := s.read.GetSession(r.Context(), r.PathValue("id"))
-	writeReadResult(w, r, response, err)
+	detail, err := s.read.GetSession(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeReadResult(w, r, nil, err)
+		return
+	}
+	writeReadResult(w, r, readmodel.SessionDetailWithDiagnosis{
+		SchemaVersion: detail.SchemaVersion,
+		Data:          detail.Data,
+		Diagnosis:     s.read.DiagnoseSession(r.Context(), detail),
+		DataThrough:   detail.DataThrough,
+	}, nil)
 }
 
 func (s *Server) getTimeline(w http.ResponseWriter, r *http.Request) {

@@ -250,7 +250,7 @@ func TestSessionOverviewIsTruthfulBoundedAndMetadataOnly(t *testing.T) {
 	}
 	if detail.Data.Outcome != "incomplete" ||
 		overview.Outcome.Source != "absence_of_session_end" ||
-		!strings.Contains(overview.Outcome.Explanation, "does not infer task success") {
+		overview.Outcome.Explanation != "The agent reported that the session ended but did not report an outcome." {
 		t.Fatalf("incomplete outcome explanation = %+v", overview.Outcome)
 	}
 	if !slices.Equal(overview.ObservedCoverage.Depths, []string{"artifact", "tool_call"}) ||

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/canonical/sourcecatalog"
@@ -265,7 +266,7 @@ func (s *Store) queryAttentionFamilyMemberPageTx(
 	groupKey string,
 	cursor *model.AttentionFamilyMemberPosition,
 	limit int,
-) ([]model.IssueSummary, error) {
+) ([]model.AttentionFamilyMemberRecord, error) {
 	cte, args, err := attentionFamilyCTE(snapshot, filter, groupKey)
 	if err != nil {
 		return nil, err
@@ -286,19 +287,89 @@ func (s *Store) queryAttentionFamilyMemberPageTx(
 		)
 	}
 	args = append(args, limit)
-	rows, err := tx.QueryContext(ctx, cte+`
-		SELECT `+attentionFamilyMemberColumns("im")+`
-		FROM issue_members im
-		WHERE `+strings.Join(where, " AND ")+`
+	rows, err := tx.QueryContext(ctx, cte+`,
+		member_page AS (
+			SELECT im.*
+			FROM issue_members im
+			WHERE `+strings.Join(where, " AND ")+`
+			ORDER BY im.analysis_status_rank DESC,
+				im.last_observed_at DESC, im.issue_id ASC
+			LIMIT ?
+		),
+		ranked_member_sessions AS (
+			SELECT
+				mp.summary_revision_id,
+				mo.matched_session_key,
+				ROW_NUMBER() OVER (
+					PARTITION BY mp.summary_revision_id
+					ORDER BY mo.matched_last_observed_at DESC,
+						mo.matched_session_key ASC,
+						mo.matched_occurrence_id ASC,
+						mo.matched_revision_id ASC
+				) AS session_rank
+			FROM member_page mp
+			JOIN matched_occurrences mo
+				ON mo.summary_revision_id = mp.summary_revision_id
+		),
+		selected_member_sessions AS (
+			SELECT summary_revision_id, matched_session_key
+			FROM ranked_member_sessions
+			WHERE session_rank = 1
+		),
+		member_session_bounds AS (
+			SELECT
+				sms.summary_revision_id,
+				MIN(e.occurred_at) AS session_started_at,
+				MAX(e.occurred_at) AS session_last_active_at
+			FROM selected_member_sessions sms
+			LEFT JOIN events e ON e.session_key = sms.matched_session_key
+			GROUP BY sms.summary_revision_id
+		),
+		member_evidence_bounds AS (
+			SELECT
+				sms.summary_revision_id,
+				COUNT(DISTINCT ioe.event_id) AS cited_event_count,
+				MIN(cited.occurred_at) AS evidence_first_at,
+				MAX(cited.occurred_at) AS evidence_last_at
+			FROM selected_member_sessions sms
+			LEFT JOIN matched_occurrences mo
+				ON mo.summary_revision_id = sms.summary_revision_id
+				AND mo.matched_session_key = sms.matched_session_key
+			LEFT JOIN issue_occurrence_events ioe
+				ON ioe.revision_id = mo.matched_revision_id
+			LEFT JOIN events cited
+				ON cited.event_id = ioe.event_id
+				AND cited.session_key = sms.matched_session_key
+			GROUP BY sms.summary_revision_id
+		),
+		issue_member_context AS (
+			SELECT
+				mp.*,
+				sms.matched_session_key AS member_session_key,
+				msb.session_started_at,
+				msb.session_last_active_at,
+				COALESCE(meb.cited_event_count, 0) AS cited_event_count,
+				meb.evidence_first_at,
+				meb.evidence_last_at
+			FROM member_page mp
+			JOIN selected_member_sessions sms
+				ON sms.summary_revision_id = mp.summary_revision_id
+			LEFT JOIN member_session_bounds msb
+				ON msb.summary_revision_id = mp.summary_revision_id
+			LEFT JOIN member_evidence_bounds meb
+				ON meb.summary_revision_id = mp.summary_revision_id
+		)
+		SELECT `+attentionFamilyMemberRecordColumns("im")+`
+		FROM issue_member_context im
 		ORDER BY im.analysis_status_rank DESC, im.last_observed_at DESC, im.issue_id ASC
-		LIMIT ?`, args...)
+		`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query attention family members: %w", err)
 	}
 	defer rows.Close()
-	result := make([]model.IssueSummary, 0, limit)
+	result := make([]model.AttentionFamilyMemberRecord, 0, limit)
 	for rows.Next() {
-		member, err := scanAttentionFamilyMember(rows)
+		member, err := scanAttentionFamilyMemberRecord(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -475,6 +546,8 @@ func attentionFamilyCTE(
 		matched_occurrences AS (
 			SELECT
 				ss.*,
+				io.revision_id AS matched_revision_id,
+				io.occurrence_id AS matched_occurrence_id,
 				io.session_key AS matched_session_key,
 				LOWER(io.harness) AS matched_harness,
 				io.first_observed_at AS matched_first_observed_at,
@@ -625,6 +698,18 @@ func attentionFamilyMemberColumns(alias string) string {
 	}, ", ")
 }
 
+func attentionFamilyMemberRecordColumns(alias string) string {
+	return strings.Join([]string{
+		attentionFamilyMemberColumns(alias),
+		alias + ".member_session_key",
+		alias + ".session_started_at",
+		alias + ".session_last_active_at",
+		alias + ".cited_event_count",
+		alias + ".evidence_first_at",
+		alias + ".evidence_last_at",
+	}, ", ")
+}
+
 func (s *Store) scanAttentionFamilySummary(
 	row rowScanner,
 	attentionKind string,
@@ -752,16 +837,56 @@ func (scan *attentionFamilyMemberScan) finish() error {
 	return nil
 }
 
-func scanAttentionFamilyMember(row rowScanner) (model.IssueSummary, error) {
-	var result model.IssueSummary
-	scan := attentionFamilyMemberScan{summary: &result}
-	if err := row.Scan(scan.targets()...); err != nil {
-		return model.IssueSummary{}, err
+func scanAttentionFamilyMemberRecord(
+	row rowScanner,
+) (model.AttentionFamilyMemberRecord, error) {
+	var result model.AttentionFamilyMemberRecord
+	scan := attentionFamilyMemberScan{summary: &result.IssueSummary}
+	var sessionStarted, sessionLastActive, evidenceFirst, evidenceLast sql.NullString
+	targets := append(scan.targets(),
+		&result.SessionKey,
+		&sessionStarted,
+		&sessionLastActive,
+		&result.CitedEventCount,
+		&evidenceFirst,
+		&evidenceLast,
+	)
+	if err := row.Scan(targets...); err != nil {
+		return model.AttentionFamilyMemberRecord{}, err
 	}
 	if err := scan.finish(); err != nil {
-		return model.IssueSummary{}, err
+		return model.AttentionFamilyMemberRecord{}, err
 	}
+	var err error
+	result.SessionStartedAt, err = parseOptionalProjectionTime(sessionStarted)
+	if err != nil {
+		return model.AttentionFamilyMemberRecord{}, errors.New("decode attention family member session start")
+	}
+	result.SessionLastActiveAt, err = parseOptionalProjectionTime(sessionLastActive)
+	if err != nil {
+		return model.AttentionFamilyMemberRecord{}, errors.New("decode attention family member session activity")
+	}
+	result.EvidenceFirstAt, err = parseOptionalProjectionTime(evidenceFirst)
+	if err != nil {
+		return model.AttentionFamilyMemberRecord{}, errors.New("decode attention family member evidence start")
+	}
+	result.EvidenceLastAt, err = parseOptionalProjectionTime(evidenceLast)
+	if err != nil {
+		return model.AttentionFamilyMemberRecord{}, errors.New("decode attention family member evidence end")
+	}
+	result.SessionSelection = model.AttentionFamilyMemberSessionSelectionLatest
 	return result, nil
+}
+
+func parseOptionalProjectionTime(value sql.NullString) (*time.Time, error) {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil, nil
+	}
+	parsed, err := parseProjectionTime(value.String)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func splitSortedValues(value string) []string {
@@ -883,7 +1008,9 @@ func attentionFamilyAfterPosition(
 	return value.GroupKey > position.GroupKey
 }
 
-func attentionFamilyMemberLess(left, right model.IssueSummary) bool {
+func attentionFamilyMemberLess(
+	left, right model.AttentionFamilyMemberRecord,
+) bool {
 	leftRank := analysisStatusRank(left.AnalysisStatus)
 	rightRank := analysisStatusRank(right.AnalysisStatus)
 	if leftRank != rightRank {
@@ -896,7 +1023,7 @@ func attentionFamilyMemberLess(left, right model.IssueSummary) bool {
 }
 
 func attentionFamilyMemberAfterPosition(
-	value model.IssueSummary,
+	value model.AttentionFamilyMemberRecord,
 	position model.AttentionFamilyMemberPosition,
 ) bool {
 	rank := analysisStatusRank(value.AnalysisStatus)

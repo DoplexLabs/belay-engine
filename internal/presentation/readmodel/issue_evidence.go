@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/sourcecatalog"
 )
 
 const (
@@ -16,7 +17,7 @@ const (
 	maxEvidenceResultBytes          = 2 << 20
 	evidenceSnapshotScope           = "current_ingestion"
 	evidenceMissingSemantics        = "unavailable_from_selected_retained_session"
-	numbatGuardrailsOffSourceSignal = "tamper.guardrails_off"
+	numbatGuardrailsOffSourceSignal = sourcecatalog.GuardrailsSourceSignalCode
 )
 
 var ErrEvidenceResultTooLarge = errors.New("event evidence result exceeds the bounded read limit")
@@ -152,36 +153,36 @@ func issueCatalog(issue model.IssueSummary) IssueCatalogMetadata {
 	switch titleCode {
 	case "issue.explicit_command_failure":
 		result.DisplayTitle = "Command failed"
-		result.ObservationStatement = "The source explicitly reported a failed command result."
-		result.Caveat = "A reported command failure does not by itself establish root cause or whether a later attempt succeeded."
+		result.ObservationStatement = "The agent reported that a command failed."
+		result.Caveat = "This does not identify why the command failed or whether a later attempt succeeded."
 		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.repeated_command_attempts":
 		result.DisplayTitle = "Command repeatedly attempted"
-		result.ObservationStatement = "The same private command signature was observed multiple times in one bounded interval."
-		result.Caveat = "Repeated attempts do not by themselves establish a stall, incorrect behavior, or shared root cause."
+		result.ObservationStatement = "Belay recorded the same minimized command pattern several times close together."
+		result.Caveat = "This can be intentional and does not prove that the agent was stuck."
 		result.NextEvidenceAction = "inspect_matching_sessions"
 	case "issue.explicit_permission_denial":
 		result.DisplayTitle = "Permission denied"
-		result.ObservationStatement = "The source explicitly reported a denied permission event."
-		result.Caveat = "A denied permission may reflect an intentional policy boundary and does not by itself establish a defect."
+		result.ObservationStatement = "The agent reported that a permission request was denied."
+		result.Caveat = "This may be expected. Inspect the cited evidence if the denial blocked the work."
 		result.NextEvidenceAction = "inspect_cited_events"
 	case "issue.verification_not_observed":
-		result.DisplayTitle = "Verification evidence not observed"
-		result.ObservationStatement = "A supported live session ended without the required verification evidence."
-		result.Caveat = "Evidence not observed under supported retained coverage is not proof that verification did not occur elsewhere."
+		result.DisplayTitle = "No recognized verification command observed"
+		result.ObservationStatement = "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended."
+		result.Caveat = "Verification may have happened outside the activity Belay recorded."
 		result.NextEvidenceAction = "inspect_verification_events"
 	case "issue.unresolved_verification_failure_at_completion":
 		result.DisplayTitle = "Verification still failed at session end"
-		result.ObservationStatement = "A verification command explicitly failed and no later successful verification was observed before session end."
-		result.Caveat = "This statement is bounded to the retained evidence for that session and does not establish the current system state."
+		result.ObservationStatement = "A test or verification command Belay recognizes failed, and Belay did not see a later successful run before the session ended."
+		result.Caveat = "This describes only the recorded session."
 		result.NextEvidenceAction = "inspect_verification_events"
 	case "issue.numbat_finding":
 		result = numbatIssueCatalog(result, issue)
 	default:
 		result.CatalogStatus = "unknown"
-		result.DisplayTitle = "Detected issue"
-		result.ObservationStatement = "A configured deterministic detector reported retained evidence."
-		result.Caveat = "No fixed Belay explanation is available for this title code."
+		result.DisplayTitle = "Finding not yet explained"
+		result.ObservationStatement = "Belay retained this finding but does not yet have a reviewed explanation."
+		result.Caveat = "Review the cited evidence; Belay does not infer its impact or recommend a change."
 		result.NextEvidenceAction = "inspect_cited_events"
 	}
 	return result
@@ -191,9 +192,9 @@ func numbatIssueCatalog(
 	result IssueCatalogMetadata,
 	issue model.IssueSummary,
 ) IssueCatalogMetadata {
-	result.DisplayTitle = "Upstream Numbat finding"
-	result.ObservationStatement = "A configured Numbat rule reported retained evidence."
-	result.Caveat = "Belay does not interpret this source rule and does not infer cause, impact, or remediation from its identifier."
+	result.DisplayTitle = sourcecatalog.UnsupportedImportedDisplayTitle
+	result.ObservationStatement = sourcecatalog.UnsupportedImportedObservation
+	result.Caveat = sourcecatalog.UnsupportedImportedCaveat
 	result.NextEvidenceAction = "inspect_cited_events"
 	result.SourceSignalCatalogStatus = "unknown"
 	if strings.EqualFold(issue.Origin, "numbat") &&
@@ -206,10 +207,10 @@ func numbatIssueCatalog(
 		*result.SourceSignalCode != numbatGuardrailsOffSourceSignal {
 		return result
 	}
-	result.DisplayTitle = "Agent safety confirmations may be disabled"
-	result.ObservationStatement = "Numbat reported retained configuration evidence associated with disabled agent guardrails."
-	result.Caveat = "This does not prove malicious tampering, identify who changed the configuration, or establish that an unsafe action occurred."
-	result.NextEvidenceAction = "review_agent_permissions"
+	result.DisplayTitle = sourcecatalog.GuardrailsDisplayTitle
+	result.ObservationStatement = sourcecatalog.GuardrailsObservationStatement
+	result.Caveat = sourcecatalog.GuardrailsCaveat
+	result.NextEvidenceAction = sourcecatalog.GuardrailsNextEvidenceAction
 	result.SourceSignalCatalogStatus = "known"
 	return result
 }

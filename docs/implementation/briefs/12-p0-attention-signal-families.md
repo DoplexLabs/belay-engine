@@ -165,3 +165,44 @@ Acceptance:
   and MCP behavior; remove only the prohibited v2 fields.
 - Do not make family capability required by MCP startup.
 - Do not silently fall back to duplicated exact cards if family reads fail.
+
+## P0-07.1 Founder-QA Correction
+
+Manual QA rejected the initial browser presentation. Apply the design addendum
+in `docs/design/p0-07-attention-signal-families.md` before P0-08.
+
+- Replace all default customer-facing Numbat/upstream/mapping/fingerprint/scope/
+  recurrence copy with the fixed Belay product explanation.
+- Use the reviewed `tamper.guardrails_off` v1.1 copy:
+  `Fewer approval prompts enabled`; `Belay recorded a setting that lets actions
+  already permitted by the agent run without asking for approval each time.`;
+  `You may have enabled this intentionally. This finding does not show that an
+  unsafe action occurred.` Direct the developer to inspect evidence and review
+  the current permission mode, with no action when intentional.
+- Evidence copy MUST say `This cited event recorded the session starting in or
+  switching to a permission mode that asks for fewer approvals. Belay does not
+  retain the configuration value or body.` It MUST NOT expose raw event type
+  names.
+- Require every customer explanation to include observed fact, meaning,
+  limitation, and bounded action. Unsupported imported signals retain
+  technical API provenance and `unknown` catalog status, use
+  `Imported finding—not yet explained by Belay`, and receive no generic
+  diagnosis or recommended change in primary UI.
+- Add bounded family-member context from retained event relations after member
+  `LIMIT + 1`: deterministic latest matching session, session activity bounds,
+  cited event count, and cited evidence bounds.
+- Preserve the exact member's full `session_count` and emit
+  `session_selection=latest_matching_session`; never imply the selected session
+  is the only session represented by an exact issue.
+- Do not add session-event joins to family-list queries. Member identity/order
+  and selected session use the frozen issue snapshot; event activity/evidence
+  availability reflects current retention and is not a second atomic snapshot.
+- Render a compact affected-session list with meaningful date and evidence
+  differences instead of repeated issue-analysis cards.
+- Consolidate duplicate instances of the known supported warning in each
+  Sessions overview.
+- Keep raw provenance and exact identity available to internal contracts without
+  placing it in the primary browser experience.
+
+Acceptance is the corrected manual QA gate in the design, plus focused
+readmodel/storage/browser contract tests.

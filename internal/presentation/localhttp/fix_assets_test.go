@@ -23,8 +23,9 @@ func TestFixBrowserShellAndDisclosureContract(t *testing.T) {
 		`id="fix-retraction-dialog"`,
 		`aria-labelledby="fix-retraction-dialog-title"`,
 		`aria-describedby="fix-retraction-dialog-description"`,
-		`Records your declaration that you attempted an external change.`,
-		`Belay cannot verify the change or its effect.`,
+		`Records that you attempted an external change.`,
+		`Belay cannot verify`,
+		`the change or its effect.`,
 		`No note, command, path, diff, prompt, or output is`,
 		`No free-text explanation is stored.`,
 	} {
@@ -34,8 +35,8 @@ func TestFixBrowserShellAndDisclosureContract(t *testing.T) {
 	}
 
 	for _, disclosure := range []string{
-		"Belay compares later retained Local analysis using exact",
-		"Belay may monitor later exact matching evidence locally.",
+		"Belay compares later local analysis for the same finding.",
+		"Belay may check later local activity for the same finding.",
 	} {
 		if !strings.Contains(index, disclosure) {
 			t.Errorf("P0-04 disclosure is missing %q", disclosure)
@@ -80,7 +81,7 @@ func TestFixBrowserFrozenHTTPAndCatalogContract(t *testing.T) {
 		"User-level agent instruction changed.",
 		"Repository/project agent rule changed.",
 		"Agent monitoring hook/configuration changed.",
-		"A deliberate category outside the fixed catalog.",
+		"A deliberate category outside the listed choices.",
 	} {
 		if !strings.Contains(app, definition) {
 			t.Errorf("fix-change.v1 catalog is missing definition %q", definition)
@@ -171,8 +172,8 @@ func TestFixBrowserMutationDeadlineAndRetryStateContract(t *testing.T) {
 		}
 	}
 	if !strings.Contains(app,
-		`timed out before Local confirmed it. Retry uses the same private key`) {
-		t.Error("timeout feedback must explicitly preserve same-key retry semantics")
+		`Belay did not confirm the ${verb} in time. Retry the same submission; do not start another one.`) {
+		t.Error("timeout feedback must explicitly preserve same-submission retry semantics")
 	}
 	if strings.Count(request, `throwIfMutationAborted(signal);`) != 2 {
 		t.Error("POST transport must reject aborted responses both before and after body decoding")
@@ -230,9 +231,9 @@ func TestFixBrowserDraftIdempotencyAndExpiryContract(t *testing.T) {
 		`draft.pending = true;`,
 		`fixDrafts.delete(issueID);`,
 		`Previously recorded attempt restored; no duplicate created.`,
-		`Fix attempt declaration recorded · Not verified by Belay.`,
+		`Attempt recorded · Not verified by Belay.`,
 		`function abandonFixDraft()`,
-		`Retry same declaration`,
+		`Retry same attempt`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("fix draft/idempotency contract is missing %q", required)
@@ -282,14 +283,14 @@ func TestFixBrowserHistoryRetractionAndTruthfulWording(t *testing.T) {
 		`partial: "Evidence partly retained"`,
 		`pruned: "Evidence pruned"`,
 		`unknown: "Evidence status unknown"`,
-		`All cited anchor events are currently retained.`,
-		`Some cited anchor events are currently retained.`,
-		`No cited anchor events are currently retained.`,
-		`Anchor evidence retention could not be determined.`,
-		`Retracted declaration`,
-		`Active declaration`,
-		`Declaration state unavailable`,
-		`Declaration state is unavailable. Retraction is disabled until Local reports an exact active state.`,
+		`All events cited when this attempt was recorded are still stored.`,
+		`Some events cited when this attempt was recorded are still stored.`,
+		`The events cited when this attempt was recorded are no longer stored.`,
+		`Belay could not determine whether the originally cited events are still stored.`,
+		`Retracted attempt`,
+		`Active attempt`,
+		`Attempt status unavailable`,
+		`Attempt status is unavailable. Retraction is disabled until Belay confirms this attempt is active.`,
 		`Preserved in history and excluded from active monitoring.`,
 		`openFixRetractionDialog(annotationID);`,
 	} {
@@ -299,7 +300,7 @@ func TestFixBrowserHistoryRetractionAndTruthfulWording(t *testing.T) {
 	}
 	for _, required := range []string{
 		`Previously recorded retraction restored; no duplicate created.`,
-		`Retraction declaration recorded. The original attempt remains in history.`,
+		`Attempt record retracted. The original attempt remains in history.`,
 		`"belay.local/already-retracted"`,
 		`"belay.local/idempotency-conflict"`,
 	} {
@@ -353,9 +354,9 @@ func TestFixBrowserUnknownAnnotationStateIsNeutralAndNotRetractable(t *testing.T
 	}
 	for _, required := range []string{
 		`annotationState === "active"`,
-		`"Declaration state unavailable"`,
+		`"Attempt status unavailable"`,
 		`stateBadge.dataset.tone = annotationState;`,
-		`Retraction is disabled until Local reports an exact active state.`,
+		`Retraction is disabled until Belay confirms this attempt is active.`,
 	} {
 		if !strings.Contains(historyRow, required) {
 			t.Errorf("unknown annotation rendering is missing %q", required)

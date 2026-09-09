@@ -13,9 +13,20 @@ const (
 	GuardrailsConfigurationMappingKey = "attention.agent_guardrails_configuration"
 	GuardrailsSourceSignalCode        = "tamper.guardrails_off"
 
-	GuardrailsEvidenceTitle  = "Agent guardrail configuration observed"
-	GuardrailsEvidenceDetail = "This configuration event supported the safety-confirmation signal. " +
-		"Belay does not retain the configuration value or body."
+	GuardrailsDisplayTitle         = "Fewer approval prompts enabled"
+	GuardrailsObservationStatement = "Belay recorded a setting that lets actions already permitted " +
+		"by the agent run without asking for approval each time."
+	GuardrailsCaveat = "This setting may be intentional. The record does not show whether an action " +
+		"bypassed a prompt or caused harm."
+	GuardrailsNextEvidenceAction = "review_agent_permissions"
+
+	GuardrailsEvidenceTitle  = "Fewer approval prompts enabled"
+	GuardrailsEvidenceDetail = "This cited event recorded the session starting in or switching to a " +
+		"permission mode that asks for fewer approvals. Belay does not retain the configuration value or body."
+
+	UnsupportedImportedDisplayTitle = "Imported finding—not yet explained by Belay"
+	UnsupportedImportedObservation  = "Belay retained this imported finding but does not yet have a reviewed explanation."
+	UnsupportedImportedCaveat       = "Review the cited evidence; Belay does not infer its impact or recommend a change."
 )
 
 type Mapping struct {
@@ -38,24 +49,22 @@ type Mapping struct {
 }
 
 var guardrailsConfiguration = Mapping{
-	Key:                 GuardrailsConfigurationMappingKey,
-	Version:             "1",
-	GroupingVersion:     "1",
-	Origin:              "numbat",
-	TitleCode:           "issue.numbat_finding",
-	Category:            "numbat_finding",
-	SourceSignalCode:    GuardrailsSourceSignalCode,
-	RawRuleVersions:     []string{"1.1"},
-	FingerprintVersions: []string{"1"},
-	AttentionKind:       model.AttentionKindIssue,
-	AttentionSeverity:   "low",
-	DefaultVisible:      true,
-	DisplayTitle:        "Agent safety confirmations may be disabled",
-	ObservationStatement: "A mapped upstream rule reported retained configuration evidence " +
-		"associated with disabled agent safety confirmations.",
-	Caveat: "This does not establish one shared configuration, project, cause, " +
-		"malicious tampering, or an unsafe action.",
-	NextEvidenceAction: "inspect_exact_records",
+	Key:                  GuardrailsConfigurationMappingKey,
+	Version:              "1",
+	GroupingVersion:      "1",
+	Origin:               "numbat",
+	TitleCode:            "issue.numbat_finding",
+	Category:             "numbat_finding",
+	SourceSignalCode:     GuardrailsSourceSignalCode,
+	RawRuleVersions:      []string{"1.1"},
+	FingerprintVersions:  []string{"1"},
+	AttentionKind:        model.AttentionKindIssue,
+	AttentionSeverity:    "low",
+	DefaultVisible:       true,
+	DisplayTitle:         GuardrailsDisplayTitle,
+	ObservationStatement: GuardrailsObservationStatement,
+	Caveat:               GuardrailsCaveat,
+	NextEvidenceAction:   GuardrailsNextEvidenceAction,
 }
 
 func Mappings() []Mapping {

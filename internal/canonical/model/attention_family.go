@@ -94,9 +94,22 @@ type AttentionFamilyMemberQuery struct {
 	Cursor              *AttentionFamilyMemberPosition
 }
 
+const AttentionFamilyMemberSessionSelectionLatest = "latest_matching_session"
+
+type AttentionFamilyMemberRecord struct {
+	IssueSummary
+	SessionKey          string     `json:"session_key,omitempty"`
+	SessionSelection    string     `json:"session_selection"`
+	SessionStartedAt    *time.Time `json:"session_started_at,omitempty"`
+	SessionLastActiveAt *time.Time `json:"session_last_active_at,omitempty"`
+	CitedEventCount     int        `json:"cited_event_count"`
+	EvidenceFirstAt     *time.Time `json:"evidence_first_at,omitempty"`
+	EvidenceLastAt      *time.Time `json:"evidence_last_at,omitempty"`
+}
+
 type AttentionFamilyMemberPage struct {
 	Family              AttentionFamilySummary
-	Data                []IssueSummary
+	Data                []AttentionFamilyMemberRecord
 	Analysis            IssueAnalysisCoverage
 	CursorEpoch         string
 	Snapshot            int64

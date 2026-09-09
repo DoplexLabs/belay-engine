@@ -98,24 +98,62 @@ cd belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64
 
 Running `quickstart` is explicit consent for Belay to create private state under
 `${BELAY_HOME:-~/.belay}`, verify its packaged sibling Numbat, install reversible
-monitor-only hooks in detected Codex and Claude Code configurations, scan
-supported history, start Local, print its tokenized loopback URL, and attempt to
-open the dashboard. If the browser cannot be opened, the printed URL remains
-usable. The hooks observe supported activity but never block agent actions.
+monitor-only hooks for detected Codex and Claude Code installations, safely
+inspect supported MCP configuration, scan supported history, start Local,
+print its tokenized loopback URL, and attempt to open the dashboard. Claude MCP
+registration is automatic only when Claude's existing status is safely
+understood. Normal quickstart does not add an absent Codex MCP entry. If the
+browser cannot be opened, the printed URL remains usable. Hooks observe
+supported activity but never block agent actions. MCP registration launches
+only `belay mcp`; it adds no write-capable tool.
+
+To include Codex MCP registration in the same command:
+
+```bash
+./bin/belay quickstart --allow-codex-mcp-add
+```
+
+This flag permits `codex mcp add` only after Belay strictly verifies that the
+`belay` entry is absent. It explicitly accepts the Codex CLI's non-atomic
+duplicate-name behavior. Belay never invokes that add operation against an
+existing entry; foreign or unverifiable entries are preserved and never
+overwritten or removed.
+
+To keep hook installation but skip MCP configuration:
+
+```bash
+./bin/belay quickstart --no-mcp
+```
 
 For a lower-side-effect first run that scans history and starts Local without
-installing hooks or opening a browser, use:
+installing hooks, changing MCP configuration, or opening a browser, use:
 
 ```bash
 ./bin/belay local
 ```
 
-Hooks installed by `quickstart` can be inspected or removed:
+Inspect the exact MCP ownership state and hook state:
 
 ```bash
+./bin/belay mcp-config status
 ./bin/belay hooks status
+```
+
+MCP and hooks are removed independently:
+
+```bash
+./bin/belay mcp-config uninstall
 ./bin/belay hooks uninstall
 ```
+
+`mcp-config uninstall` removes only an exact current or previously verified
+Belay-owned `belay` entry. It preserves foreign or unverifiable entries and does
+not remove hooks, Local history, the Keychain-backed data key, or the extracted
+package. If the archive moves, quickstart leaves a prior Codex entry unchanged.
+Belay does not automatically update, migrate, replace, or remove it. Inspect it
+with `mcp-config status`; after verifying it is Belay-owned, explicitly run
+`mcp-config uninstall`, verify absence, and then rerun
+`quickstart --allow-codex-mcp-add`.
 
 The alpha goal is a useful historical timeline within 15 minutes, but that
 remains a measured clean-machine gate rather than a guarantee until external
@@ -123,13 +161,33 @@ alpha evidence is recorded.
 
 ## Read-only MCP
 
-Run the stdio server:
+Normal `quickstart` may register Claude automatically when its status is safely
+understood. Codex registration requires the explicit opt-in shown above. The
+same operations are available directly:
 
 ```bash
-./bin/belay mcp
+./bin/belay mcp-config install --allow-codex-mcp-add
+./bin/belay mcp-config status
 ```
 
-The tools are:
+`mcp-config install` may automatically configure Claude when its status is
+safely understood. The `--allow-codex-mcp-add` flag is required before it may
+add an absent Codex entry and carries the same explicit acceptance of Codex's
+non-atomic duplicate-name behavior. A foreign or unverifiable `belay` entry is
+never overwritten or removed. Standalone install may initialize private Belay
+configuration and directories to preserve a stable ownership ID; it does not
+create or open the Local database or create Keychain material. Registration is
+local, requires no Doplex service, account login, or paid service, and failures
+do not prevent the Local browser from opening.
+
+For Codex, install never mutates a current, recognized prior, foreign,
+unverifiable, or unavailable entry. A current exact entry is left unchanged.
+For a recognized prior Codex archive entry, verify ownership with
+`mcp-config status`, explicitly run `mcp-config uninstall`, verify that the
+entry is absent, and then rerun
+`mcp-config install --allow-codex-mcp-add`.
+
+Agent clients launch `./bin/belay mcp` over stdio on demand. The tools are:
 
 - `list_sessions`
 - `get_session`

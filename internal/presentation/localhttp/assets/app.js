@@ -17,25 +17,25 @@
   const issueCatalog = Object.freeze({
     "issue.explicit_command_failure": Object.freeze({
       title: "Command failed",
-      explanation: "The source explicitly reported a failed command result.",
+      explanation: "The agent reported that a command failed.",
       action: "Inspect failed command evidence",
     }),
     "issue.repeated_command_attempts": Object.freeze({
       title: "Command repeatedly attempted",
       explanation:
-        "The same private command signature was observed multiple times in one bounded interval.",
+        "Belay recorded the same minimized command pattern several times close together.",
       action: "Inspect matching sessions",
       experimental: true,
     }),
     "issue.explicit_permission_denial": Object.freeze({
       title: "Permission denied",
-      explanation: "The source explicitly reported a denied permission event.",
+      explanation: "The agent reported that a permission request was denied.",
       action: "Inspect permission evidence",
     }),
     "issue.verification_not_observed": Object.freeze({
-      title: "Verification evidence not observed",
+      title: "No recognized verification command observed",
       explanation:
-        "A supported live session ended without the required verification evidence.",
+        "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
       action: "Inspect verification evidence",
       evidenceGap: true,
     }),
@@ -46,33 +46,37 @@
       action: "Inspect verification evidence",
     }),
     "issue.numbat_finding": Object.freeze({
-      title: "Upstream Numbat finding",
-      explanation: "A configured Numbat rule reported retained evidence.",
+      title: "Imported finding without an explanation",
+      explanation:
+        "Belay stored an imported finding, but no reviewed Belay explanation is available for it.",
       caveat:
-        "Belay does not interpret this source rule and does not infer cause, impact, or remediation from its identifier.",
-      action: "Inspect cited evidence",
+        "Belay does not infer its meaning, impact, or a recommended action.",
+      action: "Review the cited events",
     }),
   });
   const sourceSignalCatalog = Object.freeze({
     "numbat/tamper.guardrails_off": Object.freeze({
-      title: "Agent safety confirmations may be disabled",
+      title: "Fewer approval prompts enabled",
       explanation:
-        "Numbat reported retained configuration evidence associated with disabled agent guardrails.",
+        "Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time.",
       caveat:
-        "This does not prove malicious tampering, identify who changed the configuration, or establish that an unsafe action occurred.",
-      action: "Review cited configuration evidence",
+        "This setting may be intentional. The record does not show whether an action bypassed a prompt or caused harm.",
+      action:
+        "Review the current agent permission mode. If this was intentional, no change may be needed.",
     }),
   });
   const analysisQualifiers = Object.freeze({
-    pending: "Prior retained result while reanalysis is pending.",
-    failed: "Prior retained result; the latest analysis failed.",
-    truncated: "Partial analysis; additional signals may be absent.",
+    pending:
+      "This result may be out of date while Belay analyzes the session again.",
+    failed: "Belay could not refresh this result; it may be out of date.",
+    truncated:
+      "Only part of the session was analyzed; other findings may be missing.",
     unknown:
-      "Analysis status is unavailable; result freshness and completeness are uncertain.",
+      "Belay cannot confirm whether this result is current or complete.",
   });
   const fixMonitoringCatalog = Object.freeze({
     matching_evidence_observed: Object.freeze({
-      title: "Exact matching evidence was observed after this attempt.",
+      title: "Same finding observed later",
       detail:
         "This does not establish causality or whether the attempted change worked.",
       tone: "attention",
@@ -84,24 +88,24 @@
       tone: "pending",
     }),
     awaiting_later_evidence: Object.freeze({
-      title: "Awaiting later evidence.",
+      title: "Waiting for later sessions",
       detail: "No comparable completed Local activity is available yet.",
       tone: "neutral",
     }),
     no_later_match_observed: Object.freeze({
       title:
-        "No later exact match was observed in retained, completed Local analysis.",
+        "No later matching evidence was observed in completed Local analysis.",
       detail: "This does not verify resolution.",
       tone: "neutral",
     }),
     comparison_unavailable: Object.freeze({
-      title: "Comparison unavailable.",
+      title: "Later sessions cannot be compared",
       detail:
-        "The stored baseline cannot be compared under current exact-match semantics.",
+        "Belay cannot compare this attempt with later activity under the current rules.",
       tone: "neutral",
     }),
     retracted: Object.freeze({
-      title: "Retracted declaration — excluded from active monitoring.",
+      title: "Attempt record retracted — no longer monitored.",
       detail: "",
       tone: "neutral",
     }),
@@ -151,13 +155,13 @@
     }),
     Object.freeze({
       value: "monitor_hook",
-      label: "Monitor hook",
+      label: "Agent monitoring setup",
       description: "Agent monitoring hook/configuration changed.",
     }),
     Object.freeze({
       value: "other",
       label: "Other",
-      description: "A deliberate category outside the fixed catalog.",
+      description: "A deliberate category outside the listed choices.",
     }),
   ]);
   const fixRetractionCatalog = Object.freeze([
@@ -167,7 +171,7 @@
     }),
     Object.freeze({
       value: "superseded",
-      label: "Superseded by another declaration",
+      label: "Replaced by another attempt record",
     }),
     Object.freeze({
       value: "other",
@@ -176,19 +180,24 @@
   ]);
   const fixEligibilityMessages = Object.freeze({
     analysis_not_current:
-      "Recording is unavailable until issue analysis is current.",
+      "Recording is unavailable until Belay finishes updating this finding.",
     experimental_signal:
-      "Experimental signals cannot anchor fix-attempt declarations.",
+      "An attempt cannot be recorded for an experimental finding.",
     evidence_gap:
-      "Evidence gaps cannot anchor fix-attempt declarations.",
+      "An attempt cannot be recorded for an evidence gap.",
     scope_unavailable:
-      "This issue lacks a compatible private scope for future exact recurrence measurement.",
+      "Belay does not have enough project information to compare this finding with later sessions.",
   });
   const config = globalThis.BELAY_LOCAL_CONFIG || {};
   const state = {
     token: resolveToken(config),
     apiBase: normalizeApiBase(config.apiBase),
-    activeView: "attention",
+    activeView: "brief",
+    developerBrief: null,
+    briefStatus: "idle",
+    briefError: "",
+    briefRequestGeneration: 0,
+    briefSelectionID: "",
     issues: createAttentionFamilyBucket(),
     evidenceGaps: createIssueBucket("evidence_gap"),
     issueFilters: {
@@ -270,6 +279,7 @@
     selectedEventTotal: 0,
     selectedSessionDetail: null,
     selectedOverview: null,
+    selectedDiagnosis: null,
     events: [],
     eventLimit: pageLimits.events.initial,
     eventNextCursor: "",
@@ -289,8 +299,45 @@
 
   const elements = {
     appShell: document.querySelector("#app-shell"),
+    navBrief: document.querySelector("#nav-brief"),
     navAttention: document.querySelector("#nav-attention"),
     navSessions: document.querySelector("#nav-sessions"),
+    briefView: document.querySelector("#brief-view"),
+    briefHeading: document.querySelector("#brief-heading"),
+    briefWindow: document.querySelector("#brief-window"),
+    briefStatus: document.querySelector("#brief-status"),
+    briefSessionCount: document.querySelector("#brief-session-count"),
+    briefAgentCount: document.querySelector("#brief-agent-count"),
+    briefOutcomeCount: document.querySelector("#brief-outcome-count"),
+    briefLatestActivity: document.querySelector("#brief-latest-activity"),
+    briefLoading: document.querySelector("#brief-loading"),
+    briefError: document.querySelector("#brief-error"),
+    briefErrorDetail: document.querySelector("#brief-error-detail"),
+    briefRetry: document.querySelector("#brief-retry"),
+    briefContent: document.querySelector("#brief-content"),
+    briefActionList: document.querySelector("#brief-action-list"),
+    briefActionsEmpty: document.querySelector("#brief-actions-empty"),
+    briefActionsEmptyTitle: document.querySelector(
+      "#brief-actions-empty-title",
+    ),
+    briefActionsEmptyDetail: document.querySelector(
+      "#brief-actions-empty-detail",
+    ),
+    briefRecentList: document.querySelector("#brief-recent-list"),
+    briefRecentEmpty: document.querySelector("#brief-recent-empty"),
+    briefRecentEmptyTitle: document.querySelector(
+      "#brief-recent-empty-title",
+    ),
+    briefRecentEmptyDetail: document.querySelector(
+      "#brief-recent-empty-detail",
+    ),
+    briefAgentSummary: document.querySelector("#brief-agent-summary"),
+    briefCoverage: document.querySelector("#brief-coverage"),
+    briefCoverageSummary: document.querySelector("#brief-coverage-summary"),
+    briefLimitations: document.querySelector("#brief-limitations"),
+    briefSources: document.querySelector("#brief-sources"),
+    briefOpenAttention: document.querySelector("#brief-open-attention"),
+    briefOpenSessions: document.querySelector("#brief-open-sessions"),
     attentionNavCount: document.querySelector("#attention-nav-count"),
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
@@ -449,6 +496,7 @@
     issueEvidencePreviewAll: document.querySelector(
       "#issue-evidence-preview-all",
     ),
+    issueTechnicalDetails: document.querySelector("#issue-technical-details"),
     issueMetadata: document.querySelector("#issue-metadata"),
     fingerprintPanel: document.querySelector("#fingerprint-panel"),
     issueFingerprint: document.querySelector("#issue-fingerprint"),
@@ -508,6 +556,25 @@
     selectedEventCount: document.querySelector("#selected-event-count"),
     selectedDuration: document.querySelector("#selected-duration"),
     selectedEndedAt: document.querySelector("#selected-ended-at"),
+    sessionDiagnosis: document.querySelector("#session-diagnosis"),
+    sessionDiagnosisHeading: document.querySelector(
+      "#session-diagnosis-heading",
+    ),
+    sessionDiagnosisStatus: document.querySelector(
+      "#session-diagnosis-status",
+    ),
+    sessionDiagnosisTitle: document.querySelector(
+      "#session-diagnosis-title",
+    ),
+    sessionDiagnosisDetail: document.querySelector(
+      "#session-diagnosis-detail",
+    ),
+    sessionDiagnosisActions: document.querySelector(
+      "#session-diagnosis-actions",
+    ),
+    sessionDiagnosisLimitations: document.querySelector(
+      "#session-diagnosis-limitations",
+    ),
     overviewState: document.querySelector("#overview-state"),
     overviewQuality: document.querySelector("#overview-quality"),
     activityGrid: document.querySelector("#activity-grid"),
@@ -566,6 +633,9 @@
   };
 
   const focusRegistry = {
+    briefActions: new Map(),
+    briefSessions: new Map(),
+    diagnosisActions: new Map(),
     monitoringCards: new Map(),
     issueCards: new Map(),
     familyCards: new Map(),
@@ -587,7 +657,7 @@
   renderFixDialogChoices();
   renderFixMonitoringFilters();
   bindEvents();
-  setActiveView("attention", false);
+  setActiveView("brief", false);
   refreshAll(false);
 
   function createIssueBucket(kind) {
@@ -649,6 +719,548 @@
     };
   }
 
+  async function loadDeveloperBrief() {
+    const generation = ++state.briefRequestGeneration;
+    state.briefStatus = "loading";
+    state.briefError = "";
+    state.developerBrief = null;
+    renderDeveloperBrief();
+    try {
+      const response = await apiGet("/v1/developer-brief");
+      if (generation !== state.briefRequestGeneration) return false;
+      state.developerBrief = requireDeveloperBrief(response);
+      state.briefStatus = "ready";
+      renderDeveloperBrief();
+      return true;
+    } catch (error) {
+      if (generation !== state.briefRequestGeneration) return false;
+      state.developerBrief = null;
+      state.briefStatus = "error";
+      state.briefError = customerErrorMessage(
+        error,
+        "Belay could not prepare the brief. Attention and Sessions remain available.",
+      );
+      renderDeveloperBrief();
+      return false;
+    }
+  }
+
+  function requireDeveloperBrief(response) {
+    const brief =
+      isRecord(response && response.data) &&
+      readText(response.data.projection_version) ===
+        "belay.developer-brief.v1"
+        ? response.data
+        : response;
+    if (
+      !isRecord(brief) ||
+      readText(brief.projection_version) !== "belay.developer-brief.v1" ||
+      !["ready", "limited"].includes(readText(brief.status)) ||
+      !isRecord(brief.window) ||
+      !isRecord(brief.recent_summary) ||
+      !Array.isArray(brief.action_cards) ||
+      !Array.isArray(brief.recent_work) ||
+      !isRecord(brief.coverage) ||
+      !Array.isArray(brief.coverage.sources) ||
+      !Array.isArray(brief.coverage.limitations)
+    ) {
+      throw new Error("Local API returned an invalid developer brief.");
+    }
+    return brief;
+  }
+
+  function renderDeveloperBrief() {
+    const loading = state.briefStatus === "loading";
+    const failed = state.briefStatus === "error";
+    const brief = state.developerBrief;
+    elements.briefLoading.hidden = !loading;
+    elements.briefError.hidden = !failed;
+    elements.briefContent.hidden = !brief || loading || failed;
+    elements.briefErrorDetail.textContent =
+      state.briefError ||
+      "Belay could not prepare the brief. Attention and Sessions remain available.";
+    if (!brief) {
+      if (loading) {
+        elements.briefWindow.textContent =
+          "Loading the latest recorded activity…";
+        elements.briefStatus.textContent = "";
+      }
+      renderBriefSummary(null);
+      return;
+    }
+    const start = parseDate(brief.window.started_at);
+    const end = parseDate(brief.window.ended_at);
+    elements.briefWindow.textContent =
+      start && end
+        ? `${formatFullDate(start)} to ${formatFullDate(end)}`
+        : "Rolling 24-hour window";
+    elements.briefStatus.textContent =
+      readText(brief.status) === "limited"
+        ? "Brief is limited. Review the coverage notes before relying on it."
+        : "Based on the activity Belay could evaluate.";
+    renderBriefSummary(brief.recent_summary);
+    renderBriefActions(brief);
+    renderBriefRecentWork(brief);
+    renderBriefAcrossAgents(brief.recent_summary);
+    renderBriefCoverage(brief);
+  }
+
+  function renderBriefSummary(summary) {
+    if (!isRecord(summary)) {
+      elements.briefSessionCount.textContent = "—";
+      elements.briefAgentCount.textContent = "—";
+      elements.briefOutcomeCount.textContent = "—";
+      elements.briefLatestActivity.textContent = "—";
+      return;
+    }
+    const sessions = toFiniteNumber(summary.evaluated_session_count);
+    const harnesses = Array.isArray(summary.harnesses)
+      ? summary.harnesses.map(readText).filter(Boolean)
+      : [];
+    const outcomes = isRecord(summary.outcomes) ? summary.outcomes : {};
+    const reported =
+      toFiniteNumber(outcomes.succeeded) +
+      toFiniteNumber(outcomes.failed) +
+      toFiniteNumber(outcomes.interrupted);
+    elements.briefSessionCount.textContent =
+      `${formatNumber(sessions)}${summary.session_count_is_lower_bound === true ? "+" : ""}`;
+    elements.briefAgentCount.textContent = formatNumber(harnesses.length);
+    elements.briefOutcomeCount.textContent = formatNumber(reported);
+    elements.briefLatestActivity.textContent =
+      formatRelativeTime(summary.latest_observed_at) || "Unavailable";
+  }
+
+  function renderBriefActions(brief) {
+    focusRegistry.briefActions.clear();
+    const cards = brief.action_cards.slice(0, 5);
+    const fragment = document.createDocumentFragment();
+    cards.forEach((card, index) => {
+      fragment.append(createBriefActionCard(card, index));
+    });
+    elements.briefActionList.replaceChildren(fragment);
+    const summary = brief.recent_summary;
+    const sessionCount = toFiniteNumber(summary.evaluated_session_count);
+    const complete = brief.coverage.complete === true;
+    const sessionsAvailable =
+      briefSourceStatus(brief, "sessions") !== "unavailable";
+    elements.briefActionsEmpty.hidden = cards.length !== 0;
+    if (cards.length === 0) {
+      elements.briefActionsEmptyTitle.textContent =
+        !sessionsAvailable
+          ? "Recent sessions could not be evaluated"
+          : sessionCount === 0
+          ? "No recorded agent activity in the last 24 hours"
+          : complete
+            ? "No reviewed action was identified in the evaluated activity"
+            : "No reviewed action is available from the activity evaluated so far";
+      elements.briefActionsEmptyDetail.textContent =
+        !sessionsAvailable
+          ? "Attention may still contain reviewed findings, and stored activity remains available in Sessions."
+          : sessionCount === 0
+          ? "Older stored sessions remain available in Sessions."
+          : complete
+            ? "This is not a claim that all activity was successful or problem-free."
+            : "The brief is limited; review Coverage and limitations for what was not fully evaluated.";
+    }
+  }
+
+  function createBriefActionCard(card, index) {
+    const cardID = readText(card && card.card_id) || `brief-action-${index}`;
+    const article = createElement("article", "brief-action-card");
+    const heading = createElement(
+      "h3",
+      "",
+      readText(card && card.title) || "Review recorded activity",
+    );
+    article.append(
+      heading,
+      createElement(
+        "p",
+        "brief-observation",
+        readText(card && card.observation) ||
+          "Belay recorded activity that may deserve review.",
+      ),
+    );
+    const evidence = briefEvidenceSummary(card && card.evidence);
+    if (evidence) {
+      article.append(createElement("p", "brief-evidence", evidence));
+    }
+    const limitation = readText(card && card.limitation);
+    if (limitation) {
+      article.append(createElement("p", "brief-limitation", limitation));
+    }
+    const nextStep = isRecord(card && card.next_step) ? card.next_step : {};
+    const button = createElement(
+      "button",
+      "primary-button",
+      readText(nextStep.label) || "Review evidence",
+    );
+    button.type = "button";
+    const reference = { type: "brief-action", key: cardID };
+    button.addEventListener("click", () => {
+      state.briefSelectionID = cardID;
+      void navigateSupportedNextStep(card, nextStep, reference);
+    });
+    if (!supportedNextStep(nextStep)) {
+      button.disabled = true;
+      button.textContent = "Next step unavailable";
+    }
+    focusRegistry.briefActions.set(cardID, button);
+    article.append(button);
+    return article;
+  }
+
+  function briefEvidenceSummary(value) {
+    if (!isRecord(value)) return "";
+    const parts = [];
+    const sessionCount = toFiniteNumber(value.session_count);
+    const occurrenceCount = toFiniteNumber(value.occurrence_count);
+    const harnesses = Array.isArray(value.harnesses)
+      ? value.harnesses.map(displayHarness).filter(Boolean)
+      : [];
+    if (sessionCount) {
+      parts.push(
+        `${formatNumber(sessionCount)} ${
+          sessionCount === 1 ? "session" : "sessions"
+        }`,
+      );
+    }
+    if (occurrenceCount) {
+      parts.push(
+        `${formatNumber(occurrenceCount)} ${
+          occurrenceCount === 1 ? "observation" : "observations"
+        }`,
+      );
+    }
+    if (harnesses.length) parts.push(harnesses.join(", "));
+    if (parseDate(value.last_observed_at)) {
+      parts.push(`latest ${formatRelativeTime(value.last_observed_at)}`);
+    }
+    const outcome = normalizeOutcome(value.session_outcome);
+    if (explicitOutcomes.has(outcome)) {
+      parts.push(`agent reported ${explicitOutcomeLabel(outcome).toLowerCase()}`);
+    }
+    const eventCount = Number(value.event_count);
+    if (Number.isFinite(eventCount) && eventCount >= 0) {
+      parts.push(`${formatNumber(eventCount)} recorded events`);
+    }
+    return parts.join(" · ");
+  }
+
+  function renderBriefRecentWork(brief) {
+    focusRegistry.briefSessions.clear();
+    const sessions = brief.recent_work.slice(0, 8);
+    const fragment = document.createDocumentFragment();
+    sessions.forEach((session, index) => {
+      fragment.append(createBriefSessionCard(session, index));
+    });
+    elements.briefRecentList.replaceChildren(fragment);
+    elements.briefRecentEmpty.hidden = sessions.length !== 0;
+    if (sessions.length === 0) {
+      const sessionsAvailable =
+        briefSourceStatus(brief, "sessions") !== "unavailable";
+      elements.briefRecentEmptyTitle.textContent = sessionsAvailable
+        ? "No recorded agent activity in the last 24 hours"
+        : "Recent work is unavailable";
+      elements.briefRecentEmptyDetail.textContent = sessionsAvailable
+        ? "Older stored sessions remain available in Sessions."
+        : "Open Sessions to inspect stored activity directly.";
+    }
+  }
+
+  function briefSourceStatus(brief, sourceName) {
+    const sources =
+      brief && brief.coverage && Array.isArray(brief.coverage.sources)
+        ? brief.coverage.sources
+        : [];
+    const source = sources.find(
+      (candidate) => readText(candidate && candidate.source) === sourceName,
+    );
+    return readText(source && source.status);
+  }
+
+  function createBriefSessionCard(session, index) {
+    const sessionID = readText(session && session.session_id);
+    const card = createElement("article", "brief-session-card");
+    const button = createElement("button", "brief-session-button");
+    button.type = "button";
+    const harness = displayHarness(session && session.harness);
+    const outcome = normalizeOutcome(session && session.outcome);
+    const top = createElement("span", "brief-session-top");
+    top.append(
+      createElement("strong", "", `${harness} session`),
+      sessionOutcomeBadge(outcome),
+    );
+    button.append(
+      top,
+      createElement(
+        "span",
+        "brief-session-time",
+        formatFullDate(parseDate(session && session.started_at)) ||
+          "Session start unavailable",
+      ),
+      createElement(
+        "span",
+        "brief-session-meta",
+        [
+          formatEventCount(session && session.event_count),
+          briefHistoryLabel(session && session.history),
+          readText(session && session.outcome_explanation),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+    );
+    const key = sessionID || `brief-session-${index}`;
+    const reference = { type: "brief-session", key };
+    button.addEventListener("click", () => {
+      const nextStep = isRecord(session && session.next_step)
+        ? session.next_step
+        : { kind: "open_session", session_id: sessionID };
+      void navigateSupportedNextStep(session, nextStep, reference);
+    });
+    button.disabled = !sessionID;
+    focusRegistry.briefSessions.set(key, button);
+    card.append(button);
+    return card;
+  }
+
+  function briefHistoryLabel(value) {
+    switch (readText(value)) {
+      case "historical":
+        return "Imported history";
+      case "mixed":
+        return "Live + imported history";
+      case "live":
+        return "Live";
+      default:
+        return "Collection unavailable";
+    }
+  }
+
+  function renderBriefAcrossAgents(summary) {
+    const container = elements.briefAgentSummary;
+    const harnesses =
+      isRecord(summary) && Array.isArray(summary.harnesses)
+        ? summary.harnesses.map(displayHarness).filter(Boolean)
+        : [];
+    const outcomes =
+      isRecord(summary) && isRecord(summary.outcomes) ? summary.outcomes : {};
+    const history =
+      isRecord(summary) && isRecord(summary.history) ? summary.history : {};
+    const fragment = document.createDocumentFragment();
+    fragment.append(
+      createBriefSummaryRow(
+        "Agents",
+        harnesses.length ? harnesses.join(", ") : "No agent activity evaluated",
+      ),
+      createBriefSummaryRow(
+        "Reported outcomes",
+        [
+          `${formatNumber(outcomes.succeeded)} succeeded`,
+          `${formatNumber(outcomes.failed)} failed`,
+          `${formatNumber(outcomes.interrupted)} interrupted`,
+          `${formatNumber(
+            toFiniteNumber(outcomes.incomplete) +
+              toFiniteNumber(outcomes.unknown),
+          )} not reported`,
+        ].join(" · "),
+      ),
+      createBriefSummaryRow(
+        "Collection",
+        [
+          `${formatNumber(history.live)} live`,
+          `${formatNumber(history.historical)} imported`,
+          `${formatNumber(history.mixed)} mixed`,
+        ].join(" · "),
+      ),
+    );
+    container.replaceChildren(fragment);
+  }
+
+  function createBriefSummaryRow(label, value) {
+    const row = createElement("div", "brief-agent-row");
+    row.append(
+      createElement("strong", "", label),
+      createElement("span", "", value),
+    );
+    return row;
+  }
+
+  function renderBriefCoverage(brief) {
+    const coverage = brief.coverage;
+    const limitations = coverage.limitations.slice(0, 20);
+    const sources = coverage.sources.slice(0, 10);
+    elements.briefCoverage.open =
+      readText(brief.status) === "limited" || coverage.complete !== true;
+    elements.briefCoverageSummary.textContent =
+      coverage.complete === true
+        ? "All bounded brief sources completed for this view."
+        : "Some activity or analysis could not be fully evaluated.";
+    const limitationFragment = document.createDocumentFragment();
+    limitations.forEach((limitation) => {
+      const message = readText(limitation && limitation.message);
+      if (message) limitationFragment.append(createElement("li", "", message));
+    });
+    if (!limitations.length && coverage.complete !== true) {
+      limitationFragment.append(
+        createElement(
+          "li",
+          "",
+          "Some sources were limited; use Attention or Sessions for the available detail.",
+        ),
+      );
+    }
+    elements.briefLimitations.replaceChildren(limitationFragment);
+    const sourceFragment = document.createDocumentFragment();
+    sources.forEach((source) => {
+      const row = createElement("div");
+      row.append(
+        createElement("dt", "", briefSourceLabel(source && source.source)),
+        createElement(
+          "dd",
+          "",
+          briefSourceSummary(source),
+        ),
+      );
+      sourceFragment.append(row);
+    });
+    elements.briefSources.replaceChildren(sourceFragment);
+  }
+
+  function briefSourceLabel(value) {
+    const labels = {
+      sessions: "Sessions",
+      attention_families: "Reviewed findings",
+      evidence_gaps: "Evidence gaps",
+    };
+    return labels[readText(value)] || "Local activity";
+  }
+
+  function briefSourceSummary(source) {
+    if (!isRecord(source)) return "Unavailable";
+    const status = readText(source.status);
+    const labels = {
+      complete: "Available",
+      truncated: "Limited",
+      ready: "Available",
+      limited: "Limited",
+      unavailable: "Unavailable",
+      failed: "Unavailable",
+    };
+    const parts = [labels[status] || "Status unavailable"];
+    const count = Number(source.evaluated_count);
+    if (Number.isFinite(count) && count >= 0) {
+      parts.push(`${formatNumber(count)} evaluated`);
+    }
+    if (source.has_more === true) parts.push("more records exist");
+    if (parseDate(source.as_of)) {
+      parts.push(`through ${formatFullDate(parseDate(source.as_of))}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function supportedNextStep(nextStep) {
+    if (!isRecord(nextStep)) return false;
+    const kind = readText(nextStep.kind);
+    if (kind === "open_session") return Boolean(readText(nextStep.session_id));
+    if (kind === "open_issue") {
+      return Boolean(readText(nextStep.issue_id) && readCursor(nextStep.view_cursor));
+    }
+    if (kind === "open_attention_family") {
+      return Boolean(
+        readText(nextStep.family_id) &&
+          readText(nextStep.issue_id) &&
+          readCursor(nextStep.view_cursor),
+      );
+    }
+    return false;
+  }
+
+  async function navigateSupportedNextStep(card, nextStep, returnFocus) {
+    if (!supportedNextStep(nextStep)) return false;
+    const kind = readText(nextStep.kind);
+    if (kind === "open_session") {
+      state.sessionReturnFocus = returnFocus;
+      state.sessionReturnView =
+        returnFocus && returnFocus.type.startsWith("brief-")
+          ? "brief"
+          : "sessions";
+      openSession(readText(nextStep.session_id), null);
+      return true;
+    }
+    const catalog = briefNavigationCatalog(card);
+    if (kind === "open_attention_family") {
+      const family = {
+        family_id: readText(nextStep.family_id),
+        kind: "mapped_upstream",
+        representative_issue_id: readText(nextStep.issue_id),
+        view_cursor: readCursor(nextStep.view_cursor),
+        catalog,
+        severity: readText(card && card.severity) || "info",
+        confidence: "",
+        session_count: toFiniteNumber(card && card.evidence && card.evidence.session_count),
+        occurrence_count: toFiniteNumber(
+          card && card.evidence && card.evidence.occurrence_count,
+        ),
+        harnesses:
+          card && card.evidence && Array.isArray(card.evidence.harnesses)
+            ? card.evidence.harnesses
+            : [],
+        last_observed_at:
+          card && card.evidence && card.evidence.last_observed_at,
+        analysis_status: "current",
+      };
+      setActiveView("attention", false);
+      const result = selectAttentionFamily(family, true);
+      state.familyReturnFocus = returnFocus;
+      return result;
+    }
+    const issue = {
+      issue_id: readText(nextStep.issue_id),
+      title_code: readText(card && card.title_code),
+      severity: readText(card && card.severity) || "info",
+      confidence: "",
+      session_count: toFiniteNumber(card && card.evidence && card.evidence.session_count),
+      occurrence_count: toFiniteNumber(
+        card && card.evidence && card.evidence.occurrence_count,
+      ),
+      harnesses:
+        card && card.evidence && Array.isArray(card.evidence.harnesses)
+          ? card.evidence.harnesses
+          : [],
+      last_observed_at:
+        card && card.evidence && card.evidence.last_observed_at,
+      analysis_status: "current",
+    };
+    setActiveView("attention", false);
+    return selectIssue(
+      issue,
+      readText(card && card.kind) === "evidence_gap"
+        ? "evidence_gap"
+        : "issue",
+      true,
+      {
+      viewCursor: readCursor(nextStep.view_cursor),
+      catalog,
+      returnFocus,
+      },
+    );
+  }
+
+  function briefNavigationCatalog(card) {
+    return {
+      display_title: readText(card && card.title) || "Finding",
+      observation_statement:
+        readText(card && card.observation) ||
+        "Belay recorded activity that may deserve review.",
+      caveat:
+        readText(card && card.limitation) ||
+        "Review the supporting evidence before deciding what to do.",
+      next_evidence_action: "inspect_cited_events",
+    };
+  }
+
   function prepareValueFirstAttentionLayout() {
     const analysisDisclosure = createElement(
       "details",
@@ -683,6 +1295,10 @@
       state.issueFilters.harness = elements.issueFilterHarness.value.trim();
       resetAndLoadAttention();
     });
+    elements.navBrief.addEventListener("click", () => {
+      setActiveView("brief", true);
+      if (state.briefStatus === "idle") void loadDeveloperBrief();
+    });
     elements.navAttention.addEventListener("click", () => {
       setActiveView("attention", true);
       if (state.issues.status === "idle") refreshAttention(false);
@@ -690,6 +1306,17 @@
     elements.navSessions.addEventListener("click", () => {
       setActiveView("sessions", true);
       if (!state.sessions.length) refreshSessions(false);
+    });
+    elements.briefRetry.addEventListener("click", () => {
+      void loadDeveloperBrief();
+    });
+    elements.briefOpenAttention.addEventListener("click", () => {
+      setActiveView("attention", true);
+      if (state.issues.status === "idle") void refreshAttention(false);
+    });
+    elements.briefOpenSessions.addEventListener("click", () => {
+      setActiveView("sessions", true);
+      if (!state.sessions.length) void refreshSessions(false);
     });
     elements.refreshButton.addEventListener("click", () => refreshAll(true));
     elements.issuesLoadMore.addEventListener("click", () => {
@@ -929,6 +1556,10 @@
     hideError();
     elements.refreshButton.disabled = true;
     try {
+      if (state.activeView === "brief") {
+        await loadDeveloperBrief();
+        return;
+      }
       if (state.activeView === "attention") {
         await refreshAttention(preserveSelection);
         return;
@@ -953,23 +1584,33 @@
   }
 
   function setActiveView(view, moveFocus) {
-    const next = view === "sessions" ? "sessions" : "attention";
-    if (next === "sessions" && state.activeView !== "sessions") {
+    const next = ["brief", "attention", "sessions"].includes(view)
+      ? view
+      : "brief";
+    if (next !== "attention" && state.activeView === "attention") {
       state.attentionRefreshGeneration += 1;
     }
-    if (next === "attention" && state.activeView !== "attention") {
+    if (next !== "sessions" && state.activeView === "sessions") {
       state.directSessionRequestGeneration += 1;
     }
     state.activeView = next;
+    const briefActive = next === "brief";
     const attentionActive = next === "attention";
+    const sessionsActive = next === "sessions";
+    setViewVisibility(elements.briefView, briefActive);
     setViewVisibility(elements.attentionView, attentionActive);
-    setViewVisibility(elements.sessionsView, !attentionActive);
+    setViewVisibility(elements.sessionsView, sessionsActive);
+    setCurrentNavigation(elements.navBrief, briefActive);
     setCurrentNavigation(elements.navAttention, attentionActive);
-    setCurrentNavigation(elements.navSessions, !attentionActive);
+    setCurrentNavigation(elements.navSessions, sessionsActive);
     applyPaneAccessibility();
     if (moveFocus) {
       focusCurrentElement(
-        attentionActive ? elements.navAttention : elements.navSessions,
+        briefActive
+          ? elements.navBrief
+          : attentionActive
+            ? elements.navAttention
+            : elements.navSessions,
       );
     }
   }
@@ -1050,6 +1691,15 @@
 
   function resolveFocusReference(reference) {
     if (!reference) return null;
+    if (reference.type === "brief-action") {
+      return focusRegistry.briefActions.get(reference.key) || null;
+    }
+    if (reference.type === "brief-session") {
+      return focusRegistry.briefSessions.get(reference.key) || null;
+    }
+    if (reference.type === "diagnosis-action") {
+      return focusRegistry.diagnosisActions.get(reference.key) || null;
+    }
     if (reference.type === "monitoring") {
       return focusRegistry.monitoringCards.get(reference.key) || null;
     }
@@ -1179,8 +1829,8 @@
         closeIssueDetail(false);
         showAttentionNotice(
           state.fixMonitoring.hasMore
-            ? "Post-attempt monitoring refreshed. The selected item is outside the loaded results."
-            : "Post-attempt monitoring refreshed. The selected item is no longer visible under the current filters.",
+            ? "Follow-up evidence refreshed. The selected item is outside the loaded results."
+            : "Follow-up evidence refreshed. The selected item is no longer visible under the current filters.",
           "status",
           7000,
         );
@@ -1196,7 +1846,7 @@
         return false;
       }
       showAttentionNotice(
-        "Attention refreshed; post-attempt detail was reloaded from the current view.",
+        "Attention refreshed; follow-up evidence was reloaded from the current view.",
         "success",
         4000,
       );
@@ -1237,7 +1887,7 @@
     if (!chainReady) {
       if (!suppressFailureNotice && !state.attentionExpiryRefresh) {
         showAttentionNotice(
-          "Attention refresh failed while confirming the selected signal. Its detail remains closed.",
+          "Attention refresh failed while confirming the selected finding. Its detail remains closed.",
           "error",
         );
       }
@@ -1254,8 +1904,8 @@
     if (!summary) {
       showAttentionNotice(
         state.issues.hasMore
-          ? "Attention refreshed. The selected signal was not confirmed in the refreshed loaded results; load more to find it."
-          : "Attention refreshed. The selected signal is no longer visible under the current filters.",
+          ? "Attention refreshed. The selected finding was not confirmed in the refreshed loaded results; load more to find it."
+          : "Attention refreshed. The selected finding is no longer visible under the current filters.",
         "status",
         7000,
       );
@@ -1281,8 +1931,8 @@
           closeFamilyDetail(false);
           showAttentionNotice(
             moreMembersRemain
-              ? "Attention refreshed, but the selected affected record was not found within the previously loaded bounded pages. Reopen the family and load more to select it again."
-              : "Attention refreshed, but the selected affected record is no longer visible in this family.",
+              ? "Attention refreshed, but the selected item was not found in the sessions currently loaded. Reopen the finding and load more sessions to select it again."
+              : "Attention refreshed, but the selected finding is no longer visible in this group.",
             "status",
             8000,
           );
@@ -1479,7 +2129,7 @@
     if (state.selectedIssueSource === "monitoring") {
       closeIssueDetail(false);
       showAttentionNotice(
-        "Post-attempt filters changed. The prior detail was closed until a current result is selected.",
+        "Follow-up evidence filters changed. The prior detail was closed until a current result is selected.",
         "status",
         5000,
       );
@@ -1570,9 +2220,9 @@
         const refreshed = await loadFixMonitoring(false);
         bucket.error = refreshed
           ? closedSelectedMonitoringDetail
-            ? "The prior monitoring view expired. After attempts was refreshed from a new snapshot, and the connected detail was closed."
-            : "The prior monitoring view expired. After attempts was refreshed from a new snapshot."
-          : "This monitoring view expired and could not be refreshed.";
+            ? "The saved After attempts view was out of date. It was refreshed, and the open detail was closed."
+            : "The saved After attempts view was out of date and has been refreshed."
+          : "The saved After attempts view was out of date and could not be refreshed.";
         renderFixMonitoring();
         return refreshed;
       }
@@ -1589,18 +2239,18 @@
         error.problemType ===
         "belay.local/monitoring-catchup-in-progress"
       ) {
-        return "Post-attempt monitoring is catching up. Issues, evidence gaps, sessions, and fix actions remain available.";
+        return "Follow-up evidence is catching up. Findings, evidence gaps, sessions, and recorded changes remain available.";
       }
       if (
         error.problemType === "belay.local/monitoring-catchup-failed"
       ) {
-        return "Post-attempt monitoring catch-up needs a Local retry. Other Local views remain available.";
+        return "Follow-up evidence could not finish updating. Restart or retry Belay Local; other views remain available.";
       }
     }
     if (isCursorExpired(error)) {
-      return "This monitoring view expired. Refresh After attempts.";
+      return "The saved After attempts view is out of date. Refresh it.";
     }
-    return "Post-attempt monitoring could not be loaded. Other Local views remain available.";
+    return "Follow-up evidence could not be loaded. Other Local views remain available.";
   }
 
   function renderFixMonitoring() {
@@ -1621,14 +2271,14 @@
         ? "No monitored attempt history matches these filters"
         : "No active monitored attempts match these filters";
     elements.fixMonitoringEmptyDetail.textContent =
-      "Recording an attempt is optional. Monitoring begins only after a retained declaration.";
+      "Recording an attempt is optional. Belay checks later activity only after you record one.";
     elements.fixMonitoringPagination.hidden = !bucket.hasMore;
     elements.fixMonitoringLoadMore.disabled =
       bucket.status === "loading-more";
     elements.fixMonitoringPageStatus.textContent = bucket.hasMore
-      ? `Showing ${bucket.data.length}; more monitored issues are available.`
+      ? `Showing ${bucket.data.length}; more monitored findings are available.`
       : `Showing ${bucket.data.length} monitored ${
-          bucket.data.length === 1 ? "issue" : "issues"
+          bucket.data.length === 1 ? "finding" : "findings"
         }.`;
     elements.fixMonitoringStatus.hidden = !bucket.error;
     elements.fixMonitoringStatus.textContent = bucket.error || "";
@@ -1756,7 +2406,7 @@
         createElement(
           "span",
           "issue-card-caveat",
-          "Matching evidence was recorded before this declaration was retracted.",
+          "Matching evidence was recorded before this attempt record was retracted.",
         ),
       );
     }
@@ -1786,7 +2436,7 @@
     if (!monitoringViewCursor) {
       state.fixMonitoring.status = "error";
       state.fixMonitoring.error =
-        "This monitoring snapshot is unavailable. Refresh After attempts before opening it.";
+        "This saved view is out of date. Refresh After attempts before opening it.";
       renderFixMonitoring();
       return Promise.resolve(false);
     }
@@ -1844,7 +2494,7 @@
     if (!monitoringViewCursor) {
       state.fixHistoryStale = true;
       state.fixHistoryError =
-        "The monitoring list snapshot is unavailable. Connected attempt detail was preserved; refresh After attempts before reloading it.";
+        "The saved After attempts view is out of date. The open attempt was preserved; refresh before loading it again.";
       renderFixAttempts();
       return Promise.resolve(false);
     }
@@ -1979,7 +2629,7 @@
       bucket.error = error;
       renderIssueBucket(bucket);
       renderAnalysisCoverage();
-      showError("Unable to group Attention signals", error);
+      showError("Unable to load Attention findings", error);
       return false;
     }
   }
@@ -2098,9 +2748,9 @@
     elements.issuesPagination.hidden = !bucket.hasMore;
     elements.issuesLoadMore.disabled = bucket.status === "loading-more";
     elements.issuesPageStatus.textContent = bucket.hasMore
-      ? `Showing ${bucket.data.length} signal families; more are available.`
-      : `Showing ${bucket.data.length} supported signal ${
-          bucket.data.length === 1 ? "family" : "families"
+      ? `Showing ${bucket.data.length} findings; more are available.`
+      : `Showing ${bucket.data.length} ${
+          bucket.data.length === 1 ? "finding" : "findings"
         }.`;
     if (!elements.issuesEmpty.hidden) renderIssueEmptyState(bucket);
     renderAttentionTotals();
@@ -2121,30 +2771,30 @@
         : "Attention grouping is unavailable";
       detail.textContent = isGap
         ? "The Local read failed. Existing session data remains available."
-        : "Sessions and exact retained data remain available.";
+        : "Session data remains available.";
       return;
     }
     if (attentionFiltersActive()) {
       title.textContent = isGap
         ? "No evidence gaps match these filters"
-        : "No supported signals match these filters";
+        : "No findings match these filters";
       detail.textContent =
-        "Analysis coverage is shown above; this is not a global safety claim.";
+        "Analysis coverage is shown above; this is not a claim that all activity is problem-free.";
       return;
     }
     const analysis = bucket.analysis || state.issues.analysis;
     if (analysis && analysis.complete === true) {
       title.textContent = isGap
-        ? "No evidence gaps reported by configured detectors"
-        : "No supported signals were reported in completed retained analysis";
+        ? "No evidence gaps reported by available checks"
+        : "No findings were reported in completed local analysis";
       detail.textContent = isGap
         ? "Supported completed analysis did not report a verification evidence gap."
-        : "The fixed family catalog admitted no stable Attention signals.";
+        : "No reviewed finding type produced a stable Attention item.";
       return;
     }
     title.textContent = isGap
       ? "No evidence gaps are available from completed analysis"
-      : "No supported signals are available from completed analysis";
+      : "No findings are available from completed analysis";
     detail.textContent = incompleteCoverageText(analysis);
   }
 
@@ -2168,8 +2818,8 @@
     elements.coverageUnscoped.textContent = unscoped
       ? `${formatNumber(unscoped)} fully analyzed ${
           unscoped === 1 ? "session is" : "sessions are"
-        } unscoped and cannot establish cross-session recurrence.`
-      : "Scoped analysis can establish exact recurrence where evidence permits.";
+        } missing enough project information to determine whether findings are related.`
+      : "Project information is available where it was reported.";
     elements.coverageThrough.textContent = parseDate(
       analysis && analysis.analysis_through,
     )
@@ -2198,13 +2848,13 @@
       state.issueFilters.experimental;
     const active = attentionFiltersActive();
     elements.attentionFilterNote.textContent = experimental
-      ? "Experimental signals are included and labeled."
+      ? "Experimental findings are included and labeled."
       : active
-        ? "Stable signals matching the selected filters."
-        : "Showing stable signals.";
+        ? "Reviewed findings matching the selected filters."
+        : "Showing reviewed findings.";
     elements.clearAttentionFilters.disabled = !active;
     elements.issueFilterDisclosure.textContent = occurrenceFiltersActive()
-      ? "Displayed family and evidence-gap counts match the active filters. Analysis coverage remains global for the frozen retained snapshot."
+      ? "Displayed finding and evidence-gap counts match the active filters. The analysis summary still covers all stored sessions in this saved view."
       : "";
   }
 
@@ -2291,7 +2941,7 @@
       createElement(
         "strong",
         "",
-        readText(catalog.display_title) || "Supported Attention signal",
+        readText(catalog.display_title) || "Finding",
       ),
       createElement("small", "", attentionFamilyObservationSummary(family)),
     );
@@ -2307,37 +2957,30 @@
       createElement(
         "span",
         "",
-        `${formatNumber(family.occurrence_count)} retained ${
-          toFiniteNumber(family.occurrence_count) === 1
-            ? "observation"
-            : "observations"
-        }`,
+        `${formatNumber(family.session_count)} ${
+          toFiniteNumber(family.session_count) === 1 ? "session" : "sessions"
+        } with this finding`,
       ),
       createElement("span", "", issueHarnessLabel(family.harnesses)),
-      createElement("time", "", formatRelativeTime(family.last_observed_at)),
+      createElement(
+        "time",
+        "",
+        `Latest ${formatFullDate(parseDate(family.last_observed_at)) || "date unavailable"}`,
+      ),
     );
     button.append(top, meta);
-    if (kind === "mapped_upstream") {
-      button.append(
-        createElement(
-          "span",
-          "issue-card-caveat family-disclosure",
-          "Grouped by one known signal type. Retained records may come from unrelated sessions or projects and do not establish recurrence or one cause.",
-        ),
-      );
-    }
     button.append(
       createElement(
         "span",
         "issue-card-action",
         kind === "mapped_upstream"
-          ? "Review affected sessions and cited configuration evidence"
+          ? "Review what was observed and the supporting sessions"
           : issueNextActionLabel(catalog.next_evidence_action),
       ),
     );
     if (family.experimental === true) {
       button.append(
-        createElement("span", "experimental-label", "Experimental signal"),
+        createElement("span", "experimental-label", "Experimental finding"),
       );
     }
     article.append(button);
@@ -2348,13 +2991,16 @@
     const sessions = Number(family && family.session_count);
     const sessionText =
       Number.isFinite(sessions) && sessions > 0
-        ? `Observed in ${formatNumber(sessions)} retained ${
+        ? `${formatNumber(sessions)} ${
             sessions === 1 ? "session" : "sessions"
-          }`
-        : "Retained session count unavailable";
+          } with this finding`
+        : "Session count unavailable";
     return `${sessionText} · ${issueHarnessLabel(
       family && family.harnesses,
-    )} · last observed ${formatRelativeTime(family && family.last_observed_at)}`;
+    )} · latest ${
+      formatFullDate(parseDate(family && family.last_observed_at)) ||
+      "date unavailable"
+    }`;
   }
 
   function exactFamilyRepresentative(family) {
@@ -2420,7 +3066,7 @@
     if (!ready) {
       closeFamilyDetail(false);
       showAttentionNotice(
-        "The affected retained record could not be opened. Refresh Attention and try again.",
+        "The selected session could not be opened. Refresh Attention and try again.",
         "error",
       );
       return false;
@@ -2557,9 +3203,7 @@
       }
       state.familyMemberStatus = "error";
       state.familyMemberError =
-        error instanceof Error
-          ? error.message
-          : "Affected retained records could not be loaded.";
+        "Sessions with this finding could not be loaded. Refresh Attention and try again.";
       renderAttentionFamilyDetail();
       return false;
     }
@@ -2571,6 +3215,7 @@
       !isRecord(member.issue) ||
       !readText(member.issue.issue_id) ||
       !isRecord(member.catalog) ||
+      readText(member.session_selection) !== "latest_matching_session" ||
       !readCursor(member.view_cursor)
     ) {
       throw new Error("Local API returned an invalid Attention family member.");
@@ -2594,18 +3239,19 @@
     const catalog = isRecord(family.catalog) ? family.catalog : {};
     const status = normalizeAnalysisStatus(family.analysis_status);
     elements.familyDetailHeading.textContent =
-      readText(catalog.display_title) || "Supported Attention signal";
+      readText(catalog.display_title) || "Finding";
     elements.familyObservation.textContent =
       readText(catalog.observation_statement) ||
-      "A supported deterministic signal was reported in retained Local analysis.";
+      "Belay found local activity that may need your review.";
     elements.familyCaveat.textContent = [
       readText(catalog.caveat),
-      "Grouped by one known signal type. Members may come from unrelated sessions or projects and do not establish recurrence or one cause.",
+      "Belay grouped these records because the same permission-mode finding appeared. The sessions may be unrelated.",
     ]
       .filter(Boolean)
       .join(" ");
-    elements.familyNextAction.textContent =
-      "Next: choose one affected retained record to inspect its cited evidence.";
+    elements.familyNextAction.textContent = issueNextActionLabel(
+      catalog.next_evidence_action,
+    );
     elements.familyAnalysisQualifier.textContent =
       analysisQualifiers[status] || "";
     elements.familyDetailBadges.replaceChildren(
@@ -2624,7 +3270,7 @@
           "p",
           "family-member-error",
           state.familyMemberError ||
-            "Affected retained records could not be loaded. Other Attention data remains available.",
+            "Sessions with this finding could not be loaded. Other Attention data remains available.",
         ),
       );
     }
@@ -2641,33 +3287,18 @@
     elements.familyMembersLoadMore.disabled =
       state.familyMemberStatus === "loading-more";
     elements.familyMembersPageStatus.textContent = state.familyMemberHasMore
-      ? `Showing ${state.familyMembers.length} affected retained records; more are available.`
-      : `Showing ${state.familyMembers.length} affected retained ${
-          state.familyMembers.length === 1 ? "record" : "records"
-        }.`;
+      ? `Showing ${state.familyMembers.length} sessions with this finding; more are available.`
+      : `Showing ${state.familyMembers.length} ${
+          state.familyMembers.length === 1 ? "session" : "sessions"
+        } with this finding.`;
   }
 
   function attentionFamilyDetailSummary(family) {
-    const scope = isRecord(family.scope) ? family.scope : {};
-    const scoped =
-      toFiniteNumber(scope.resolved) + toFiniteNumber(scope.lexical);
-    const uncertain =
-      toFiniteNumber(scope.unscoped) + toFiniteNumber(scope.conflict);
-    const parts = [
-      attentionFamilyObservationSummary(family),
-      `${formatNumber(family.supporting_issue_count)} exact retained ${
-        toFiniteNumber(family.supporting_issue_count) === 1
-          ? "record"
-          : "records"
-      }`,
-    ];
-    if (scoped > 0) parts.push(`${formatNumber(scoped)} with usable scope`);
-    if (uncertain > 0) {
-      parts.push(
-        `${formatNumber(uncertain)} with unavailable or conflicting scope`,
-      );
-    }
-    return parts.join(" · ");
+    return `${formatNumber(family.session_count)} ${
+      toFiniteNumber(family.session_count) === 1 ? "session" : "sessions"
+    } with this finding · latest ${
+      formatFullDate(parseDate(family.last_observed_at)) || "date unavailable"
+    }`;
   }
 
   function createAttentionFamilyMember(member) {
@@ -2679,33 +3310,36 @@
     const key = familyMemberFocusKey(familyID, issueID);
     const button = createElement("button", "family-member-card");
     button.type = "button";
+    const issueSessionCount = Number(issue.session_count);
+    const multipleSessions =
+      readText(member.session_selection) === "latest_matching_session" &&
+      Number.isFinite(issueSessionCount) &&
+      issueSessionCount > 1;
+    const citedCount = toFiniteNumber(member.cited_event_count);
+    const evidenceWindow = attentionEvidenceWindow(member);
     button.append(
       createElement(
         "strong",
         "",
-        `${issueHarnessLabel(issue.harnesses)} · observed ${formatRelativeTime(
-          issue.last_observed_at,
-        )}`,
+        multipleSessions
+          ? `Latest of ${formatNumber(issueSessionCount)} matching sessions`
+          : `${issueHarnessLabel(issue.harnesses)} session`,
       ),
       createElement(
         "span",
         "",
-        `${formatNumber(issue.occurrence_count)} retained ${
-          toFiniteNumber(issue.occurrence_count) === 1
-            ? "observation"
-            : "observations"
-        } · ${issueRecurrenceLabel(issue)}`,
+        multipleSessions
+          ? `${issueHarnessLabel(issue.harnesses)} · ${attentionSessionWindow(member)}`
+          : attentionSessionWindow(member),
       ),
       createElement(
         "span",
         "family-member-state",
-        [
-          analysisStatusLabel(normalizeAnalysisStatus(issue.analysis_status)),
-          evidenceCompletenessLabel(issue.evidence_complete),
-          familyScopeReliability(issue.scope_quality),
-        ].join(" · "),
+        `${formatNumber(citedCount)} cited ${
+          citedCount === 1 ? "event" : "events"
+        }${evidenceWindow ? ` · ${evidenceWindow}` : ""}`,
       ),
-      createElement("span", "issue-card-action", "Inspect cited evidence"),
+      createElement("span", "issue-card-action", "Review evidence"),
     );
     button.addEventListener("click", () => {
       void selectIssue(issue, "issue", true, {
@@ -2723,18 +3357,31 @@
     return button;
   }
 
-  function familyScopeReliability(value) {
-    switch (readText(value).toLowerCase()) {
-      case "resolved":
-      case "lexical":
-        return "Scope available for this exact record";
-      case "conflict":
-        return "Scope evidence conflicts";
-      case "unscoped":
-        return "Scope unavailable";
-      default:
-        return "Scope reliability unavailable";
+  function attentionSessionWindow(member) {
+    const start = parseDate(member && member.session_started_at);
+    const lastActive = parseDate(member && member.session_last_active_at);
+    if (!start && !lastActive) return "Session start unavailable";
+    if (!start) {
+      return `Session start unavailable · last activity ${formatFullDate(lastActive)}`;
     }
+    if (!lastActive || start.getTime() === lastActive.getTime()) {
+      return `Session started ${formatFullDate(start)}`;
+    }
+    return `Session activity · ${formatFullDate(start)} to ${formatFullDate(lastActive)}`;
+  }
+
+  function attentionEvidenceWindow(member) {
+    const first = parseDate(member && member.evidence_first_at);
+    const last = parseDate(member && member.evidence_last_at);
+    if (!first && !last) return "";
+    if (!first || !last || first.getTime() === last.getTime()) {
+      return `Evidence from ${formatFullDate(first || last)}`;
+    }
+    return `Evidence from ${formatFullDate(first)} to ${formatFullDate(last)}`;
+  }
+
+  function familyScopeReliability(value) {
+    return projectRelationshipLabel(value);
   }
 
   function createIssueCard(issue, kind) {
@@ -2810,16 +3457,7 @@
     );
     if (catalog.experimental || issue.experimental === true) {
       button.append(
-        createElement("span", "experimental-label", "Experimental signal"),
-      );
-    }
-    if (catalog.title === "Detected issue") {
-      button.append(
-        createElement(
-          "span",
-          "issue-code",
-          safeCatalogCode(issue.category),
-        ),
+        createElement("span", "experimental-label", "Experimental finding"),
       );
     }
     article.append(button);
@@ -2975,7 +3613,7 @@
       }
       state.occurrenceStatus = "error";
       renderIssueDetail();
-      showError("Unable to load matching sessions", error);
+      showError("Unable to load supporting sessions", error);
       return false;
     }
   }
@@ -3075,10 +3713,10 @@
         return;
       }
       state.issueEvidencePreview.status = "error";
-      state.issueEvidencePreview.error =
-        error instanceof Error
-          ? error.message
-          : "Cited evidence could not be loaded.";
+      state.issueEvidencePreview.error = customerErrorMessage(
+        error,
+        "Cited evidence could not be loaded.",
+      );
       renderIssueEvidencePreview();
     } finally {
       if (state.issueEvidencePreviewController === controller) {
@@ -3115,8 +3753,8 @@
           "p",
           "overview-empty",
           preview.requestedCount
-            ? "None of the requested cited events remains in this retained session."
-            : "This occurrence did not supply a retained cited event ID.",
+            ? "The cited events are no longer stored."
+            : "No cited events were provided for this finding.",
         ),
       );
     }
@@ -3125,12 +3763,16 @@
       preview.status === "ready"
         ? `${preview.foundCount}/${preview.requestedCount}`
         : "—";
-    const retentionText =
-      "Event hydration uses current Local retention, not the frozen issue snapshot.";
     elements.issueEvidencePreviewDisclosure.textContent =
-      preview.status === "ready"
-        ? `${preview.foundCount} of ${preview.requestedCount} requested cited events retained; ${preview.missingCount} missing. ${retentionText}`
-        : retentionText;
+      preview.status !== "ready"
+        ? "Loading cited evidence…"
+        : preview.requestedCount === 0
+          ? "No cited events were provided for this finding."
+          : preview.foundCount === 0
+            ? "The cited events are no longer stored."
+            : preview.missingCount > 0
+              ? "Some cited events are no longer stored."
+              : "Cited events for this finding.";
     elements.issueEvidencePreviewAll.hidden =
       preview.status === "idle" ||
       preview.status === "loading" ||
@@ -3140,6 +3782,10 @@
 
   function renderIssueDetail() {
     const issue = state.selectedIssue || {};
+    const reducedApprovalMode = isReducedApprovalIssueContext(
+      issue,
+      state.selectedIssueCatalog,
+    );
     const catalog =
       state.selectedIssueSource === "attention" ||
       state.selectedIssueSource === "family"
@@ -3154,18 +3800,22 @@
       historyOnly
         ? "Retained attempt history"
         : currentProjectionPending
-          ? "Post-attempt monitoring"
+          ? "Follow-up evidence"
         : state.selectedIssueKind === "evidence_gap"
           ? "Evidence gap"
-          : "Issue";
+          : reducedApprovalMode
+            ? "Permission mode finding"
+            : "Issue";
     elements.issueDetailKind.textContent = kind;
     elements.issueDetailHeading.textContent = catalog.title;
     elements.issueExplanation.textContent = catalog.explanation;
     elements.issueNextAction.textContent = historyOnly
       ? "Inspect retained attempt history."
       : currentProjectionPending
-        ? "Wait for the current issue projection before inspecting matching evidence."
-        : issueNextActionLabel(catalog.nextEvidenceAction);
+        ? "Wait while Belay checks whether this finding is still current."
+        : reducedApprovalMode
+          ? sourceSignalCatalog["numbat/tamper.guardrails_off"].action
+          : issueNextActionLabel(catalog.nextEvidenceAction);
     const status = normalizeAnalysisStatus(issue.analysis_status);
     const coverageQualifier = globalCoverageQualifier(
       state.selectedGlobalAnalysisCoverage,
@@ -3173,21 +3823,25 @@
     const analysisQualifier = analysisQualifiers[status] || "";
     elements.issueAnalysisQualifier.textContent =
       historyOnly
-        ? "The current issue projection is unavailable. Durable attempt and observation history remains available."
+        ? "This finding is no longer in the current results. Its recorded attempt history remains available."
         : currentProjectionPending
-          ? "Checking whether a current issue projection remains available."
+          ? "Checking whether this finding is still current."
           : [analysisQualifier, coverageQualifier].filter(Boolean).join(" ");
     elements.issueScopeDisclosure.textContent = historyOnly
-      ? "Current fix eligibility and matching sessions are unavailable in history-only detail."
+      ? "New attempt recording and supporting sessions are unavailable because this finding is no longer current."
       : currentProjectionPending
-        ? "Attempt history is loading from the selected monitoring snapshot."
+        ? "Loading attempt history from the saved After attempts view."
         : issueScopeDisclosure(issue, catalog.caveat);
     const badges = [
       createToneBadge(issue.severity),
     ];
     if (!historyOnly && !currentProjectionPending) {
+      if (!reducedApprovalMode) {
+        badges.push(
+          createElement("span", "meta-badge", issueRecurrenceLabel(issue)),
+        );
+      }
       badges.push(
-        createElement("span", "meta-badge", issueRecurrenceLabel(issue)),
         createElement("span", "meta-badge", analysisStatusLabel(status)),
       );
     } else {
@@ -3200,7 +3854,10 @@
     elements.issueFingerprint.textContent =
       readText(issue.fingerprint_id) || "Unavailable";
     elements.copyIssueFingerprint.disabled = !readText(issue.fingerprint_id);
-    elements.fingerprintPanel.hidden = historyOnly || currentProjectionPending;
+    elements.issueTechnicalDetails.hidden =
+      reducedApprovalMode || historyOnly || currentProjectionPending;
+    elements.fingerprintPanel.hidden =
+      reducedApprovalMode || historyOnly || currentProjectionPending;
     elements.matchingSection.hidden = historyOnly || currentProjectionPending;
     elements.issueEvidencePreview.hidden =
       historyOnly || currentProjectionPending;
@@ -3223,6 +3880,27 @@
   function issueDetailCatalog(issue, metadata) {
     const display = monitoringSubjectCatalog(issue);
     const catalog = metadata || fallbackIssueCatalog(issue);
+    if (isReducedApprovalIssueContext(issue, catalog)) {
+      const reducedApproval =
+        sourceSignalCatalog["numbat/tamper.guardrails_off"];
+      return {
+        ...display,
+        title: reducedApproval.title,
+        explanation: reducedApproval.explanation,
+        caveat: reducedApproval.caveat,
+        nextEvidenceAction: "review_agent_permissions",
+      };
+    }
+    if (readText(issue && issue.title_code) === "issue.numbat_finding") {
+      const importedFinding = issueCatalog["issue.numbat_finding"];
+      return {
+        ...display,
+        title: importedFinding.title,
+        explanation: importedFinding.explanation,
+        caveat: importedFinding.caveat,
+        nextEvidenceAction: "inspect_cited_events",
+      };
+    }
     return {
       ...display,
       title: readText(catalog.display_title) || display.title,
@@ -3236,13 +3914,13 @@
 
   function issueNextActionLabel(action) {
     const labels = {
-      inspect_cited_events: "Next: inspect the cited retained events.",
+      inspect_cited_events: "Next: inspect the cited events.",
       inspect_matching_sessions:
-        "Next: compare the exact matching sessions.",
+        "Next: compare the related sessions.",
       inspect_verification_events:
-        "Next: inspect the retained verification evidence.",
+        "Next: inspect the verification evidence.",
       review_agent_permissions:
-        "Next: review the cited configuration evidence and the agent's permission settings.",
+        "Review the current agent permission mode. If this was intentional, no change may be needed.",
     };
     return labels[action] || labels.inspect_cited_events;
   }
@@ -3263,21 +3941,26 @@
   }
 
   function renderIssueMetadata(issue) {
+    if (
+      isReducedApprovalIssueContext(issue, state.selectedIssueCatalog)
+    ) {
+      elements.issueMetadata.replaceChildren();
+      return;
+    }
     const metadata = [
       ["Observed", retainedInterval(issue)],
       ["Confidence", readableLabel(issue.confidence, "Unavailable")],
-      ["Scope", readableLabel(issue.scope_quality, "Unavailable")],
-      ["Origin", readableLabel(issue.origin, "Unavailable")],
-      ["Detector", detectorVersionLabel(issue)],
+      [
+        "Project relationship",
+        projectRelationshipLabel(issue.scope_quality),
+      ],
+      ["Source", issueSourceLabel(issue.origin)],
+      ["Check version", detectorVersionLabel(issue)],
       [
         "Evidence",
         evidenceCompletenessLabel(issue.evidence_complete),
       ],
     ];
-    const sourceSignalCode = safeSourceSignalCode(issue.source_signal_code);
-    if (sourceSignalCode) {
-      metadata.push(["Source rule ID", sourceSignalCode]);
-    }
     const fragment = document.createDocumentFragment();
     metadata.forEach(([label, value]) => {
       const row = createElement("div");
@@ -3285,6 +3968,20 @@
       fragment.append(row);
     });
     elements.issueMetadata.replaceChildren(fragment);
+  }
+
+  function issueSourceLabel(value) {
+    return readText(value).toLowerCase() === "numbat"
+      ? "Imported local check"
+      : "Belay check";
+  }
+
+  function isReducedApprovalIssueContext(issue, catalog) {
+    if (state.selectedIssueEvidenceContext === "mapped-guardrail") return true;
+    const sourceSignalCode =
+      safeSourceSignalCode(catalog && catalog.source_signal_code) ||
+      safeSourceSignalCode(issue && issue.source_signal_code);
+    return sourceSignalCode === "tamper.guardrails_off";
   }
 
   function resetFixIssueState() {
@@ -3405,13 +4102,13 @@
         !isRecord(response.data) ||
         !isRecord(response.data.issue)
       ) {
-        throw new Error("Local API returned an invalid exact issue result.");
+        throw new Error("Local API returned an invalid issue result.");
       }
       const issue = response.data.issue;
       const viewCursor = readCursor(response.view_cursor);
       if (readText(issue.issue_id) !== issueID || !viewCursor) {
         throw new Error(
-          "Local API did not return a current exact issue snapshot.",
+          "Local API did not return a current issue snapshot.",
         );
       }
       state.selectedIssue = issue;
@@ -3612,14 +4309,14 @@
     resetFixMonitoringBucket(false);
     closeIssueDetail(false);
     showAttentionNotice(
-      `${expiredSurface} expired. Connected attempt and observation detail was cleared before refreshing After attempts…`,
+      `${expiredSurface} is out of date. The open attempt details were cleared before refreshing After attempts…`,
       "pending",
     );
     const refreshed = await loadFixMonitoring(false);
     showAttentionNotice(
       refreshed
-        ? `${expiredSurface} expired. After attempts was refreshed from a current snapshot; reopen the issue to inspect current evidence.`
-        : `${expiredSurface} expired. Connected detail remains closed, and After attempts could not be refreshed.`,
+        ? `${expiredSurface} was out of date. After attempts was refreshed; reopen the finding to inspect current evidence.`
+        : `${expiredSurface} was out of date. The details remain closed because After attempts could not be refreshed.`,
       refreshed ? "status" : "error",
       refreshed ? 7000 : 0,
     );
@@ -3646,6 +4343,17 @@
   function renderFixAttempts() {
     const issueID = state.selectedIssueID;
     if (!issueID) return;
+    if (
+      isReducedApprovalIssueContext(
+        state.selectedIssue,
+        state.selectedIssueCatalog,
+      )
+    ) {
+      elements.fixAttemptsSection.hidden = true;
+      elements.recordFixAttempt.hidden = true;
+      elements.recordFixAttempt.disabled = true;
+      return;
+    }
     focusRegistry.fixTriggers.set(issueID, elements.recordFixAttempt);
     const eligibility = state.fixEligibility || {};
     const retainedDraft = fixDrafts.get(issueID);
@@ -3683,33 +4391,33 @@
       serverReportedIneligible;
     elements.recordFixAttempt.disabled = !canRecord;
     elements.recordFixAttempt.textContent = canResume
-      ? "Resume fix attempt"
-      : "Record fix attempt";
+      ? "Resume attempt"
+      : "Record attempt";
     if (canResume && monitoringCurrentIssueUnavailable) {
       elements.fixEligibilityStatus.textContent =
-        "An unresolved submission is retained, but it cannot resume without a current issue projection and current eligibility.";
+        "A previous submission was not confirmed, but it cannot resume because this finding is no longer current.";
     } else if (canResume) {
       elements.fixEligibilityStatus.textContent =
-        "An unresolved submission is retained. Resume it with the same private retry key or explicitly abandon it.";
+        "A previous submission was not confirmed. Retry it unchanged, or abandon it before choosing different input.";
     } else if (state.fixEligibilityStatus === "loading") {
       elements.fixEligibilityStatus.textContent =
-        "Checking whether this current issue can anchor a declaration…";
+        "Checking whether an attempt can be recorded for this finding…";
     } else if (state.fixEligibilityStatus === "unavailable") {
       elements.fixEligibilityStatus.textContent =
-        "Current eligibility is unavailable because this is retained attempt history without a current issue projection.";
+        "A new attempt cannot be recorded because this finding is no longer current.";
     } else if (state.fixEligibilityStatus === "error") {
       elements.fixEligibilityStatus.textContent =
         "Eligibility could not be confirmed. Matching-session evidence remains available.";
     } else if (canRecord) {
       const expiresAt = parseDate(eligibility.expiresAt);
       elements.fixEligibilityStatus.textContent = expiresAt
-        ? `Eligible for an optional declaration. Confirmation expires ${formatRelativeTime(expiresAt)}.`
-        : "Eligible for an optional declaration.";
+        ? `An optional attempt can be recorded. Confirmation expires ${formatRelativeTime(expiresAt)}.`
+        : "An optional attempt can be recorded.";
     } else if (state.fixEligibilityStatus === "ready") {
       elements.fixEligibilityStatus.textContent = catalogReady
         ? fixEligibilityMessages[eligibility.reason] ||
-          "This issue is not eligible for a fix-attempt declaration."
-        : "The required change-category catalog is unavailable.";
+          "An attempt cannot currently be recorded for this finding."
+        : "The available change choices could not be loaded.";
     } else {
       elements.fixEligibilityStatus.textContent =
         "Eligibility has not been checked.";
@@ -3778,9 +4486,9 @@
         }.`;
     const evaluatedAt = parseDate(state.fixEvidenceEvaluatedAt);
     elements.fixEvidenceEvaluated.textContent = evaluatedAt
-      ? `Monitoring evidence retention evaluated ${formatRelativeTime(evaluatedAt)}. Payload-free monitoring metadata and positive observations may remain after cited evidence is pruned.`
+      ? `Stored evidence was checked ${formatRelativeTime(evaluatedAt)}. Attempt dates and matching-event counts may remain even if cited events are later removed.`
       : state.fixHistory.length
-        ? "Monitoring evidence retention evaluation time is unavailable. Payload-free monitoring metadata and positive observations may remain after cited evidence is pruned."
+        ? "The last evidence check time is unavailable. Attempt dates and matching-event counts may remain even if cited events are later removed."
         : "";
   }
 
@@ -3812,10 +4520,10 @@
       "span",
       "fix-state-badge",
       annotationState === "retracted"
-        ? "Retracted declaration"
+        ? "Retracted attempt"
         : annotationState === "active"
-          ? "Active declaration"
-          : "Declaration state unavailable",
+          ? "Active attempt"
+          : "Attempt status unavailable",
     );
     stateBadge.dataset.tone = annotationState;
     const evidenceStatus = normalizeFixEvidenceStatus(
@@ -3854,7 +4562,7 @@
     );
     appendFixMetadata(
       metadata,
-      "Anchor evidence",
+      "Evidence recorded with attempt",
       fixEvidenceStatusExplanation(evidenceStatus),
     );
     appendOptionalFixCount(
@@ -3938,7 +4646,7 @@
         createElement(
           "p",
           "fix-monitoring-caveat",
-          "Matching evidence was recorded before this declaration was retracted.",
+          "Matching evidence was recorded before this attempt record was retracted.",
         ),
       );
     }
@@ -4002,7 +4710,7 @@
         createElement(
           "p",
           "fix-retraction-note",
-          "Declaration state is unavailable. Retraction is disabled until Local reports an exact active state.",
+          "Attempt status is unavailable. Retraction is disabled until Belay confirms this attempt is active.",
         ),
       );
     }
@@ -4138,7 +4846,7 @@
       if (!viewCursor) {
         pageState.status = "error";
         pageState.error =
-          "Observation history is unavailable for this attempt snapshot.";
+          "Matching-event history is unavailable for this saved attempt view.";
         renderFixHistory();
         return false;
       }
@@ -4199,8 +4907,8 @@
       pageState.status = "error";
       pageState.expired = isCursorExpired(error);
       pageState.error = pageState.expired
-        ? "This observation view expired. Reload attempt monitoring to inspect current retained evidence."
-        : "Observation history could not be loaded. Attempt monitoring remains available.";
+        ? "The saved matching-event view is out of date. Reload the attempt to inspect currently stored evidence."
+        : "Matching-event history could not be loaded. The attempt remains available.";
       renderFixHistory();
       return false;
     }
@@ -4258,7 +4966,7 @@
         createElement(
           "p",
           "overview-empty",
-          "No bounded observation rows were returned for this attempt snapshot.",
+          "No matching events were returned for this attempt.",
         ),
       );
     }
@@ -4288,7 +4996,7 @@
     }
     const header = createElement("div", "fix-observation-header");
     header.append(
-      createElement("strong", "", "Exact matching observation"),
+      createElement("strong", "", "Related observation"),
       createElement(
         "span",
         "fix-evidence-badge",
@@ -4319,7 +5027,7 @@
     );
     appendFixMetadata(
       metadata,
-      "Detector",
+      "Check version",
       detectorVersionLabel(observation),
     );
     appendFixMetadata(
@@ -4352,7 +5060,7 @@
         const inspect = createElement(
           "button",
           "secondary-button",
-          "Inspect retained evidence",
+          "Inspect cited evidence",
         );
         inspect.type = "button";
         inspect.setAttribute("aria-expanded", "false");
@@ -4454,7 +5162,7 @@
     button.disabled = true;
     button.setAttribute("aria-expanded", "true");
     container.replaceChildren(
-      createElement("p", "overview-empty", "Loading retained cited events…"),
+      createElement("p", "overview-empty", "Loading cited events…"),
     );
     const parameters = new URLSearchParams();
     eventIDs.slice(0, 50).forEach((eventID) => {
@@ -4471,7 +5179,7 @@
         createElement(
           "p",
           "overview-empty",
-          "Retained cited events could not be loaded. The observation remains recorded.",
+          "Cited events could not be loaded. The finding remains recorded.",
         ),
       );
     } finally {
@@ -4530,15 +5238,15 @@
   function futureComparisonUnavailableText(value) {
     const messages = {
       scope_unavailable:
-        "Future comparison is unavailable because an exact private scope was not retained.",
+        "Future comparison is unavailable because Belay does not have enough project information.",
       source_positive_only:
-        "Future comparison can report later positive matches, but this source cannot support a no-match conclusion.",
+        "This check can report later matches but cannot confirm that no match occurred.",
       capability_unavailable:
-        "Future comparison capability is unavailable for this detector snapshot.",
+        "Future comparison is unavailable for this stored check version.",
       baseline_time_unavailable:
-        "Future comparison is unavailable because the exact baseline time was not retained.",
+        "Future comparison is unavailable because Belay does not have the original comparison time.",
       fingerprint_version_unsupported:
-        "Future comparison is unavailable for this fingerprint version.",
+        "Future comparison is unavailable for this stored comparison format.",
     };
     return (
       messages[readText(value)] ||
@@ -4558,10 +5266,10 @@
 
   function fixEvidenceStatusExplanation(status) {
     const explanations = {
-      available: "All cited anchor events are currently retained.",
-      partial: "Some cited anchor events are currently retained.",
-      pruned: "No cited anchor events are currently retained.",
-      unknown: "Anchor evidence retention could not be determined.",
+      available: "All events cited when this attempt was recorded are still stored.",
+      partial: "Some events cited when this attempt was recorded are still stored.",
+      pruned: "The events cited when this attempt was recorded are no longer stored.",
+      unknown: "Belay could not determine whether the originally cited events are still stored.",
     };
     return explanations[status] || explanations.unknown;
   }
@@ -4714,8 +5422,8 @@
     elements.fixAttemptConfirm.textContent = draft.pending
       ? "Recording…"
       : draft.attempted
-        ? "Retry same declaration"
-        : "Record declaration";
+        ? "Retry same attempt"
+        : "Record attempt";
   }
 
   function updateFixDraftChoice(target) {
@@ -4746,7 +5454,7 @@
     syncFixDraftDialog();
     showModalAlert(
       elements.fixAttemptAlert,
-      "Unresolved submission abandoned. Confirming again will create a new private retry key.",
+      "The previous submission was abandoned. Confirming again will start a new request.",
       false,
     );
   }
@@ -4789,7 +5497,7 @@
       if (!draft.idempotencyKey) {
         showModalAlert(
           elements.fixAttemptAlert,
-          "A secure UUIDv4 retry key could not be created. Nothing was recorded.",
+          "Belay could not safely prepare the request. Nothing was recorded.",
           true,
         );
         return;
@@ -4829,7 +5537,7 @@
       fixDrafts.delete(issueID);
       state.fixActionMessage = replayed
         ? "Previously recorded attempt restored; no duplicate created."
-        : "Fix attempt declaration recorded · Not verified by Belay.";
+        : "Attempt recorded · Not verified by Belay.";
       state.fixActionTone = "success";
       draft.pending = false;
       state.modalSubmitting = false;
@@ -4961,7 +5669,7 @@
       ? "Retracting…"
       : draft.attempted
         ? "Retry same retraction"
-        : "Retract declaration";
+        : "Retract attempt record";
   }
 
   function updateFixRetractionChoice(target) {
@@ -4997,7 +5705,7 @@
     syncFixRetractionDialog();
     showModalAlert(
       elements.fixRetractionAlert,
-      "Unresolved retraction abandoned. Confirming again will create a new private retry key.",
+      "The previous retraction was abandoned. Confirming again will start a new request.",
       false,
     );
   }
@@ -5033,7 +5741,7 @@
       if (!draft.idempotencyKey) {
         showModalAlert(
           elements.fixRetractionAlert,
-          "A secure UUIDv4 retry key could not be created. Nothing was retracted.",
+          "Belay could not safely prepare the request. Nothing was retracted.",
           true,
         );
         return;
@@ -5066,7 +5774,7 @@
       );
       state.fixActionMessage = replayed
         ? "Previously recorded retraction restored; no duplicate created."
-        : "Retraction declaration recorded. The original attempt remains in history.";
+        : "Attempt record retracted. The original attempt remains in history.";
       state.fixActionTone = "success";
       draft.pending = false;
       state.modalSubmitting = false;
@@ -5132,35 +5840,35 @@
   }
 
   function fixMutationErrorMessage(error, action) {
-    const verb = action === "retract" ? "retraction" : "declaration";
+    const verb = action === "retract" ? "retraction" : "attempt";
     if (error instanceof LocalMutationTimeoutError) {
-      return `The ${verb} timed out before Local confirmed it. Retry uses the same private key; do not start another submission.`;
+      return `Belay did not confirm the ${verb} in time. Retry the same submission; do not start another one.`;
     }
     if (!(error instanceof LocalAPIError)) {
-      return `The ${verb} was not confirmed. Retry uses the same private key; do not start another submission.`;
+      return `The ${verb} was not confirmed. Retry the same submission; do not start another one.`;
     }
     if (error.status === 403) {
-      return "Belay rejected this browser write. Reload Local and retry from the same listener page.";
+      return "Belay rejected this change. Reopen Belay Local using the URL printed by belay local, then try again.";
     }
     if (error.status === 409) {
       if (error.problemType === "belay.local/already-retracted") {
-        return "This declaration was already retracted by another request. Reload history before continuing.";
+        return "This attempt was already retracted by another request. Reload its history before continuing.";
       }
       if (error.problemType === "belay.local/idempotency-conflict") {
-        return `This ${verb} conflicts with its retained retry key. Abandon the unresolved submission before choosing different input.`;
+        return "This request conflicts with an earlier unresolved submission. Abandon that submission before choosing different input.";
       }
       if (error.problemType === "belay.local/ineligible-fix-annotation") {
-        return "The issue is no longer eligible for this declaration. Refresh Attention before continuing.";
+        return "An attempt can no longer be recorded for this finding. Refresh Attention before continuing.";
       }
-      return `The ${verb} conflicted with current Local state. Its retry key remains retained.`;
+      return `The ${verb} conflicted with newer local state. The unresolved submission is still available to retry unchanged or abandon.`;
     }
     if (error.status === 400) {
       return `The ${verb} request was rejected. Review the selected category or reason before retrying.`;
     }
     if (error.status >= 500) {
-      return `Local could not confirm the ${verb}. Retry uses the same private key.`;
+      return `Belay could not confirm the ${verb}. Retry the same submission.`;
     }
-    return `The ${verb} was not confirmed. Its retry key remains retained.`;
+    return `The ${verb} was not confirmed. The unresolved submission is still available to retry unchanged or abandon.`;
   }
 
   function requireFixSchema(response) {
@@ -5276,8 +5984,8 @@
     elements.occurrencesLoadMore.disabled =
       state.occurrenceStatus === "loading-more";
     elements.occurrencesPageStatus.textContent = state.occurrenceHasMore
-      ? `Showing ${state.occurrences.length}; more exact matches are available.`
-      : `Showing ${state.occurrences.length} exact matching ${
+      ? `Showing ${state.occurrences.length}; more related sessions are available.`
+      : `Showing ${state.occurrences.length} related ${
           state.occurrences.length === 1 ? "session" : "sessions"
         }.`;
     if (
@@ -5288,7 +5996,7 @@
         createElement(
           "p",
           "overview-empty",
-          "No retained matching-session occurrence was returned.",
+          "No related session was returned.",
         ),
       );
     }
@@ -5316,7 +6024,7 @@
     const metadata = createElement("p", "occurrence-meta");
     metadata.textContent = [
       retainedInterval(occurrence),
-      readableLabel(occurrence.origin, "Unknown origin"),
+      issueSourceLabel(occurrence.origin),
       `${occurrenceEventIDs(occurrence).length} cited ${
         occurrenceEventIDs(occurrence).length === 1 ? "event" : "events"
       }`,
@@ -5371,7 +6079,7 @@
         createElement(
           "p",
           "overview-empty",
-          "No retained cited event IDs were supplied for this occurrence.",
+          "No cited events were provided for this finding.",
         ),
       );
       container.dataset.loaded = "true";
@@ -5391,9 +6099,10 @@
         createElement(
           "p",
           "overview-empty",
-          error instanceof Error
-            ? error.message
-            : "Cited events could not be loaded.",
+          customerErrorMessage(
+            error,
+            "Cited events could not be loaded.",
+          ),
         ),
       );
     } finally {
@@ -5413,7 +6122,7 @@
       createElement(
         "p",
         "evidence-lookup-summary",
-        `${found} of ${requested} cited events retained; ${missing} missing.`,
+        `${found} of ${requested} cited events are still stored; ${missing} are no longer stored.`,
       ),
     );
     events.forEach((event) =>
@@ -5426,7 +6135,7 @@
         createElement(
           "p",
           "overview-empty",
-          "No requested cited event remains in this retained session.",
+          "The cited events are no longer stored.",
         ),
       );
     }
@@ -5461,8 +6170,18 @@
 
   function closeIssueDetail(restoreFocus = true, forceList = false) {
     const returnFocus = state.issueReturnFocus;
+    const returnToBrief =
+      !forceList &&
+      returnFocus &&
+      ["brief-action", "brief-session"].includes(returnFocus.type);
+    const returnToDiagnosis =
+      !forceList &&
+      returnFocus &&
+      returnFocus.type === "diagnosis-action";
     const returnToFamily =
       !forceList &&
+      !returnToBrief &&
+      !returnToDiagnosis &&
       state.selectedIssueSource === "family" &&
       Boolean(state.selectedFamily);
     state.occurrenceRequestGeneration += 1;
@@ -5498,17 +6217,31 @@
     renderIssueBucket(state.evidenceGaps);
     renderFixMonitoring();
     if (returnToFamily) renderAttentionFamilyDetail();
+    if (returnToBrief) setActiveView("brief", false);
+    if (returnToDiagnosis) setActiveView("sessions", false);
     applyPaneAccessibility();
     if (restoreFocus) {
       restoreLogicalFocus(
         returnFocus,
-        returnToFamily ? elements.familyDetailHeading : elements.navAttention,
+        returnToFamily
+          ? elements.familyDetailHeading
+          : returnToBrief
+            ? elements.briefHeading
+            : returnToDiagnosis
+              ? elements.sessionDiagnosisHeading
+              : elements.navAttention,
       );
     }
+    if (returnToBrief) state.briefSelectionID = "";
   }
 
   function closeFamilyDetail(restoreFocus = true) {
     const returnFocus = state.familyReturnFocus;
+    const returnToBrief =
+      returnFocus &&
+      ["brief-action", "brief-session"].includes(returnFocus.type);
+    const returnToDiagnosis =
+      returnFocus && returnFocus.type === "diagnosis-action";
     if (state.selectedIssueID) closeIssueDetail(false, true);
     clearAttentionFamilyDetailState();
     elements.familyDetail.hidden = true;
@@ -5516,10 +6249,20 @@
     elements.attentionWelcome.hidden = false;
     document.body.classList.remove("is-attention-detail-open");
     renderIssueBucket(state.issues);
+    if (returnToBrief) setActiveView("brief", false);
+    if (returnToDiagnosis) setActiveView("sessions", false);
     applyPaneAccessibility();
     if (restoreFocus) {
-      restoreLogicalFocus(returnFocus, elements.navAttention);
+      restoreLogicalFocus(
+        returnFocus,
+        returnToBrief
+          ? elements.briefHeading
+          : returnToDiagnosis
+            ? elements.sessionDiagnosisHeading
+            : elements.navAttention,
+      );
     }
+    if (returnToBrief) state.briefSelectionID = "";
   }
 
   function clearAttentionFamilyDetailState() {
@@ -5542,17 +6285,48 @@
 
   async function refreshAttentionAfterExpiry() {
     if (state.attentionExpiryRefresh) return;
+    const returnFocus =
+      state.issueReturnFocus || state.familyReturnFocus;
+    const returnToBrief =
+      Boolean(state.briefSelectionID) ||
+      (returnFocus &&
+        ["brief-action", "brief-session"].includes(returnFocus.type));
+    const returnToDiagnosis =
+      returnFocus && returnFocus.type === "diagnosis-action";
     state.attentionExpiryRefresh = true;
     clearExpiredIssueSnapshotState();
+    if (returnToBrief) {
+      state.briefSelectionID = "";
+      setActiveView("brief", false);
+      try {
+        await loadDeveloperBrief();
+        focusCurrentElement(elements.briefHeading);
+      } finally {
+        state.attentionExpiryRefresh = false;
+      }
+      return;
+    }
+    if (returnToDiagnosis) {
+      setActiveView("sessions", false);
+      try {
+        if (state.selectedSessionID) {
+          await loadSessionDetail(state.selectedSessionID);
+        }
+        focusCurrentElement(elements.sessionDiagnosisHeading);
+      } finally {
+        state.attentionExpiryRefresh = false;
+      }
+      return;
+    }
     showAttentionNotice(
-      "The issue view changed. Refreshing both Attention lists from a current snapshot…",
+      "The finding view changed. Refreshing Attention with current data…",
       "pending",
     );
     try {
       const refreshed = await refreshAttention(false, true);
       if (refreshed) {
         showAttentionNotice(
-          "Attention refreshed from a current snapshot.",
+          "Attention refreshed with current data.",
           "success",
           4000,
         );
@@ -5635,8 +6409,8 @@
       issueCatalog[code] || {
         title: "Detected issue",
         explanation:
-          "A configured deterministic detector reported retained evidence.",
-        action: "Inspect retained evidence",
+          "Belay recorded a finding that does not yet have a plain-language explanation.",
+        action: "Inspect the evidence",
       }
     );
   }
@@ -5669,7 +6443,7 @@
       return "Session count unavailable";
     }
     return sessions > 1
-      ? `Exact match across ${formatNumber(sessions)} sessions`
+      ? `Observed in ${formatNumber(sessions)} sessions`
       : "Observed in one session";
   }
 
@@ -5677,7 +6451,7 @@
     const harnesses = Array.isArray(values)
       ? values.map(displayHarness).filter(Boolean)
       : [];
-    return harnesses.length ? harnesses.join(", ") : "Harness unavailable";
+    return harnesses.length ? harnesses.join(", ") : "Agent unavailable";
   }
 
   function issueCaveat(issue) {
@@ -5687,10 +6461,10 @@
     }
     const quality = readText(issue.scope_quality).toLowerCase();
     if (quality === "unscoped") {
-      return "Unscoped evidence cannot establish cross-session recurrence.";
+      return "Belay could not determine whether these observations belong to the same project.";
     }
     if (quality === "conflict") {
-      return "Conflicting scope evidence prevents recurrence claims.";
+      return "Project information conflicts across these observations.";
     }
     if (issue.retained_history_only === true) {
       return "Based on retained Local history only.";
@@ -5702,7 +6476,6 @@
     const statements = [
       readText(catalogCaveat),
       issueCaveat(issue),
-      "This explanation is fixed catalog content, not a generated diagnosis or remediation recommendation.",
     ].filter(Boolean);
     return Array.from(new Set(statements)).join(" ");
   }
@@ -5852,7 +6625,7 @@
 
   function globalCoverageQualifier(coverage) {
     if (!isRecord(coverage) || coverage.complete === true) return "";
-    return `Global retained-session analysis is incomplete: ${incompleteCoverageText(
+    return `Analysis of stored sessions is incomplete: ${incompleteCoverageText(
       coverage,
     )}.`;
   }
@@ -5911,9 +6684,23 @@
   }
 
   function detectorVersionLabel(issue) {
-    const detector = readText(issue.detector_id) || "Configured detector";
     const version = readText(issue.detector_version);
-    return version ? `${detector} · v${version}` : detector;
+    if (!version) return "Unavailable";
+    return version.toLowerCase().startsWith("v") ? version : `v${version}`;
+  }
+
+  function projectRelationshipLabel(value) {
+    switch (readText(value).toLowerCase()) {
+      case "resolved":
+      case "lexical":
+        return "Project identified";
+      case "unscoped":
+        return "Project not identified";
+      case "conflict":
+        return "Project information conflicts";
+      default:
+        return "Unavailable";
+    }
   }
 
   function occurrenceEventIDs(occurrence) {
@@ -5967,13 +6754,13 @@
       .filter(([, count]) => toFiniteNumber(count) > 0)
       .sort((left, right) => right[1] - left[1]);
     elements.overviewHarnesses.textContent = harnesses.length
-      ? `Harnesses · ${harnesses
+      ? `Agents · ${harnesses
           .map(([harness, count]) => `${displayHarness(harness)} ${formatNumber(count)}`)
           .join(" · ")}`
-      : "Harness coverage unavailable";
+      : "Agent activity unavailable";
     elements.overviewFreshness.textContent = parseDate(dataThrough)
-      ? `Freshness · ${formatRelativeTime(dataThrough)}`
-      : "Data freshness unavailable";
+      ? `Last retained data received by Belay · ${formatRelativeTime(dataThrough)}`
+      : "Last retained data received by Belay · Unavailable";
     updateHarnessOptions(harnesses.map(([harness]) => harness));
   }
 
@@ -5988,7 +6775,7 @@
       });
     }
     harnesses.forEach((harness) => known.add(harness));
-    const options = [createOption("", "All harnesses")];
+    const options = [createOption("", "All agents")];
     Array.from(known)
       .sort((left, right) => left.localeCompare(right))
       .forEach((harness) => {
@@ -6098,16 +6885,16 @@
       visibleSessions.length !== 0 || !elements.sessionsLoading.hidden;
     if (state.filters.outcome) {
       elements.sessionScopeNote.textContent =
-        "Outcome availability applies to loaded matches; load more before treating results as exhaustive.";
+        "Load more sessions before treating this outcome filter as complete.";
     } else if (filtersActive() && state.sessionServerScope) {
       elements.sessionScopeNote.textContent =
-        "Filters are applied by the Local API across stored sessions.";
+        "Filters were applied across all stored sessions.";
     } else if (filtersActive()) {
       elements.sessionScopeNote.textContent =
-        "Filters were requested from the Local API and checked against loaded rows.";
+        "Filters were applied to the sessions currently loaded.";
     } else if (state.sessionHasMore) {
       elements.sessionScopeNote.textContent =
-        "Showing a bounded recent subset. Load more to inspect older sessions.";
+        "Showing recent sessions. Load more to see older sessions.";
     } else {
       elements.sessionScopeNote.textContent = "Showing all returned sessions.";
     }
@@ -6207,9 +6994,9 @@
         "span",
         history === "live" ? "capture-label live" : "capture-label reconstructed",
         history === "mixed"
-          ? "Mixed capture"
+          ? "Mixed collection"
           : history === "historical"
-            ? "Reconstructed"
+            ? "Imported history"
             : "Live",
       ),
     );
@@ -6268,6 +7055,7 @@
     state.selectedEventTotal = toFiniteNumber(session.event_count);
     state.selectedSessionDetail = session;
     state.selectedOverview = null;
+    state.selectedDiagnosis = null;
     state.events = [];
     state.findings = [];
     state.findingNextCursor = "";
@@ -6284,6 +7072,7 @@
     elements.allEventsToggle.classList.remove("is-active");
     renderSessions();
     renderSessionHeader(session);
+    renderSessionDiagnosis();
     renderSessionOverview();
     hideError();
     elements.welcomeState.hidden = true;
@@ -6296,7 +7085,9 @@
       "aria-label",
       state.sessionReturnView === "attention"
         ? "Back to issue detail"
-        : "Back to sessions",
+        : state.sessionReturnView === "brief"
+          ? "Back to Developer Brief"
+          : "Back to sessions",
     );
     document.body.classList.add("is-timeline-open");
     applyPaneAccessibility();
@@ -6317,12 +7108,18 @@
         detail.overview,
         response.data_overview,
       );
+      state.selectedDiagnosis = isRecord(response.diagnosis)
+        ? response.diagnosis
+        : null;
       state.overviewStatus = state.selectedOverview ? "complete" : "partial";
       renderSessionHeader(detail);
+      renderSessionDiagnosis();
       renderSessionOverview();
     } catch {
       if (state.selectedSessionID !== sessionID) return;
       state.overviewStatus = "partial";
+      state.selectedDiagnosis = null;
+      renderSessionDiagnosis();
       renderSessionOverview();
     }
   }
@@ -6349,8 +7146,12 @@
         detail.overview,
         response.data_overview,
       );
+      state.selectedDiagnosis = isRecord(response.diagnosis)
+        ? response.diagnosis
+        : null;
       state.overviewStatus = state.selectedOverview ? "complete" : "partial";
       renderSessionHeader(detail);
+      renderSessionDiagnosis();
       renderSessionOverview();
       void loadTimeline(sessionID, false);
       void loadFindings(sessionID);
@@ -6368,6 +7169,10 @@
             ? elements.issueDetailHeading
             : elements.navAttention,
         );
+      } else if (returnView === "brief") {
+        setActiveView("brief", false);
+        restoreLogicalFocus(returnFocus, elements.briefHeading);
+        state.briefSelectionID = "";
       } else {
         applyPaneAccessibility();
         restoreLogicalFocus(returnFocus, elements.navSessions);
@@ -6398,7 +7203,9 @@
           (finding) => readText(finding.session_id) !== sessionID,
         )
       ) {
-        throw new Error("Local findings response was not session-scoped.");
+        throw new Error(
+          "Local findings response did not match the selected session.",
+        );
       }
       state.findings =
         append && cursor
@@ -6487,6 +7294,99 @@
     loadTimeline(state.selectedSessionID, false);
   }
 
+  function renderSessionDiagnosis() {
+    const diagnosis = state.selectedDiagnosis;
+    focusRegistry.diagnosisActions.clear();
+    elements.sessionDiagnosisActions.replaceChildren();
+    elements.sessionDiagnosisLimitations.replaceChildren();
+    if (
+      !isRecord(diagnosis) ||
+      readText(diagnosis.projection_version) !==
+        "belay.session-diagnosis.v1" ||
+      !["ready", "limited", "insufficient_detail"].includes(
+        readText(diagnosis.status),
+      ) ||
+      !isRecord(diagnosis.summary)
+    ) {
+      elements.sessionDiagnosis.hidden = true;
+      return;
+    }
+    elements.sessionDiagnosis.hidden = false;
+    elements.sessionDiagnosisStatus.textContent =
+      readText(diagnosis.status) === "ready"
+        ? "Available"
+        : readText(diagnosis.status) === "limited"
+          ? "Limited"
+          : "Limited detail";
+    elements.sessionDiagnosisStatus.dataset.tone =
+      readText(diagnosis.status) === "ready" ? "current" : "unknown";
+    elements.sessionDiagnosisTitle.textContent =
+      readText(diagnosis.summary.title) || "Review the recorded activity";
+    elements.sessionDiagnosisDetail.textContent =
+      readText(diagnosis.summary.detail) ||
+      "Belay does not have enough retained detail to identify a reviewed next step.";
+    const cards = Array.isArray(diagnosis.action_cards)
+      ? diagnosis.action_cards.slice(0, 5)
+      : [];
+    const actionFragment = document.createDocumentFragment();
+    cards.forEach((card, index) => {
+      actionFragment.append(createDiagnosisActionCard(card, index));
+    });
+    elements.sessionDiagnosisActions.replaceChildren(actionFragment);
+    const coverage = isRecord(diagnosis.coverage) ? diagnosis.coverage : {};
+    const limitations = Array.isArray(coverage.limitations)
+      ? coverage.limitations.slice(0, 20)
+      : [];
+    const limitationFragment = document.createDocumentFragment();
+    limitations.forEach((limitation) => {
+      const message = readText(limitation && limitation.message);
+      if (message) limitationFragment.append(createElement("li", "", message));
+    });
+    elements.sessionDiagnosisLimitations.replaceChildren(limitationFragment);
+    elements.sessionDiagnosisLimitations.hidden = limitations.length === 0;
+  }
+
+  function createDiagnosisActionCard(card, index) {
+    const cardID =
+      readText(card && card.card_id) || `diagnosis-action-${index}`;
+    const article = createElement("article", "diagnosis-action-card");
+    article.append(
+      createElement(
+        "strong",
+        "",
+        readText(card && card.title) || "Review recorded activity",
+      ),
+      createElement(
+        "p",
+        "",
+        readText(card && card.observation) ||
+          "Belay recorded activity that may deserve review.",
+      ),
+    );
+    const evidence = briefEvidenceSummary(card && card.evidence);
+    if (evidence) article.append(createElement("p", "brief-evidence", evidence));
+    const limitation = readText(card && card.limitation);
+    if (limitation) {
+      article.append(createElement("p", "brief-limitation", limitation));
+    }
+    const nextStep = isRecord(card && card.next_step) ? card.next_step : {};
+    const button = createElement(
+      "button",
+      "secondary-button",
+      readText(nextStep.label) || "Review evidence",
+    );
+    button.type = "button";
+    button.disabled = !supportedNextStep(nextStep);
+    if (button.disabled) button.textContent = "Next step unavailable";
+    const reference = { type: "diagnosis-action", key: cardID };
+    button.addEventListener("click", () => {
+      void navigateSupportedNextStep(card, nextStep, reference);
+    });
+    focusRegistry.diagnosisActions.set(cardID, button);
+    article.append(button);
+    return article;
+  }
+
   function renderSessionHeader(session) {
     const harness = displayHarness(session.harness);
     const outcome = normalizeOutcome(session.outcome);
@@ -6503,7 +7403,7 @@
     }
     elements.selectedHistorical.hidden = history === "live";
     elements.selectedHistorical.textContent =
-      history === "mixed" ? "Mixed capture" : "Reconstructed";
+      history === "mixed" ? "Mixed collection" : "Imported history";
     elements.selectedSessionID.textContent = compactID(session.session_id);
     elements.selectedSessionID.title = readText(session.session_id);
     elements.selectedEventCount.textContent = formatNumber(
@@ -6519,14 +7419,14 @@
   function renderSessionOverview() {
     const overview = buildOverview();
     if (state.overviewStatus === "complete") {
-      elements.overviewState.textContent = "Full-session metadata";
+      elements.overviewState.textContent = "Complete session summary";
     } else if (state.overviewStatus === "partial") {
       elements.overviewState.textContent =
-        `Partial overview · ${state.events.length} loaded ` +
+        `Partial session summary · ${state.events.length} loaded ` +
         `${state.events.length === 1 ? "event" : "events"}`;
     } else {
       elements.overviewState.textContent =
-        "Loading full-session overview; interim values use loaded events.";
+        "Loading the complete session summary; counts below use the events loaded so far.";
     }
     const metrics = [
       ["Commands", overview.commands],
@@ -6549,7 +7449,7 @@
     });
     elements.activityGrid.replaceChildren(fragment);
     elements.overviewQuality.textContent = [
-      overview.coverage ? `Coverage · ${overview.coverage}` : "",
+      overview.coverage ? `Collection detail · ${overview.coverage}` : "",
       overview.confidence ? `Confidence · ${overview.confidence}` : "",
     ]
       .filter(Boolean)
@@ -6578,11 +7478,11 @@
     } else if (overview.resourcesTruncated) {
       elements.resourceDisclosure.textContent =
         `Showing ${Math.min(12, overview.resources.length)} of ` +
-        `${overview.resources.length} returned salient resources; ` +
-        "additional resources exist beyond the API projection.";
+        `${overview.resources.length} referenced resources returned; ` +
+        "additional referenced resources were not included in this summary.";
     } else if (overview.resources.length > 12) {
       elements.resourceDisclosure.textContent =
-        `Showing 12 of ${overview.resources.length} salient resources.`;
+        `Showing 12 of ${overview.resources.length} referenced resources.`;
     } else {
       elements.resourceDisclosure.textContent = "";
     }
@@ -6609,7 +7509,7 @@
     }
     if (overview.findings > 0) {
       attention.push(
-        `${formatNumber(overview.findings)} configured-rule ${
+        `${formatNumber(overview.findings)} reported ${
           overview.findings === 1 ? "finding" : "findings"
         }`,
       );
@@ -6618,12 +7518,12 @@
       state.selectedSessionDetail && state.selectedSessionDetail.outcome,
     );
     if (sessionOutcome === "interrupted") {
-      attention.push("The source explicitly reported an interrupted session");
+      attention.push("The session was reported as interrupted");
     }
     elements.needsAttentionSummary.replaceChildren(
       createStoryList(
         attention,
-        "No explicit failure, denied permission, interruption, or configured-rule finding is shown in the available overview.",
+        "No explicit failure, denied permission, interruption, or explained finding is shown in the available overview.",
       ),
     );
 
@@ -6713,7 +7613,7 @@
     if (["failed", "interrupted"].includes(outcome)) return 0;
     if (isDeniedPermissionEvent(event)) return 1;
     if (cited.has(readText(event.event_id))) return 2;
-    if (type === "command.result") return 3;
+    if (type === "command.result" && commandDisplayDetail(observation)) return 3;
     if (type === "command.exec") return 4;
     if (["file.write", "file.create", "file.delete"].includes(type)) return 5;
     if (type === "tool.call") return 6;
@@ -6870,6 +7770,14 @@
     const observed = isRecord(overview.observed_coverage)
       ? overview.observed_coverage
       : {};
+    if (key === "depths") {
+      if (Array.isArray(observed[key])) {
+        return collectionDetailSummary(observed[key]);
+      }
+      return collectionDetailSummary(
+        overviewText(overview, fallback, "coverage", "coverage_depth"),
+      );
+    }
     if (Array.isArray(observed[key])) {
       return observed[key].map(readableLabel).filter(Boolean).join(", ");
     }
@@ -6879,6 +7787,33 @@
       key === "depths" ? "coverage" : "confidence",
       key === "depths" ? "coverage_depth" : "coverage_confidence",
     );
+  }
+
+  function collectionDetailSummary(value) {
+    const rawValues = (Array.isArray(value) ? value : [value]).flatMap(
+      (item) => readText(item).split(","),
+    );
+    const labels = rawValues
+      .map((item) => collectionDetailLabel(item))
+      .filter(Boolean);
+    return Array.from(new Set(labels)).join(", ");
+  }
+
+  function collectionDetailLabel(value) {
+    const raw = readText(value).trim().toLowerCase();
+    if (!raw) return "";
+    const normalized = raw.replace(/[\s-]+/g, "_");
+    if (normalized === "artifact") return "Imported activity metadata";
+    if (normalized === "hook") return "Live agent activity";
+    if (normalized === "tool_call") return "Tool-call activity";
+    if (
+      normalized === "otel" ||
+      normalized === "span" ||
+      normalized === "otel/span"
+    ) {
+      return "Tracing activity";
+    }
+    return "Activity metadata";
   }
 
   function overviewResources(overview, fallback) {
@@ -6905,6 +7840,7 @@
 
   function renderFindingList() {
     const fragment = document.createDocumentFragment();
+    const presentation = consolidateSessionFindings(state.findings);
     const supplied = isRecord(state.selectedOverview)
       ? state.selectedOverview
       : {};
@@ -6920,7 +7856,7 @@
           createElement(
             "p",
             "overview-empty",
-            "Loading session findings from configured rules…",
+            "Loading session findings…",
           ),
         );
       } else if (state.findingsStatus === "error") {
@@ -6938,7 +7874,7 @@
             "overview-empty",
             `The session overview reports ${expectedCount} ` +
               `${expectedCount === 1 ? "finding" : "findings"}, ` +
-              "but the session-scoped findings response returned none.",
+              "but the session findings response returned none.",
           ),
         );
       } else {
@@ -6946,15 +7882,15 @@
           createElement(
             "p",
             "overview-empty",
-            "No findings reported by configured rules.",
+            "No findings were reported for this session.",
           ),
         );
       }
     } else {
-      state.findings.forEach((finding) => {
+      presentation.data.forEach((finding) => {
         const item = createElement("article", "finding-item");
         const severity = readText(finding.severity) || "reported";
-        const display = findingDisplayCatalog(finding);
+        const display = finding._display;
         const heading = createElement("div");
         const badge = createElement("span", "finding-badge", readableLabel(severity));
         badge.dataset.tone = severityTone(severity);
@@ -6973,31 +7909,40 @@
             "small",
             "",
             `${evidenceCount} cited ${evidenceCount === 1 ? "event" : "events"}${
-              readText(finding.confidence)
-                ? ` · ${readText(finding.confidence)} confidence`
+              finding._reportCount > 1
+                ? ` · ${formatNumber(finding._reportCount)} reports combined`
                 : ""
             }`,
           ),
         );
-        const sourceRuleID = safeSourceSignalCode(finding.rule_id);
-        if (sourceRuleID) {
-          const details = createElement("details", "evidence-details");
-          details.append(
-            createElement("summary", "", "Technical details"),
-            createElement("p", "", `Source rule ID · ${sourceRuleID}`),
-          );
-          item.append(details);
-        }
+        item.append(
+          createElement("p", "", display.explanation),
+          createElement("p", "overview-caveat", display.caveat),
+          createElement("p", "issue-next-action", display.action),
+        );
         fragment.append(item);
       });
+      if (presentation.hiddenCount > 0) {
+        fragment.append(
+          createElement(
+            "small",
+            "overview-caveat",
+            `${formatNumber(presentation.hiddenCount)} additional imported ${
+              presentation.hiddenCount === 1 ? "finding is" : "findings are"
+            } hidden because Belay does not yet have a clear explanation for ${
+              presentation.hiddenCount === 1 ? "it" : "them"
+            }.`,
+          ),
+        );
+      }
       if (state.findingsStatus === "loading" || state.findingsMayHaveMore) {
         fragment.append(
           createElement(
             "small",
             "overview-caveat",
             state.findingsStatus === "loading"
-              ? "Loading one bounded findings page…"
-              : "More findings are available through explicit pagination.",
+              ? "Loading another findings page…"
+              : "More findings are available. Use Load more to view them.",
           ),
         );
       } else if (state.findingsStatus === "error") {
@@ -7034,11 +7979,41 @@
 
   function findingDisplayCatalog(finding) {
     const sourceSignalCode = safeSourceSignalCode(finding && finding.rule_id);
-    return (
-      sourceSignalCatalog[`numbat/${sourceSignalCode}`] || {
-        title: "Configured Numbat rule finding",
+    const display = sourceSignalCatalog[`numbat/${sourceSignalCode}`];
+    return display
+      ? {
+          ...display,
+          key: `numbat/${sourceSignalCode}`,
+          known: true,
+        }
+      : { key: "", known: false };
+  }
+
+  function consolidateSessionFindings(findings) {
+    const groups = new Map();
+    let hiddenCount = 0;
+    findings.forEach((finding) => {
+      const display = findingDisplayCatalog(finding);
+      if (!display.known) {
+        hiddenCount += 1;
+        return;
       }
-    );
+      let group = groups.get(display.key);
+      if (!group) {
+        group = {
+          ...finding,
+          cited_event_ids: [],
+          _display: display,
+          _reportCount: 0,
+        };
+        groups.set(display.key, group);
+      }
+      group._reportCount += 1;
+      group.cited_event_ids = Array.from(
+        new Set(group.cited_event_ids.concat(findingEventIDs(finding))),
+      );
+    });
+    return { data: Array.from(groups.values()), hiddenCount };
   }
 
   function renderEvents() {
@@ -7056,8 +8031,8 @@
     elements.timelineScope.textContent = state.showAllEvents
       ? `Showing all ${visible.length} loaded events.`
       : hiddenCount > 0
-        ? `Showing ${visible.length} signal events; ${hiddenCount} repetitive lifecycle events are collapsed.`
-        : `Showing ${visible.length} signal events.`;
+        ? `Showing ${visible.length} notable loaded events; ${hiddenCount} lower-priority lifecycle events hidden.`
+        : `Showing ${visible.length} notable loaded events.`;
     elements.allEventsToggle.disabled = state.events.length === 0;
   }
 
@@ -7128,7 +8103,7 @@
         createElement(
           "p",
           "outcome-unreported",
-          "Outcome · Not reported by source",
+          "Outcome · Not reported",
         ),
       );
     }
@@ -7166,19 +8141,19 @@
     appendEvidence(list, "Action", descriptor.label);
     appendEvidence(list, "Event type", observation.type);
     appendEvidence(list, "Outcome", observation.outcome);
-    appendEvidence(list, "Safe summary", observation.summary);
+    appendEvidence(list, "Minimized summary", observation.summary);
     appendEvidence(list, "Resource kind", resource.kind);
     appendEvidence(list, "Resource name", resource.name);
-    appendEvidence(list, "Coverage", coverage.depth);
+    appendEvidence(
+      list,
+      "Collection detail",
+      collectionDetailLabel(coverage.depth),
+    );
     appendEvidence(list, "Confidence", coverage.confidence);
     if (historical.is_historical) {
-      appendEvidence(
-        list,
-        "Reconstruction",
-        historical.reconstruction_source || "historical source",
-      );
+      appendEvidence(list, "History source", "Imported history");
     } else {
-      appendEvidence(list, "Capture", "Live");
+      appendEvidence(list, "Collection", "Live");
     }
     if (observation.exit_code !== undefined && observation.exit_code !== null) {
       appendEvidence(list, "Exit code", observation.exit_code);
@@ -7187,7 +8162,11 @@
       appendEvidence(list, "Duration (ms)", observation.duration_ms);
     }
     appendEvidence(list, "Fields removed", redaction.fields_removed);
-    appendEvidence(list, "Secrets removed", redaction.secrets_removed);
+    appendEvidence(
+      list,
+      "Detected secrets removed",
+      redaction.secrets_removed,
+    );
     details.append(list);
     return details;
   }
@@ -7209,7 +8188,7 @@
       "session.start": "Session started",
       "session.end": "Session ended",
       "command.exec": "Ran command",
-      "command.result": "Command completed",
+      "command.result": "Command result",
       "tool.call": "Called tool",
       "tool.result": "Tool returned",
       "file.read": "Read file",
@@ -7220,25 +8199,50 @@
       "permission.decision": "Permission decided",
       "config.agent": "Agent configuration observed",
       "network.indicator": "Observed network target",
-      "prompt.user": "User input lifecycle",
-      "message.assistant": "Assistant lifecycle",
-      "reasoning.start": "Reasoning lifecycle started",
-      "reasoning.end": "Reasoning lifecycle ended",
+      "prompt.user": "User input recorded — content not retained",
+      "message.assistant": "Assistant response recorded — content not retained",
+      "reasoning.start": "Reasoning started — content not retained",
+      "reasoning.end": "Reasoning ended — content not retained",
     };
-    const mappedGuardrail =
-      type === "config.agent" && evidenceContext === "mapped-guardrail";
-    const label = mappedGuardrail
-      ? "Agent guardrail configuration observed"
+    const reducedApprovalEvidence =
+      ["config.agent", "session.start"].includes(type) &&
+      evidenceContext === "mapped-guardrail";
+    const label = reducedApprovalEvidence
+      ? "Fewer approval prompts enabled"
       : labels[type] || readableLabel(observation.action, "Activity");
     const detail =
-      mappedGuardrail
-        ? "This configuration event supported the safety-confirmation signal. Belay does not retain the configuration value or body."
+      reducedApprovalEvidence
+        ? "Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time."
         : type === "config.agent"
-          ? resourceName || "Configuration metadata was reported by the source."
+          ? resourceName || "Agent configuration metadata was reported."
         : type.startsWith("command.")
-          ? summary || resourceName
+          ? commandDisplayDetail(observation)
           : resourceName || summary;
     return { label, detail };
+  }
+
+  function commandDisplayDetail(observation) {
+    const resource = isRecord(observation && observation.resource)
+      ? observation.resource
+      : {};
+    const candidates = [
+      readText(observation && observation.summary),
+      readText(resource.name),
+    ];
+    const generic = new Set([
+      "command completed",
+      "command complete",
+      "command finished",
+      "command result",
+      "completed",
+      "finished",
+    ]);
+    return (
+      candidates.find(
+        (candidate) =>
+          candidate && !generic.has(candidate.trim().toLocaleLowerCase()),
+      ) || ""
+    );
   }
 
   function isSignalEvent(event, cited) {
@@ -7246,9 +8250,11 @@
     const type = readText(observation.type).toLocaleLowerCase();
     const eventID = readText(event.event_id);
     const outcome = normalizeOutcome(observation.outcome);
+    if (cited.has(eventID) || explicitOutcomes.has(outcome)) return true;
+    if (type === "command.result") {
+      return Boolean(commandDisplayDetail(observation));
+    }
     return (
-      cited.has(eventID) ||
-      explicitOutcomes.has(outcome) ||
       ["session.", "command.", "tool.", "file.", "permission.", "network."].some(
         (prefix) => type.startsWith(prefix),
       )
@@ -7257,7 +8263,7 @@
 
   function citedFindingMap() {
     const result = new Map();
-    state.findings.forEach((finding) => {
+    consolidateSessionFindings(state.findings).data.forEach((finding) => {
       findingEventIDs(finding).forEach((eventID) => {
         const values = result.get(eventID) || [];
         values.push(finding);
@@ -7289,23 +8295,23 @@
   }
 
   function sessionOutcomeLabel(outcome) {
-    if (outcome === "unknown") return "Outcome unavailable";
-    if (outcome === "incomplete") return "No terminal event";
+    if (outcome === "unknown") return "Outcome not reported";
+    if (outcome === "incomplete") return "Outcome not reported";
     return explicitOutcomeLabel(outcome);
   }
 
   function sessionOutcomeExplanation(outcome) {
     if (outcome === "unknown") {
-      return "The source did not report a terminal outcome.";
+      return "An outcome was not reported.";
     }
     if (outcome === "incomplete") {
-      return "Belay did not observe a terminal session event.";
+      return "Belay did not receive an outcome for this session.";
     }
-    return `The source explicitly reported ${explicitOutcomeLabel(outcome).toLocaleLowerCase()}.`;
+    return `The session was reported as ${explicitOutcomeLabel(outcome).toLocaleLowerCase()}.`;
   }
 
   function explicitOutcomeLabel(outcome) {
-    return readableLabel(outcome, "Outcome unavailable");
+    return readableLabel(outcome, "Outcome not reported");
   }
 
   function closeTimeline() {
@@ -7315,6 +8321,7 @@
     state.selectedEventTotal = 0;
     state.selectedSessionDetail = null;
     state.selectedOverview = null;
+    state.selectedDiagnosis = null;
     state.events = [];
     state.findings = [];
     state.findingNextCursor = "";
@@ -7330,6 +8337,7 @@
     elements.welcomeState.hidden = false;
     elements.eventsPagination.hidden = true;
     elements.findingsPagination.hidden = true;
+    renderSessionDiagnosis();
     renderSessions();
     if (returnView === "attention") {
       setActiveView("attention", false);
@@ -7339,6 +8347,10 @@
           ? elements.issueDetailHeading
           : elements.navAttention,
       );
+    } else if (returnView === "brief") {
+      setActiveView("brief", false);
+      restoreLogicalFocus(returnFocus, elements.briefHeading);
+      state.briefSelectionID = "";
     } else {
       applyPaneAccessibility();
       restoreLogicalFocus(returnFocus, elements.navSessions);
@@ -7348,6 +8360,10 @@
   }
 
   function retryLastAction() {
+    if (state.activeView === "brief") {
+      void loadDeveloperBrief();
+      return;
+    }
     if (state.activeView === "attention") {
       refreshAttention(false);
       return;
@@ -7425,7 +8441,7 @@
   ) {
     if (!state.token) {
       throw new Error(
-        "No launch token was provided. Open the URL supplied by Belay Local.",
+        "This page was not opened from a valid Belay Local link. Reopen it using the URL printed by belay local.",
       );
     }
     const headers = {
@@ -7543,9 +8559,24 @@
 
   function showError(title, error) {
     elements.errorTitle.textContent = title;
-    elements.errorDetail.textContent =
-      error instanceof Error ? error.message : "An unexpected error occurred.";
+    elements.errorDetail.textContent = customerErrorMessage(
+      error,
+      "Belay Local could not complete this request. Try again.",
+    );
     elements.errorBanner.hidden = false;
+  }
+
+  function customerErrorMessage(error, fallback) {
+    const message = error instanceof Error ? readText(error.message) : "";
+    if (!message) return fallback;
+    if (
+      /(api|schema|cursor|snapshot|projection|uuid|idempotency|mutation|listener)/i.test(
+        message,
+      )
+    ) {
+      return fallback;
+    }
+    return message;
   }
 
   function hideError() {
@@ -7624,7 +8655,7 @@
   }
 
   function displayHarness(value) {
-    return readableLabel(value, "Unknown harness");
+    return readableLabel(value, "Unknown agent");
   }
 
   function readableLabel(value, fallback = "") {
@@ -7769,7 +8800,9 @@
 
   function formatFreshness(value) {
     const date = parseDate(value);
-    return date ? `Data current ${formatRelativeTime(date)}` : "";
+    return date
+      ? `Last retained data received by Belay · ${formatRelativeTime(date)}`
+      : "";
   }
 
   function joinObservedValues(values) {

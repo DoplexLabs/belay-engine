@@ -1193,20 +1193,23 @@ func outcomeExplanation(outcome string) model.OutcomeExplanation {
 	switch outcome {
 	case "incomplete":
 		result.Source = "absence_of_session_end"
-		result.Explanation = "No session.end event was observed; Belay does not infer task success."
+		result.Explanation = "The agent reported that the session ended but did not report an outcome."
 	case "succeeded":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported a succeeded outcome."
+		result.Explanation = "The agent reported that this session completed successfully."
 	case "failed":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported a failed outcome."
+		result.Explanation = "The agent reported that this session ended with a failure."
 	case "interrupted":
 		result.Source = "session.end"
-		result.Explanation = "A session.end event explicitly reported an interrupted outcome."
+		result.Explanation = "The agent reported that this session was interrupted."
+	case "unknown":
+		result.Source = "session.end"
+		result.Explanation = "The agent did not report how this session ended."
 	default:
 		result.Value = "unknown"
 		result.Source = "session.end"
-		result.Explanation = "A session.end event was observed without an explicit terminal outcome."
+		result.Explanation = "The agent reported that the session ended but did not report an outcome."
 	}
 	return result
 }

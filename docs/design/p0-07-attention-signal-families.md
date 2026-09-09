@@ -69,10 +69,12 @@ fingerprints.
     directly. Only multi-member mapped families use family detail.
 13. Family detail has no fix, recurrence, evidence-hydration, or mutation
     action. A developer selects an exact child before accessing those features.
-14. Primary `config.agent` evidence MUST display:
-    - `Agent guardrail configuration observed` inside this mapped family;
-    - `This configuration event supported the safety-confirmation signal.
-      Belay does not retain the configuration value or body.`
+14. Primary retained evidence for this signal MUST display:
+    - `Fewer approval prompts enabled` inside this mapped family;
+    - `This cited event recorded the session starting in or switching to a
+      permission mode that asks for fewer approvals. Belay does not retain the
+      configuration value or body.`
+    Raw event types remain technical-only.
 15. Exact fix controls MUST remain hidden until eligibility succeeds. The
     section appears only when eligibility succeeds, durable history exists, or
     a resumable draft exists.
@@ -391,10 +393,10 @@ presentation.
 Default mapped family card:
 
 ```text
-Agent safety confirmations may be disabled
+Fewer approval prompts enabled
 Observed in 10 retained sessions · Claude Code · last observed 14h ago
 
-Review affected sessions and cited configuration evidence
+Review supporting sessions and cited evidence
 ```
 
 Disclosure:
@@ -542,7 +544,7 @@ identity. The exact child list and scope disclosure preserve the distinction.
 2. The card says it was observed in ten retained sessions—not ten recurrences.
 3. Detail exposes all exact affected-session records.
 4. Selecting a child opens existing cited evidence.
-5. Primary evidence says `Agent guardrail configuration observed`; raw
+5. Primary evidence says `Fewer approval prompts enabled`; raw
    `config.agent` is technical-only.
 6. Unknown upstream findings are absent from default family Attention.
 7. Evidence gaps remain separately counted and paginated.
@@ -550,3 +552,123 @@ identity. The exact child list and scope disclosure preserve the distinction.
 9. Ineligible exact issues show no empty/actionable fix workflow.
 10. Browser family failures do not affect Sessions, exact issue APIs, or MCP.
 11. Existing nine MCP tools and exact issue reads remain functional.
+
+## 11. P0-07.1 Manual-QA Correction: Actionable Attention
+
+Founder QA rejected the first family-detail experience because it moved ten
+visually duplicated cards into a detail page and exposed implementation
+language instead of helping a developer decide what to do.
+
+This correction changes presentation and adds bounded member context. It does
+not change family identity, issue fingerprints, detector behavior, evidence
+retention, MCP, or mutation contracts.
+
+### 11.1 Product contract
+
+The default browser experience MUST answer four questions in this order:
+
+1. What did Belay find?
+2. Why might it matter?
+3. What should the developer do next?
+4. Which sessions and cited observations support it?
+
+Customer-facing copy MUST use the Belay product voice. It MUST NOT expose
+`Numbat`, upstream/mapping/catalog vocabulary, raw signal codes, fingerprints,
+scope quality, recurrence terminology, or fixed/generated implementation
+qualifiers in default cards and explanations.
+
+For `tamper.guardrails_off` raw rule version `1.1`, the reviewed Belay-owned
+copy is:
+
+- title/meaning: `Fewer approval prompts enabled`;
+- observed fact: `Belay recorded a setting that lets actions already permitted
+  by the agent run without asking for approval each time.`;
+- limitation: `You may have enabled this intentionally. This finding does not
+  show that an unsafe action occurred.`;
+- action represented by `review_agent_permissions`: inspect the cited evidence
+  and review the current permission mode; no change is needed when the mode was
+  intentional.
+
+This is permission-posture context. It does not claim malicious tampering,
+unsafe behavior, or current configuration beyond the retained observation.
+
+Every customer-copy catalog entry MUST pass the same four-part truthfulness
+gate before it can be primary UI:
+
+1. observed fact supported by retained evidence;
+2. fixed meaning stated without cause or intent inference;
+3. explicit limitation;
+4. bounded evidence/review action, including no-action guidance where
+   appropriate.
+
+An imported source signal without a reviewed mapping MUST use the API catalog
+status `unknown` and fixed copy:
+
+- title: `Imported finding—not yet explained by Belay`;
+- observation: `Belay retained this imported finding but does not yet have a
+  reviewed explanation.`;
+- limitation: `Review the cited evidence; Belay does not infer its impact or
+  recommend a change.`
+
+It MUST NOT receive a generic diagnosis or recommended change. Primary UI MUST
+suppress that explanation; raw source-signal provenance may remain in
+technical API fields but MUST NOT appear in primary UI.
+
+### 11.2 Affected-session contract
+
+Family detail remains a bounded page of exact issue members. For presentation,
+each member row includes context from its deterministic latest matching
+session, selected by occurrence `last_observed_at` descending, then session
+key, occurrence ID, and revision ID ascending. A row MUST NOT imply that this
+representative session is the member's only session: the exact issue
+`session_count` remains authoritative, and `session_selection` is
+`latest_matching_session`.
+
+Each row MUST be distinguishable without opening it and contain:
+
+- harness display name;
+- the selected session's first retained activity date/time;
+- a short local session identifier;
+- cited evidence count for the member's matching occurrences in that selected
+  session;
+- cited evidence date or date range;
+- one action: `Review evidence`.
+
+The row MUST NOT lead with projection freshness, evidence completeness, scope
+quality, exact-match identity, or issue occurrence counts. Those remain
+available only where required in technical detail or API contracts.
+
+The family member page applies its cursor and `LIMIT + 1` before session/event
+enrichment. Family-list queries MUST NOT join or scan session events.
+
+Session and cited-evidence context is computed from already retained minimized
+events. Family membership, member ordering, and selected matching session are
+bound to the frozen issue snapshot. Activity bounds and cited-event
+availability reflect currently retained event rows and can become unavailable
+after retention; they do not claim a second atomic event snapshot. No prompts,
+completions, file contents, command output, raw finding prose, or new telemetry
+may be added.
+
+### 11.3 Session surfaces
+
+Known supported findings in the Sessions overview MUST use the same Belay title
+and MUST collapse duplicate raw finding cards for the same supported signal
+within a session. Raw source rule identifiers remain internal/technical data.
+
+### 11.4 Corrected manual QA gate
+
+1. Attention shows one plain-language card for the supported warning.
+2. No default Attention, issue-detail, or Sessions finding copy contains
+   `Numbat`, `upstream`, `mapped`, `catalog`, `fingerprint`, `scope`, or
+   `recurrence`.
+3. Family detail states the observed fact, meaning, limitation, and bounded
+   review action without claiming unsafe behavior.
+4. Supporting rows are distinguishable by selected session date/identifier and
+   cited evidence date/count; a multi-session exact issue is explicitly marked
+   `latest_matching_session` and retains its full `session_count`.
+5. Opening a session row still reaches its cited evidence.
+6. A session with repeated copies of the supported raw finding shows one
+   consolidated Belay warning.
+7. Existing privacy, cursor, exact issue, and MCP contracts remain unchanged.
+8. Unsupported imported signals are absent from primary Attention
+   explanations, while technical API provenance remains available.

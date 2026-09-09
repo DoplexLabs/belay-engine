@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -192,6 +193,24 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	if err := run(
+		context.Background(),
+		[]string{"quickstart", "--no-mcp"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(
+		context.Background(),
+		[]string{"quickstart", "--allow-codex-mcp-add"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := runLocal(context.Background(), nil, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -203,24 +222,37 @@ func TestQuickstartAndLocalLaunchModes(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) != 4 {
-		t.Fatalf("captured launches = %d, want 4", len(captured))
+	if len(captured) != 6 {
+		t.Fatalf("captured launches = %d, want 6", len(captured))
 	}
 	if !captured[0].installHooks || !captured[0].historicalScan ||
-		!captured[0].openBrowser || captured[0].commandName != "quickstart" {
+		!captured[0].installMCP || !captured[0].openBrowser ||
+		captured[0].allowCodexMCPAdd ||
+		captured[0].commandName != "quickstart" {
 		t.Fatalf("quickstart launch = %+v", captured[0])
 	}
 	if captured[1].openBrowser || !captured[1].installHooks ||
-		!captured[1].historicalScan {
+		!captured[1].installMCP || !captured[1].historicalScan {
 		t.Fatalf("quickstart --no-open launch = %+v", captured[1])
 	}
-	if captured[2].installHooks || captured[2].openBrowser ||
-		!captured[2].historicalScan || captured[2].commandName != "local" {
-		t.Fatalf("normal local launch changed = %+v", captured[2])
+	if !captured[2].installHooks || captured[2].installMCP ||
+		!captured[2].historicalScan || !captured[2].openBrowser {
+		t.Fatalf("quickstart --no-mcp launch = %+v", captured[2])
 	}
-	if !captured[3].installHooks || captured[3].historicalScan ||
-		captured[3].openBrowser || captured[3].commandName != "local" {
-		t.Fatalf("explicit local flags changed = %+v", captured[3])
+	if !captured[3].installHooks || !captured[3].installMCP ||
+		!captured[3].allowCodexMCPAdd || !captured[3].historicalScan ||
+		!captured[3].openBrowser || captured[3].commandName != "quickstart" {
+		t.Fatalf("quickstart Codex opt-in launch = %+v", captured[3])
+	}
+	if captured[4].installHooks || captured[4].installMCP ||
+		captured[4].allowCodexMCPAdd || captured[4].openBrowser ||
+		!captured[4].historicalScan || captured[4].commandName != "local" {
+		t.Fatalf("normal local launch changed = %+v", captured[4])
+	}
+	if !captured[5].installHooks || captured[5].installMCP ||
+		captured[5].allowCodexMCPAdd || captured[5].historicalScan ||
+		captured[5].openBrowser || captured[5].commandName != "local" {
+		t.Fatalf("explicit local flags changed = %+v", captured[5])
 	}
 }
 
@@ -240,6 +272,10 @@ func TestQuickstartHelpStatesConsentAndPrivacyBoundary(t *testing.T) {
 		"Codex and Claude Code",
 		"loopback-only",
 		"No prompts, completions, file contents, or telemetry",
+		"read-only user-scoped MCP registration",
+		"--no-mcp",
+		"--allow-codex-mcp-add",
+		"non-atomic",
 		"-no-open",
 	} {
 		if !strings.Contains(stderr.String(), required) {
@@ -306,6 +342,154 @@ exit 7`)
 	}
 	if strings.Contains(output, "private-discovery-error") {
 		t.Fatalf("onboarding output leaked discovery stderr:\n%s", output)
+	}
+}
+
+func TestQuickstartHookSummaryIsFixedAndPayloadFree(t *testing.T) {
+	root := t.TempDir()
+	client := newLocalHookClient(t, `if [ "$1" = "agents" ]; then
+	printf '%s\n' '[{"agent":"codex","present":true,"detected":true},{"agent":"Claude Code","present":true,"detected":true}]'
+	exit 0
+fi
+if [ "$1" = "hook" ] && [ "$4" = "codex" ]; then
+	exit 0
+fi
+printf '%s\n' 'token=private-hook-error' >&2
+exit 8`)
+	paths := localapp.Paths{
+		Root:        root,
+		CodexSpool:  filepath.Join(root, "live", "codex.ndjson"),
+		ClaudeSpool: filepath.Join(root, "live", "claude.ndjson"),
+	}
+	var stderr bytes.Buffer
+
+	if onboardHooks(
+		context.Background(),
+		client,
+		paths,
+		"quickstart",
+		&stderr,
+	) {
+		t.Fatal("quickstart hooks reported complete")
+	}
+	if got := stderr.String(); got !=
+		"belay quickstart: hooks codex=configured claude=failed\n" {
+		t.Fatalf("hook summary = %q", got)
+	}
+	if strings.Contains(stderr.String(), "private-hook-error") {
+		t.Fatal("hook summary leaked subprocess output")
+	}
+}
+
+func TestScanAgentsAndDoctorInventoryProjectionIsPayloadFree(t *testing.T) {
+	const inventoryJSON = `[
+		{
+			"agent":"codex",
+			"present":false,
+			"detected":true,
+			"hook":"PRIVATE_HOOK_CANARY",
+			"wired":"PRIVATE_WIRING_CANARY",
+			"setup_hint":"/Users/private/setup/PRIVATE_SETUP_HINT_CANARY",
+			"future_field":"PRIVATE_UNKNOWN_FIELD_CANARY"
+		},
+		{
+			"agent":"Claude Code",
+			"present":false,
+			"detected":false,
+			"hook":"PRIVATE_CLAUDE_HOOK_CANARY",
+			"wired":"PRIVATE_CLAUDE_WIRING_CANARY",
+			"setup_hint":"PRIVATE_CLAUDE_SETUP_HINT_CANARY",
+			"nested_unknown":{"secret":"PRIVATE_NESTED_UNKNOWN_CANARY"}
+		},
+		{
+			"agent":"future-agent",
+			"present":true,
+			"detected":true,
+			"setup_hint":"PRIVATE_FUTURE_AGENT_CANARY",
+			"future_path":"/Users/private/future-agent"
+		}
+	]`
+	binary := writeInventoryNumbat(t, inventoryJSON)
+	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
+	previousOpen := openLocalCommandStore
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.OpenWithOptions(path, local.OpenOptions{KeyProvider: keyProvider})
+	}
+	t.Cleanup(func() {
+		openLocalCommandStore = previousOpen
+	})
+
+	commands := []struct {
+		name string
+		run  func(context.Context, []string, io.Writer, io.Writer) error
+	}{
+		{name: "scan", run: runScan},
+		{name: "agents", run: runAgents},
+		{name: "doctor", run: runDoctor},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := command.run(
+				context.Background(),
+				[]string{
+					"--home", t.TempDir(),
+					"--numbat", binary,
+					"--allow-unverified-numbat",
+				},
+				&stdout,
+				&stderr,
+			)
+			if err != nil {
+				t.Fatalf("%s error = %v stderr=%s", command.name, err, stderr.String())
+			}
+			for _, forbidden := range []string{
+				"setup_hint",
+				"future_field",
+				"nested_unknown",
+				"PRIVATE_",
+				"/Users/private",
+				`"hook"`,
+				`"wired"`,
+				"future-agent",
+			} {
+				if strings.Contains(stdout.String(), forbidden) {
+					t.Fatalf("%s output leaked %q: %s", command.name, forbidden, stdout.String())
+				}
+			}
+
+			var projected cliInventory
+			if command.name == "agents" {
+				if err := json.Unmarshal(stdout.Bytes(), &projected); err != nil {
+					t.Fatalf("decode agents output: %v", err)
+				}
+			} else {
+				var envelope struct {
+					Inventory cliInventory `json:"inventory"`
+				}
+				if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+					t.Fatalf("decode %s output: %v", command.name, err)
+				}
+				projected = envelope.Inventory
+			}
+			if len(projected.Rows) != 2 ||
+				projected.Rows[0] != (cliInventoryRow{
+					Agent: "codex", Present: false, Detected: true,
+				}) ||
+				projected.Rows[1] != (cliInventoryRow{
+					Agent: "claude", Present: false, Detected: false,
+				}) {
+				t.Fatalf("%s projected rows = %+v", command.name, projected.Rows)
+			}
+			if len(projected.LaunchTargets) != 2 {
+				t.Fatalf(
+					"%s launch target count = %d, want 2",
+					command.name,
+					len(projected.LaunchTargets),
+				)
+			}
+		})
 	}
 }
 
@@ -614,4 +798,20 @@ func newLocalHookClient(t *testing.T, body string) *numbat.Client {
 		t.Fatal(err)
 	}
 	return client
+}
+
+func writeInventoryNumbat(t *testing.T, inventory string) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "fake-numbat-inventory")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "agents" ]; then
+	printf '%%b\n' %q
+	exit 0
+fi
+exit 2
+`, inventory)
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binary
 }

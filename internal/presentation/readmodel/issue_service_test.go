@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
+	"github.com/DoplexLabs/belay-engine/internal/canonical/sourcecatalog"
 )
 
 const testEventID = "01890f2e-6d4b-7c8a-9b0c-123456789abc"
@@ -656,6 +657,8 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 		name                    string
 		issue                   model.IssueSummary
 		wantTitle               string
+		wantObservation         string
+		wantCaveat              string
 		wantAction              string
 		wantCatalogStatus       string
 		wantSourceCatalogStatus string
@@ -668,7 +671,9 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 				Origin:           "numbat",
 				SourceSignalCode: &tamper,
 			},
-			wantTitle:               "Agent safety confirmations may be disabled",
+			wantTitle:               "Fewer approval prompts enabled",
+			wantObservation:         "Belay recorded a setting that lets actions already permitted by the agent run without asking for approval each time.",
+			wantCaveat:              "This setting may be intentional. The record does not show whether an action bypassed a prompt or caused harm.",
 			wantAction:              "review_agent_permissions",
 			wantCatalogStatus:       "known",
 			wantSourceCatalogStatus: "known",
@@ -681,7 +686,9 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 				Origin:           "numbat",
 				SourceSignalCode: &unknown,
 			},
-			wantTitle:               "Upstream Numbat finding",
+			wantTitle:               "Imported finding—not yet explained by Belay",
+			wantObservation:         "Belay retained this imported finding but does not yet have a reviewed explanation.",
+			wantCaveat:              "Review the cited evidence; Belay does not infer its impact or recommend a change.",
 			wantAction:              "inspect_cited_events",
 			wantCatalogStatus:       "known",
 			wantSourceCatalogStatus: "unknown",
@@ -693,7 +700,9 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 				TitleCode: "issue.numbat_finding",
 				Origin:    "numbat",
 			},
-			wantTitle:               "Upstream Numbat finding",
+			wantTitle:               "Imported finding—not yet explained by Belay",
+			wantObservation:         "Belay retained this imported finding but does not yet have a reviewed explanation.",
+			wantCaveat:              "Review the cited evidence; Belay does not infer its impact or recommend a change.",
 			wantAction:              "inspect_cited_events",
 			wantCatalogStatus:       "known",
 			wantSourceCatalogStatus: "unknown",
@@ -705,8 +714,75 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 				Origin:    "belay",
 			},
 			wantTitle:               "Command failed",
+			wantObservation:         "The agent reported that a command failed.",
+			wantCaveat:              "This does not identify why the command failed or whether a later attempt succeeded.",
 			wantAction:              "inspect_cited_events",
 			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "repeated command attempts",
+			issue: model.IssueSummary{
+				TitleCode: "issue.repeated_command_attempts",
+				Origin:    "belay",
+			},
+			wantTitle:               "Command repeatedly attempted",
+			wantObservation:         "Belay recorded the same minimized command pattern several times close together.",
+			wantCaveat:              "This can be intentional and does not prove that the agent was stuck.",
+			wantAction:              "inspect_matching_sessions",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "permission denial",
+			issue: model.IssueSummary{
+				TitleCode: "issue.explicit_permission_denial",
+				Origin:    "belay",
+			},
+			wantTitle:               "Permission denied",
+			wantObservation:         "The agent reported that a permission request was denied.",
+			wantCaveat:              "This may be expected. Inspect the cited evidence if the denial blocked the work.",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "verification gap",
+			issue: model.IssueSummary{
+				TitleCode: "issue.verification_not_observed",
+				Origin:    "belay",
+			},
+			wantTitle:               "No recognized verification command observed",
+			wantObservation:         "After a recorded file change, Belay did not see a test or verification command it recognizes before the session ended.",
+			wantCaveat:              "Verification may have happened outside the activity Belay recorded.",
+			wantAction:              "inspect_verification_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "unresolved verification",
+			issue: model.IssueSummary{
+				TitleCode: "issue.unresolved_verification_failure_at_completion",
+				Origin:    "belay",
+			},
+			wantTitle:               "Verification still failed at session end",
+			wantObservation:         "A test or verification command Belay recognizes failed, and Belay did not see a later successful run before the session ended.",
+			wantCaveat:              "This describes only the recorded session.",
+			wantAction:              "inspect_verification_events",
+			wantCatalogStatus:       "known",
+			wantSourceCatalogStatus: "not_applicable",
+		},
+		{
+			name: "unsupported issue title",
+			issue: model.IssueSummary{
+				TitleCode: "issue.future_unknown",
+				Origin:    "belay",
+			},
+			wantTitle:               "Finding not yet explained",
+			wantObservation:         "Belay retained this finding but does not yet have a reviewed explanation.",
+			wantCaveat:              "Review the cited evidence; Belay does not infer its impact or recommend a change.",
+			wantAction:              "inspect_cited_events",
+			wantCatalogStatus:       "unknown",
 			wantSourceCatalogStatus: "not_applicable",
 		},
 	}
@@ -717,6 +793,8 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 			if catalog.CatalogVersion != IssueCatalogVersion ||
 				catalog.SourceSignalCatalogVersion != SourceSignalCatalogVersion ||
 				catalog.DisplayTitle != test.wantTitle ||
+				catalog.ObservationStatement != test.wantObservation ||
+				catalog.Caveat != test.wantCaveat ||
 				catalog.NextEvidenceAction != test.wantAction ||
 				catalog.CatalogStatus != test.wantCatalogStatus ||
 				catalog.SourceSignalCatalogStatus != test.wantSourceCatalogStatus {
@@ -730,8 +808,13 @@ func TestIssueCatalogUsesFixedSourceSignalPresentation(t *testing.T) {
 				*catalog.SourceSignalCode != *test.wantSourceCode {
 				t.Fatalf("source signal = %v, want %q", catalog.SourceSignalCode, *test.wantSourceCode)
 			}
-			if catalog.ObservationStatement == "" || catalog.Caveat == "" {
-				t.Fatalf("catalog narrative is incomplete: %+v", catalog)
+			if test.name == "known Numbat source signal" &&
+				(catalog.ObservationStatement != sourcecatalog.GuardrailsObservationStatement ||
+					catalog.Caveat != sourcecatalog.GuardrailsCaveat) {
+				t.Fatalf("known source copy = %+v", catalog)
+			}
+			if strings.Contains(catalog.ObservationStatement, "may have") {
+				t.Fatalf("catalog observation speculates: %+v", catalog)
 			}
 		})
 	}

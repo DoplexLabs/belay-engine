@@ -346,7 +346,7 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 		`if (explicitOutcomes.has(outcome)) {`,
 		`"status-badge"`,
 		`if (outcome === "unknown") {`,
-		`"Outcome · Not reported by source"`,
+		`"Outcome · Not reported"`,
 	} {
 		if !strings.Contains(eventRow, required) {
 			t.Fatalf("event-row rendering is missing %q", required)
@@ -360,7 +360,7 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 		t.Error("event rows must have exactly one conditionally rendered outcome badge")
 	}
 	if strings.Index(eventRow, `if (outcome === "unknown") {`) >
-		strings.Index(eventRow, `"Outcome · Not reported by source"`) {
+		strings.Index(eventRow, `"Outcome · Not reported"`) {
 		t.Error("source-unreported metadata is not guarded by the unknown-outcome check")
 	}
 	if !strings.Contains(source,
@@ -369,12 +369,16 @@ func TestBrowserEventOutcomePresentationContract(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`if (outcome === "unknown") return "Outcome unavailable";`,
-		`if (outcome === "incomplete") return "No terminal event";`,
+		`if (outcome === "unknown") return "Outcome not reported";`,
+		`if (outcome === "incomplete") return "Outcome not reported";`,
 	} {
 		if !strings.Contains(sessionLabels, required) {
 			t.Fatalf("session outcome labels are missing %q", required)
 		}
+	}
+	if strings.Contains(source, "terminal event") ||
+		strings.Contains(source, "terminal session event") {
+		t.Error("browser retains customer-facing terminal-event jargon")
 	}
 	if strings.Contains(sessionLabels, `"Succeeded"`) {
 		t.Error("unknown or incomplete session outcomes must never be coerced to success")
@@ -413,10 +417,10 @@ func TestBrowserLaunchUXContract(t *testing.T) {
 		`state.sessionOccurredAfter = dateLowerBound(state.filters.days);`,
 		`parameters.set("occurred_after", state.sessionOccurredAfter);`,
 		`session_id: sessionID`,
-		`Partial overview ·`,
-		`"additional resources exist beyond the API projection."`,
-		`"No findings reported by configured rules."`,
-		`"Outcome availability applies to loaded matches; load more before treating results as exhaustive."`,
+		`Partial session summary ·`,
+		`"additional referenced resources were not included in this summary."`,
+		`"No findings were reported for this session."`,
+		`"Load more sessions before treating this outcome filter as complete."`,
 		`details.append(createElement("summary", "", "Evidence"));`,
 		`history === "mixed"`,
 	} {

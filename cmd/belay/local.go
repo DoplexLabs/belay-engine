@@ -43,21 +43,29 @@ type localRuntimeFlags struct {
 }
 
 type preparedRuntime struct {
-	paths  localapp.Paths
-	config localapp.Config
-	client *numbat.Client
+	paths           localapp.Paths
+	config          localapp.Config
+	client          *numbat.Client
+	belayExecutable string
 }
 
 type localLaunchOptions struct {
-	runtime        localRuntimeFlags
-	listen         string
-	installHooks   bool
-	historicalScan bool
-	openBrowser    bool
-	commandName    string
+	runtime          localRuntimeFlags
+	listen           string
+	installHooks     bool
+	installMCP       bool
+	allowCodexMCPAdd bool
+	historicalScan   bool
+	openBrowser      bool
+	commandName      string
 }
 
-var launchLocal = runLocalLaunch
+var (
+	launchLocal           = runLocalLaunch
+	openLocalCommandStore = func(path string) (*local.Store, error) {
+		return local.Open(path, local.NewMacOSKeychainProvider())
+	}
+)
 
 func addLocalRuntimeFlags(flags *flag.FlagSet) localRuntimeFlags {
 	return localRuntimeFlags{
@@ -155,7 +163,12 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 	if err != nil {
 		return preparedRuntime{}, err
 	}
-	return preparedRuntime{paths: paths, config: config, client: client}, nil
+	return preparedRuntime{
+		paths:           paths,
+		config:          config,
+		client:          client,
+		belayExecutable: belayExecutable,
+	}, nil
 }
 
 func compiledNumbatPin() (numbat.BinaryPin, bool, error) {
@@ -222,8 +235,13 @@ func runQuickstart(ctx context.Context, args []string, stdout, stderr io.Writer)
 
 Explicitly initializes private Belay Local state, verifies packaged Numbat,
 installs monitor-only hooks for detected Codex and Claude Code installations,
-imports minimized local activity, scans local history, and opens a loopback-only
+installs read-only user-scoped MCP registration for detected CLIs, imports
+minimized local activity, scans local history, and opens a loopback-only
 browser. No prompts, completions, file contents, or telemetry are sent to Belay.
+Use --no-mcp to opt out only from MCP registration.
+Codex MCP add is disabled by default because its CLI can replace duplicate
+names non-atomically. --allow-codex-mcp-add accepts that behavior after Belay
+strictly verifies that no existing Codex entry named belay is present.
 
 Options:`)
 		flags.PrintDefaults()
@@ -231,16 +249,24 @@ Options:`)
 	runtimeFlags := addLocalRuntimeFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:0", "loopback listen address")
 	noOpen := flags.Bool("no-open", false, "print the Local URL without opening a browser")
+	noMCP := flags.Bool("no-mcp", false, "do not modify Codex or Claude MCP configuration")
+	allowCodexMCPAdd := flags.Bool(
+		"allow-codex-mcp-add",
+		false,
+		"accept Codex CLI non-atomic duplicate-name behavior after strict absence verification",
+	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	return launchLocal(ctx, localLaunchOptions{
-		runtime:        runtimeFlags,
-		listen:         *listen,
-		installHooks:   true,
-		historicalScan: true,
-		openBrowser:    !*noOpen,
-		commandName:    "quickstart",
+		runtime:          runtimeFlags,
+		listen:           *listen,
+		installHooks:     true,
+		installMCP:       !*noMCP,
+		allowCodexMCPAdd: *allowCodexMCPAdd,
+		historicalScan:   true,
+		openBrowser:      !*noOpen,
+		commandName:      "quickstart",
 	}, stdout, stderr)
 }
 
@@ -259,8 +285,37 @@ func runLocalLaunch(
 	}
 	defer store.Close()
 
+	onboardingComplete := true
 	if options.installHooks {
-		onboardHooks(ctx, runtime.client, runtime.paths, options.commandName, stderr)
+		if !onboardHooks(ctx, runtime.client, runtime.paths, options.commandName, stderr) {
+			onboardingComplete = false
+		}
+	}
+	if options.installMCP {
+		if options.allowCodexMCPAdd {
+			fmt.Fprintln(
+				stderr,
+				"belay quickstart: Codex MCP add opt-in accepts non-atomic duplicate-name behavior",
+			)
+		}
+		if !onboardMCPConfiguration(
+			ctx,
+			runtime,
+			options.commandName,
+			options.allowCodexMCPAdd,
+			stderr,
+		) {
+			onboardingComplete = false
+		}
+	} else if options.commandName == "quickstart" {
+		fmt.Fprintln(stderr, "belay quickstart: mcp skipped_by_user")
+	}
+	if !onboardingComplete && options.commandName == "quickstart" {
+		fmt.Fprintf(
+			stderr,
+			"belay %s: onboarding incomplete; Local will continue\n",
+			options.commandName,
+		)
 	}
 	token, err := localhttp.NewLaunchToken()
 	if err != nil {
@@ -357,7 +412,7 @@ func onboardLocalHooks(
 	paths localapp.Paths,
 	stderr io.Writer,
 ) {
-	onboardHooks(ctx, client, paths, "local", stderr)
+	_ = onboardHooks(ctx, client, paths, "local", stderr)
 }
 
 func onboardHooks(
@@ -366,22 +421,82 @@ func onboardHooks(
 	paths localapp.Paths,
 	commandName string,
 	stderr io.Writer,
-) {
+) bool {
 	results, hookErr := localapp.ManageHooks(ctx, client, paths, "install")
-	if err := writeJSON(stderr, results); err != nil {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: hook onboarding results could not be reported; Local remains available\n",
-			commandName,
-		)
+	if commandName != "quickstart" {
+		if err := writeJSON(stderr, results); err != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: hook onboarding results could not be reported; Local remains available\n",
+				commandName,
+			)
+		}
+		if hookErr != nil {
+			fmt.Fprintf(
+				stderr,
+				"belay %s: hook onboarding incomplete; Local remains available\n",
+				commandName,
+			)
+		}
+		return hookErr == nil
+	}
+	statuses := map[string]string{
+		"codex":  "skipped_not_detected",
+		"claude": "skipped_not_detected",
+	}
+	for _, result := range results {
+		status := "configured"
+		if result.Error != "" {
+			status = "failed"
+		}
+		statuses[result.Agent] = status
 	}
 	if hookErr != nil {
-		fmt.Fprintf(
-			stderr,
-			"belay %s: hook onboarding incomplete; Local remains available\n",
-			commandName,
-		)
+		if len(results) == 0 {
+			statuses["codex"] = "unavailable"
+			statuses["claude"] = "unavailable"
+		}
 	}
+	fmt.Fprintf(
+		stderr,
+		"belay %s: hooks codex=%s claude=%s\n",
+		commandName,
+		statuses["codex"],
+		statuses["claude"],
+	)
+	return hookErr == nil
+}
+
+type cliInventoryRow struct {
+	Agent    string `json:"agent"`
+	Present  bool   `json:"present"`
+	Detected bool   `json:"detected"`
+}
+
+type cliInventory struct {
+	Rows          []cliInventoryRow          `json:"rows"`
+	LaunchTargets map[string]cliInventoryRow `json:"launch_targets"`
+}
+
+func projectCLIInventory(inventory numbat.Inventory) cliInventory {
+	result := cliInventory{
+		Rows:          make([]cliInventoryRow, 0, 2),
+		LaunchTargets: make(map[string]cliInventoryRow, 2),
+	}
+	for _, agent := range []numbat.Agent{numbat.AgentCodex, numbat.AgentClaude} {
+		row, ok := inventory.LaunchTargets[agent]
+		if !ok {
+			continue
+		}
+		projected := cliInventoryRow{
+			Agent:    agent.String(),
+			Present:  row.Present,
+			Detected: row.Detected,
+		}
+		result.Rows = append(result.Rows, projected)
+		result.LaunchTargets[projected.Agent] = projected
+	}
+	return result
 }
 
 func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -395,14 +510,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 	inventory, reports, err := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
 	if writeErr := writeJSON(stdout, map[string]any{
-		"inventory": inventory,
+		"inventory": projectCLIInventory(inventory),
 		"scans":     reports,
 	}); writeErr != nil {
 		return writeErr
@@ -427,7 +542,7 @@ func runAgents(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, inventory)
+	return writeJSON(stdout, projectCLIInventory(inventory))
 }
 
 func runHooks(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -637,7 +752,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	store, err := local.Open(runtime.paths.Database, local.NewMacOSKeychainProvider())
+	store, err := openLocalCommandStore(runtime.paths.Database)
 	if err != nil {
 		return err
 	}
@@ -650,7 +765,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		"config":            "ok",
 		"encrypted_storage": "ok",
 		"numbat_pin":        "ok",
-		"inventory":         inventory,
+		"inventory":         projectCLIInventory(inventory),
 		"detector_catalog":  detection.CatalogVersion,
 	}
 	if analysisErr != nil {

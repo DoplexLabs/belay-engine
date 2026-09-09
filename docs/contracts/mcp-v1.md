@@ -35,6 +35,80 @@ All nine tools are read-only, idempotent, non-destructive, and closed-world.
 No prompts, resources, logging, completions, shell, filesystem, browser-write,
 fix-action, or monitoring capability is advertised.
 
+## Local registration
+
+The packaged one-command path:
+
+```text
+./bin/belay quickstart
+```
+
+safely inspects detected Codex and Claude Code user-scope MCP configuration.
+Claude registration may proceed automatically when its status is safely
+understood. Normal quickstart does not add an absent Codex entry. The explicit
+one-command path that permits that add is:
+
+```text
+./bin/belay quickstart --allow-codex-mcp-add
+```
+
+The flag permits `codex mcp add` only after Belay strictly verifies that the
+`belay` entry is absent. It records the user's acceptance of the Codex CLI's
+non-atomic duplicate-name behavior. Belay never invokes that add operation
+against an existing entry; foreign or unverifiable entries are preserved and
+never overwritten or removed.
+
+Registration configures only the existing local stdio command:
+
+```text
+ABS_BELAY mcp
+```
+
+or, for an explicit non-default Belay home:
+
+```text
+ABS_BELAY mcp --home ABS_BELAY_HOME
+```
+
+Registration adds no tool, HTTP transport, URL, bearer token, environment
+secret, shell wrapper, or working-directory override. `quickstart --no-mcp`
+skips MCP inspection and registration while preserving the rest of quickstart.
+
+The explicit configuration commands are:
+
+```text
+belay mcp-config install [--allow-codex-mcp-add] [--home PATH]
+belay mcp-config status [--home PATH]
+belay mcp-config uninstall [--home PATH]
+```
+
+Direct install follows the same split: Claude may be installed when its status
+is safely understood, while Codex add requires
+`--allow-codex-mcp-add`. Standalone install may create private Belay
+configuration and directories to establish a stable installation/ownership
+identity. It does not create or open the Local database and does not create
+Keychain material.
+
+For Codex, the opt-in permits add only from a strictly verified absent state.
+Install does not update, migrate, replace, or remove a current, recognized
+prior, foreign, unverifiable, or unavailable Codex entry. A current exact entry
+is left unchanged. After an archive move, the user must inspect a recognized
+prior Codex entry with `mcp-config status`, explicitly invoke
+`mcp-config uninstall`, verify absence, and then rerun
+`mcp-config install --allow-codex-mcp-add`.
+
+Install and uninstall mutate only entries allowed by their explicit action and
+the exact ownership checks. A foreign, scope-ambiguous, or unverifiable entry
+named `belay` is preserved. Unknown host-CLI status formats fail closed.
+Explicit uninstall removes only an exact current or previously verified
+Belay-owned identity. MCP uninstall does not remove monitor hooks, Local
+history, Keychain material, or the extracted package.
+
+Registration is local and requires no Doplex service, hosted login, paid
+service, or product-network request. A host agent CLI wrapper may independently
+perform credential or network checks; its failure does not change this MCP tool
+contract and does not prevent quickstart from opening Local.
+
 ## Recommended issue-evidence loop
 
 1. Call `list_issues`.
@@ -52,7 +126,7 @@ An exact fingerprint match means equality under Belay's compatible,
 versioned, deterministic fingerprint contract. It does not establish semantic
 similarity, shared intent, shared root cause, or remediation success.
 
-## Existing six tools
+## Original six backward-compatible tools
 
 ### `list_sessions`
 
@@ -249,19 +323,24 @@ from issue metadata. The recursively closed output schema strictly requires
 shown above; an incompatible or malformed readmodel catalog produces the fixed
 `belay_mcp/read_failed` tool error rather than a reconstructed response.
 
-For `numbat/tamper.guardrails_off`, the catalog returns only the fixed
-Belay-owned title `Agent safety confirmations may be disabled`, the fixed
-observation and limitation defined by the P0-06 contract,
-`next_evidence_action=review_agent_permissions`, and
+For the imported source signal `tamper.guardrails_off`, the catalog returns the
+fixed Belay-owned title `Fewer approval prompts enabled`, the observation
+`Belay recorded a setting that lets actions already permitted by the agent run
+without asking for approval each time.`, and the caveat `This setting may be
+intentional. The record does not show whether an action bypassed a prompt or
+caused harm.` It also returns
+`next_evidence_action=review_agent_permissions` and
 `source_signal_catalog_status=known`.
 
-Other safe Numbat source codes return the fixed title `Upstream Numbat finding`,
-fixed neutral observation and limitation,
-`next_evidence_action=inspect_cited_events`, and
-`source_signal_catalog_status=unknown`. The safe source code remains structured
-technical metadata and is never interpolated into narrative or errors. Invalid
-or unavailable source codes use the same fallback with
-`source_signal_code=null`. Non-Numbat issues use
+Other imported source codes without a reviewed mapping return the fixed title
+`Imported finding—not yet explained by Belay`, the neutral observation `Belay
+retained this imported finding but does not yet have a reviewed explanation.`,
+the caveat `Review the cited evidence; Belay does not infer its impact or
+recommend a change.`, `next_evidence_action=inspect_cited_events`, and
+`source_signal_catalog_status=unknown`. A safe source code may remain structured
+technical metadata, but it is never interpolated into customer narrative or
+errors. Invalid or unavailable source codes use the same fallback with
+`source_signal_code=null`. Issues without an imported source signal use
 `source_signal_catalog_status=not_applicable`.
 
 ### `lookup_session_events`

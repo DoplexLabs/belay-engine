@@ -2,7 +2,8 @@
 
 - **Status:** Implemented Local Alpha surface, including Attention,
   P0-03 browser-only fix-attempt actions, P0-04 recurrence-monitoring reads,
-  the P0-05 shared issue-evidence readmodel, and P0-07 signal-family reads
+  the P0-05 shared issue-evidence readmodel, P0-07 signal-family reads, and
+  P0-08 Developer Brief/session diagnosis reads
 - **Local base:** loopback-only, implementation-defined port
 - **Future Teams base:** `/v1`
 
@@ -28,8 +29,9 @@ similarity, resolution, prevention, or fix success and are not exposed to MCP.
 | Route | Local Alpha behavior |
 |---|---|
 | `GET /healthz` | loopback health response |
+| `GET /v1/developer-brief` | fixed, bounded 24-hour composition over sessions and reviewed Attention |
 | `GET /v1/sessions` | filtered, cursor-paginated local sessions |
-| `GET /v1/sessions/{id}` | one local session and metadata-only overview |
+| `GET /v1/sessions/{id}` | one local session, metadata-only overview, and additive deterministic diagnosis |
 | `GET /v1/sessions/{id}/events` | cursor-paginated local timeline |
 | `GET /v1/sessions/{id}/events/lookup` | bounded exact cited-event lookup within one session |
 | `GET /v1/activity` | filtered, cursor-paginated canonical activity |
@@ -113,6 +115,94 @@ Deterministic ordering:
 - Activity: `occurred_at DESC, source.sequence DESC, event_id DESC`
 - Findings: `detected_at DESC, finding_id DESC`
 
+## Developer Brief
+
+`GET /v1/developer-brief` accepts no query parameters. Any supplied parameter
+returns the standard `400` invalid-request problem.
+
+The response uses `schema_version=belay.read.v1` and
+`projection_version=belay.developer-brief.v1`. It covers the fixed rolling 24
+hours ending at `generated_at` and evaluates at most:
+
+- 100 recent-session candidates;
+- 20 reviewed Attention-family candidates;
+- 20 stable evidence-gap candidates.
+
+It returns at most five action cards and eight recent-work cards. It never
+drains continuation pages or loads session overviews, timelines, events,
+family members, issue occurrences, or generated prose.
+
+Cards are admitted only from current stable reviewed Attention families,
+current stable reviewed evidence gaps, and explicit agent-reported failed or
+interrupted session outcomes. Unknown catalogs, unsupported imported
+findings, experimental findings, non-current analysis, and actionless rows are
+excluded.
+
+The three reads are independent and are not represented as one atomic storage
+snapshot. `coverage.sources` reports each source as `complete`, `truncated`, or
+`unavailable`. Evaluated session counts become explicit lower bounds when the
+bounded source reports more rows.
+
+At least one usable source returns `200` with `status=ready|limited`. If all
+three reads are unavailable, Local returns the fixed
+`503 belay.local/developer-brief-unavailable` problem with detail:
+`Belay could not assemble the recent developer brief.`
+
+Action targets use required nullable `family_id`, `issue_id`, `session_id`, and
+`view_cursor` fields. Brief output contains no raw commands, arguments, paths,
+event payloads, fingerprint material, detector identifiers, source-signal
+codes, or upstream prose.
+
+The top-level shape is:
+
+```json
+{
+  "schema_version": "belay.read.v1",
+  "projection_version": "belay.developer-brief.v1",
+  "generated_at": "2026-09-09T17:00:00Z",
+  "window": {
+    "started_at": "2026-09-08T17:00:00Z",
+    "ended_at": "2026-09-09T17:00:00Z",
+    "duration_hours": 24
+  },
+  "status": "ready",
+  "recent_summary": {
+    "evaluated_session_count": 0,
+    "session_count_is_lower_bound": false,
+    "harnesses": [],
+    "outcomes": {
+      "succeeded": 0,
+      "failed": 0,
+      "interrupted": 0,
+      "incomplete": 0,
+      "unknown": 0
+    },
+    "history": {"live": 0, "historical": 0, "mixed": 0},
+    "latest_observed_at": null
+  },
+  "action_cards": [],
+  "recent_work": [],
+  "coverage": {
+    "complete": true,
+    "sources": [],
+    "issue_analysis": {
+      "current_sessions": 0,
+      "pending_sessions": 0,
+      "failed_sessions": 0,
+      "truncated_sessions": 0,
+      "unscoped_sessions": 0,
+      "analysis_through": "2026-09-09T17:00:00Z",
+      "complete": true
+    },
+    "limitations": []
+  }
+}
+```
+
+Action-card kinds are `reviewed_finding`, `evidence_gap`, `session_outcome`,
+and `failed_activity`. Next-step kinds are `open_attention_family`,
+`open_issue`, and `open_session`.
+
 ## Local session list
 
 `GET /v1/sessions` accepts:
@@ -147,7 +237,8 @@ canonical event outcome enum, which remains `succeeded`, `failed`,
 ## Local session detail overview
 
 `GET /v1/sessions/{id}` returns the session summary plus a deterministic
-`overview` computed only from stored canonical metadata:
+`overview` computed only from stored canonical metadata and an additive Local
+HTTP-only diagnosis:
 
 ```json
 {
@@ -185,13 +276,53 @@ canonical event outcome enum, which remains `succeeded`, `failed`,
       "outcome": {
         "value": "incomplete",
         "source": "absence_of_session_end",
-        "explanation": "No session.end event was observed; Belay does not infer task success."
+        "explanation": "The agent reported that the session ended but did not report an outcome."
       }
+    }
+  },
+  "diagnosis": {
+    "projection_version": "belay.session-diagnosis.v1",
+    "status": "ready",
+    "summary": {
+      "state": "no_reviewed_action_available",
+      "title": "No reviewed action was identified",
+      "detail": "Belay did not find a reviewed actionable item in the bounded analysis available for this session."
+    },
+    "action_cards": [],
+    "coverage": {
+      "issue_source": "complete",
+      "evaluated_issue_count": 0,
+      "issue_candidates_truncated": false,
+      "analysis": {
+        "current_sessions": 1,
+        "pending_sessions": 0,
+        "failed_sessions": 0,
+        "truncated_sessions": 0,
+        "unscoped_sessions": 0,
+        "analysis_through": "2026-09-08T18:05:01Z",
+        "complete": true
+      },
+      "limitations": []
     }
   },
   "data_through": "2026-09-08T18:05:01Z"
 }
 ```
+
+Diagnosis performs one stable session-scoped issue-summary read with a maximum
+of 20 candidates. It does not load issue occurrences, cited events, family
+members, timelines, findings, fix history, or monitoring. An issue-enrichment
+failure never changes successful core session-detail behavior: Local returns
+the session with a limited or insufficient diagnosis and fixed limitation
+copy. Cross-session issue occurrence/session counts are not presented as
+session-local evidence. A reviewed issue remains explained on its diagnosis
+card, but its next step is `open_session` with label `Review session activity`
+and the exact selected `session_id`; diagnosis cards do not use an issue view
+cursor that could open another session's occurrence.
+
+The shared readmodel `SessionDetail` remains unchanged. MCP `get_session`
+therefore does not receive the Local HTTP-only diagnosis field, and MCP remains
+exactly nine read-only tools.
 
 Counting rules are deliberately mechanical:
 

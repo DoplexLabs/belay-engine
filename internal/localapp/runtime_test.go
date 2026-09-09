@@ -112,6 +112,90 @@ esac
 	}
 }
 
+func TestImportLiveAttemptsHarnessesIndependently(t *testing.T) {
+	tests := []struct {
+		name          string
+		failingAgent  string
+		successIndex  int
+		failureIndex  int
+		successCursor string
+	}{
+		{
+			name:          "Codex failure does not prevent Claude import",
+			failingAgent:  "codex",
+			successIndex:  1,
+			failureIndex:  0,
+			successCursor: "claude.cursor.json",
+		},
+		{
+			name:          "Claude failure preserves Codex import",
+			failingAgent:  "claude",
+			successIndex:  0,
+			failureIndex:  1,
+			successCursor: "codex.cursor.json",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := hookRuntimePaths(root)
+			if err := os.MkdirAll(filepath.Join(root, "live"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for fixture, spool := range map[string]string{
+				filepath.Join("..", "..", "testdata", "numbat", "v0.3.0", "live", "codex-sanitized.ndjson"):  paths.CodexSpool,
+				filepath.Join("..", "..", "testdata", "numbat", "v0.3.0", "live", "claude-sanitized.ndjson"): paths.ClaudeSpool,
+			} {
+				body, err := os.ReadFile(fixture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(spool, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(
+				filepath.Join(root, "live", test.failingAgent+".cursor.json"),
+				[]byte("{invalid"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			store, err := local.OpenWithOptions(filepath.Join(root, "belay.sqlite"), local.OpenOptions{
+				KeyProvider: &memoryKeyProvider{keys: make(map[string][]byte)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+
+			results, err := ImportLive(context.Background(), paths, store, Config{
+				Version:             ConfigVersion,
+				InstallationID:      "inst_live_isolation_test",
+				NumbatVersionMarker: "numbat-test",
+			})
+			if err == nil {
+				t.Fatal("ImportLive() error = nil, want one harness failure")
+			}
+			if !strings.Contains(err.Error(), test.failingAgent+" live import") {
+				t.Fatalf("ImportLive() error = %v, want failing harness attribution", err)
+			}
+			if len(results) != 2 {
+				t.Fatalf("ImportLive() result count = %d, want 2 attempted harnesses", len(results))
+			}
+			if results[test.successIndex].Import.EventsAccepted == 0 {
+				t.Fatalf("successful harness result = %+v, want accepted events", results[test.successIndex])
+			}
+			if results[test.failureIndex].Import.EventsAccepted != 0 {
+				t.Fatalf("failed harness result = %+v, want no accepted events", results[test.failureIndex])
+			}
+			if _, err := os.Stat(filepath.Join(root, "live", test.successCursor)); err != nil {
+				t.Fatalf("successful harness cursor was not checkpointed: %v", err)
+			}
+		})
+	}
+}
+
 func TestManageHooksInstallSkipsAbsentHarnesses(t *testing.T) {
 	root := t.TempDir()
 	logPath := filepath.Join(root, "calls")

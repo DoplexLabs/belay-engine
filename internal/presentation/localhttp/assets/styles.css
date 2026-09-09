@@ -259,6 +259,291 @@ select:focus-visible {
   height: 100%;
 }
 
+.brief-workspace {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(195, 255, 95, 0.07), transparent 34%),
+    var(--surface);
+}
+
+.brief-scroll {
+  width: min(1120px, 100%);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: clamp(28px, 5vw, 64px);
+}
+
+.brief-header,
+.brief-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brief-header h1 {
+  margin: 4px 0 8px;
+  font-size: clamp(30px, 5vw, 52px);
+  letter-spacing: -0.055em;
+}
+
+.brief-header > div > p:last-child,
+.brief-status {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.brief-status {
+  max-width: 390px;
+  text-align: right;
+}
+
+.brief-summary {
+  margin: 26px 0 34px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(17, 20, 25, 0.74);
+}
+
+.brief-summary dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0;
+}
+
+.brief-summary dt {
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brief-summary dd {
+  margin: 8px 0 0;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.brief-loading,
+.brief-error,
+.brief-empty {
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(17, 20, 25, 0.66);
+}
+
+.brief-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brief-loading p,
+.brief-error p,
+.brief-empty p,
+.brief-empty small {
+  margin: 0;
+}
+
+.brief-error h2 {
+  margin: 0 0 8px;
+}
+
+.brief-error .secondary-button {
+  margin-top: 18px;
+}
+
+.brief-content {
+  display: grid;
+  gap: 34px;
+}
+
+.brief-section {
+  min-width: 0;
+}
+
+.brief-section-heading {
+  margin-bottom: 14px;
+}
+
+.brief-section-heading h2 {
+  margin: 4px 0 0;
+  font-size: 21px;
+  letter-spacing: -0.035em;
+}
+
+.text-button {
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  font-weight: 700;
+}
+
+.brief-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.brief-action-card,
+.brief-session-card,
+.diagnosis-action-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(17, 20, 25, 0.78);
+}
+
+.brief-action-card {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  padding: 18px;
+}
+
+.brief-action-card h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.brief-action-card p,
+.diagnosis-action-card p {
+  overflow-wrap: anywhere;
+  margin: 9px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.brief-observation {
+  color: var(--text) !important;
+}
+
+.brief-evidence {
+  color: var(--subtle) !important;
+  font-size: 11px;
+}
+
+.brief-limitation {
+  font-size: 11px;
+}
+
+.brief-action-card .primary-button {
+  min-height: 44px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.brief-recent-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brief-session-button {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  padding: 15px 16px;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+}
+
+.brief-session-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brief-session-time,
+.brief-session-meta {
+  overflow-wrap: anywhere;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.brief-agent-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brief-agent-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(11, 13, 16, 0.44);
+}
+
+.brief-agent-row span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.brief-coverage {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(11, 13, 16, 0.4);
+}
+
+.brief-coverage summary {
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.brief-coverage p,
+.brief-coverage li,
+.brief-coverage dd {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.brief-coverage ul {
+  padding-left: 20px;
+}
+
+.brief-coverage dl {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.brief-coverage dl div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.4fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.brief-coverage dt {
+  font-weight: 700;
+}
+
+.brief-coverage dd {
+  margin: 0;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(290px, 360px) minmax(0, 1fr);
@@ -1937,7 +2222,7 @@ h1 {
 
 .timeline-view {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
   height: 100%;
 }
 
@@ -2029,6 +2314,69 @@ h1 {
   width: 44px;
   height: 44px;
   border-radius: 10px;
+}
+
+.session-diagnosis {
+  max-height: min(38vh, 390px);
+  overflow: auto;
+  padding: 20px clamp(24px, 4vw, 52px);
+  border-bottom: 1px solid var(--line);
+  background: rgba(195, 255, 95, 0.045);
+}
+
+.session-diagnosis-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.session-diagnosis-heading h3 {
+  margin: 4px 0 0;
+  font-size: 19px;
+  letter-spacing: -0.035em;
+}
+
+.session-diagnosis-summary {
+  margin-top: 14px;
+}
+
+.session-diagnosis-summary strong {
+  font-size: 15px;
+}
+
+.session-diagnosis-summary p {
+  max-width: 760px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.session-diagnosis-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.diagnosis-action-card {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.diagnosis-action-card .secondary-button {
+  min-height: 44px;
+  margin-top: auto;
+}
+
+.session-diagnosis-limitations {
+  margin: 14px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .session-overview {
@@ -2836,6 +3184,15 @@ h1 {
 }
 
 @media (max-width: 840px) {
+  .brief-card-grid,
+  .brief-recent-list {
+    grid-template-columns: 1fr;
+  }
+
+  .brief-agent-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .workspace {
     grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
   }
@@ -2894,7 +3251,7 @@ h1 {
   }
 
   .primary-nav-button {
-    padding: 0 8px;
+    padding: 0 7px;
     font-size: 11px;
   }
 
@@ -2913,6 +3270,36 @@ h1 {
   .workspace {
     display: block;
     position: relative;
+  }
+
+  .brief-workspace {
+    position: static;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .brief-scroll {
+    padding: 24px 18px 40px;
+  }
+
+  .brief-header,
+  .brief-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .brief-status {
+    text-align: left;
+  }
+
+  .brief-summary dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .brief-agent-summary,
+  .session-diagnosis-actions {
+    grid-template-columns: 1fr;
   }
 
   .session-panel,
@@ -3057,6 +3444,7 @@ h1 {
 
   .timeline-meta,
   .timeline-scope,
+  .session-diagnosis,
   .session-overview,
   .event-list,
   .timeline-pagination {
@@ -3076,6 +3464,11 @@ h1 {
   }
 
   .session-overview {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .session-diagnosis {
     max-height: none;
     overflow: visible;
   }

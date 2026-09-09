@@ -124,6 +124,83 @@ func TestAttentionFamiliesGroupReviewedNumbatSignalsAndKeepExactBelayIssues(t *t
 	}
 }
 
+func TestAttentionFamilyMemberUsesLatestMatchingSessionContext(t *testing.T) {
+	store := openStorageTestStore(t)
+	base := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	first := addAttentionFamilyOccurrence(
+		t, store, "shared-old", "claude-code", "finding-shared-old", "1.1",
+		base, "low",
+	)
+	latestAt := base.Add(2 * time.Hour)
+	addAttentionFamilyOccurrenceWithIdentity(
+		t,
+		store,
+		"shared-latest",
+		"codex",
+		"finding-shared-latest",
+		"1.1",
+		latestAt,
+		"low",
+		first.FingerprintID,
+		first.IssueID,
+	)
+
+	page, err := store.QueryAttentionFamilies(context.Background(), model.AttentionFamilyQuery{
+		Filter: model.AttentionFamilyFilter{
+			AttentionKind: model.AttentionKindIssue,
+			Experimental:  model.ExperimentalStable,
+		},
+		Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Data) != 1 ||
+		page.Data[0].SupportingIssueCount != 1 ||
+		page.Data[0].OccurrenceCount != 2 ||
+		page.Data[0].SessionCount != 2 {
+		t.Fatalf("family page = %+v", page)
+	}
+	members, err := store.QueryAttentionFamilyMembers(
+		context.Background(),
+		model.AttentionFamilyMemberQuery{
+			FamilyID: page.Data[0].FamilyID,
+			GroupKey: page.Data[0].GroupKey,
+			Filter: model.AttentionFamilyFilter{
+				AttentionKind: model.AttentionKindIssue,
+				Experimental:  model.ExperimentalStable,
+			},
+			Limit:               20,
+			CursorEpoch:         page.CursorEpoch,
+			Snapshot:            page.Snapshot,
+			RetentionGeneration: page.RetentionGeneration,
+			IssuedAt:            page.IssuedAt,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members.Data) != 1 {
+		t.Fatalf("members = %+v", members)
+	}
+	member := members.Data[0]
+	if member.IssueID != first.IssueID ||
+		member.SessionCount != 2 ||
+		member.SessionKey != "shared-latest" ||
+		member.SessionSelection != model.AttentionFamilyMemberSessionSelectionLatest ||
+		member.SessionStartedAt == nil ||
+		!member.SessionStartedAt.Equal(latestAt) ||
+		member.SessionLastActiveAt == nil ||
+		!member.SessionLastActiveAt.Equal(latestAt) ||
+		member.CitedEventCount != 1 ||
+		member.EvidenceFirstAt == nil ||
+		!member.EvidenceFirstAt.Equal(latestAt) ||
+		member.EvidenceLastAt == nil ||
+		!member.EvidenceLastAt.Equal(latestAt) {
+		t.Fatalf("latest member context = %+v", member)
+	}
+}
+
 func TestAttentionFamilyFiltersRecomputeVisibleCountsAndUseMappedSeverity(t *testing.T) {
 	store := openStorageTestStore(t)
 	base := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -307,6 +384,9 @@ func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(cte, "JOIN events") {
+		t.Fatalf("family-list CTE must not enrich session events before paging:\n%s", cte)
+	}
 	args = append(args, 21)
 	rows, err := store.db.QueryContext(ctx, `EXPLAIN QUERY PLAN `+cte+`
 		SELECT `+attentionFamilySummaryColumns("fr", "representative")+`
@@ -338,6 +418,84 @@ func TestAttentionFamilyScale25000SummariesReturnsOnlyBoundedSQLPage(t *testing.
 		!strings.Contains(plan.String(), "issue_occurrences") {
 		t.Fatalf("family query plan does not use projection tables:\n%s", plan.String())
 	}
+}
+
+func addAttentionFamilyOccurrenceWithIdentity(
+	t *testing.T,
+	store *Store,
+	sessionID string,
+	harness string,
+	findingID string,
+	rawRuleVersion string,
+	observedAt time.Time,
+	sourceSeverity string,
+	fingerprintID string,
+	issueID string,
+) model.IssueOccurrence {
+	t.Helper()
+	ctx := context.Background()
+	event := storageTestEvent(
+		fmt.Sprintf(
+			"00000000-0000-7000-8000-%012x",
+			uint64(observedAt.UnixNano())&0xffffffffffff,
+		),
+		sessionID,
+		1,
+		observedAt,
+	)
+	event.Source.Agent = harness
+	event.Source.RunID = "run-" + sessionID
+	event.Observation.Type = "config.agent"
+	appendResult, err := store.AppendEventResolved(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordFindingResolved(ctx, Finding{
+		FindingID:     findingID,
+		SourceRunID:   event.Source.RunID,
+		SessionKey:    sessionID,
+		DetectedAt:    observedAt,
+		RuleID:        sourcecatalog.GuardrailsSourceSignalCode,
+		RuleVersion:   rawRuleVersion,
+		Severity:      sourceSeverity,
+		SourceAgent:   harness,
+		Confidence:    "high",
+		CitedEventIDs: []string{event.EventID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code := sourcecatalog.GuardrailsSourceSignalCode
+	occurrence := testIssueOccurrence(
+		sessionID,
+		harness,
+		event.EventID,
+		fingerprintID,
+		issueID,
+		sourceSeverity,
+		"high",
+		observedAt,
+		model.ScopeUnscoped,
+	)
+	occurrence.OccurrenceID = "occ-" + sessionID
+	occurrence.Origin = "numbat"
+	occurrence.OriginRecordID = findingID
+	occurrence.FingerprintVersion = "1"
+	occurrence.Provenance = model.DetectorProvenance{
+		DetectorID:         "numbat_finding",
+		DetectorVersion:    sourcecatalog.OpaqueRuleVersion(rawRuleVersion),
+		FingerprintVersion: "1",
+		ProjectionVersion:  "1",
+	}
+	occurrence.Category = "numbat_finding"
+	occurrence.TitleCode = "issue.numbat_finding"
+	occurrence.SourceSignalCode = &code
+	occurrence.Severity = sourceSeverity
+	occurrence.Confidence = "high"
+	occurrence.ScopeQuality = model.ScopeUnscoped
+	occurrence.Evidence.CitedEventIDs = []string{event.EventID}
+	occurrence.AnalysisGeneration = appendResult.ReadGeneration
+	replaceAttentionFamilyProjection(t, store, sessionID, occurrence)
+	return occurrence
 }
 
 func addAttentionFamilyOccurrence(
