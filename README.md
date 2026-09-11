@@ -315,6 +315,14 @@ Agent clients launch `./bin/belay mcp` over stdio on demand. The tools are:
 - `get_issue_excerpts`
 - `get_fix_status`
 - `get_mission_pack`
+- `record_mission_pack_accepted`
+- `get_mission_pack_status`
+- `list_experience_proposals`
+- `list_active_experiences`
+- `approve_experience`
+- `resolve_experience_proposal`
+- `prepare_experience_lifecycle`
+- `apply_experience_lifecycle`
 - `propose_fix`
 - `record_fix_applied`
 

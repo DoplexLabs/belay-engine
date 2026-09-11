@@ -237,8 +237,7 @@ Standalone `mcp-config install` may initialize private Belay configuration and
 directories so it can retain a stable installation/ownership ID. It does not
 create or open the Local database and does not create Keychain material.
 
-Belay MCP runs locally over stdio and exposes fifteen tools. Thirteen are
-read-only:
+Belay MCP runs locally over stdio and exposes a governed tool catalog:
 
 - `list_sessions`
 - `get_session`
@@ -253,16 +252,23 @@ read-only:
 - `get_issue_excerpts`
 - `get_fix_status`
 - `get_mission_pack`
-
-Two tools make bounded additions to Belay's local store:
-
+- `record_mission_pack_accepted`
+- `get_mission_pack_status`
+- `list_experience_proposals`
+- `list_active_experiences`
+- `approve_experience`
+- `resolve_experience_proposal`
+- `prepare_experience_lifecycle`
+- `apply_experience_lifecycle`
 - `propose_fix`
 - `record_fix_applied`
 
 Results are bounded structured data marked `untrusted_observations: true`. MCP
 cannot install hooks, execute commands, modify project files, or perform
-remediation. `propose_fix` stores but never applies a unified diff limited to
-allowlisted harness configuration files. `record_fix_applied` stores the file
+remediation. State-changing tools persist only bounded records or lifecycle
+decisions after explicit user confirmation. `propose_fix` stores but never
+applies a unified diff limited to allowlisted harness configuration files.
+`record_fix_applied` stores the file
 hash after explicit user approval and external application.
 
 The issue-evidence loop is:
