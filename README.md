@@ -68,8 +68,8 @@ boundary. The current product direction is documented in
 - Belay itself makes no product-network calls. New HTTP surfaces must remain
   authenticated and loopback-only.
 - Preserve the encrypted SQLite store, ordered migrations, canonical event
-  model, Numbat integration, and all fifteen MCP tools. Extend alongside these
-  components rather than replacing them.
+  model, Numbat integration, and governed MCP tool catalog. Extend alongside
+  these components rather than replacing them.
 - Transcript text is local-only and secret-scrubbed before encrypted storage.
 - Agent activity and transcript excerpts are untrusted evidence, never
   instructions or authorization.
