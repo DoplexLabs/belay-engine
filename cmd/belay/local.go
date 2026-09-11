@@ -472,7 +472,7 @@ func runLocalLaunch(
 			onboardingComplete = false
 		}
 	} else if options.commandName == "quickstart" {
-		fmt.Fprintln(stderr, "belay quickstart: mcp skipped_by_user")
+		fmt.Fprintln(stderr, "belay quickstart: MCP setup skipped")
 	}
 	if options.commandName == "quickstart" && options.installHooks {
 		if !onboardBelaySkills(ctx, runtime.client, stderr) {
@@ -535,7 +535,7 @@ func runLocalLaunch(
 				if err != nil {
 					fmt.Fprintf(
 						stderr,
-						"belay %s: historical worker storage unavailable; Local will continue\n",
+						"belay %s: history scan could not access local data; Local will continue\n",
 						options.commandName,
 					)
 					return errors.New(
@@ -561,7 +561,7 @@ func runLocalLaunch(
 					); err != nil {
 						fmt.Fprintf(
 							stderr,
-							"belay %s: semantic analysis incomplete; Local will continue\n",
+							"belay %s: AI-assisted analysis did not finish; deterministic results remain available\n",
 							options.commandName,
 						)
 					}
@@ -771,7 +771,7 @@ func runIntelligenceWorkers(
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: local intelligence sync retry pending\n",
+					"belay %s: session update delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -787,7 +787,7 @@ func runIntelligenceWorkers(
 			func(error) {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: cost issue analysis retry pending\n",
+					"belay %s: issue analysis delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -813,7 +813,7 @@ func startLocalIntelligence(
 		func() {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: intelligence freshness retry pending; Local remains available\n",
+				"belay %s: background analysis delayed; Local remains available\n",
 				commandName,
 			)
 		},
@@ -835,7 +835,7 @@ func startLocalLiveWithDedicatedStore(
 		if err != nil {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: live acquisition storage unavailable; Local remains available\n",
+				"belay %s: live session updates unavailable; Local remains available\n",
 				commandName,
 			)
 			return
@@ -850,7 +850,7 @@ func startLocalLiveWithDedicatedStore(
 			func(error) {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: live import retry pending\n",
+					"belay %s: live session update delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -1218,7 +1218,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	return runErr
 }
 
-const mcpRecoveryPendingMessage = "belay mcp: recovery pending"
+const mcpRecoveryPendingMessage = "belay mcp: local data recovery delayed; reads remain available"
 
 func startMCPRecovery(
 	ctx context.Context,
@@ -1234,10 +1234,10 @@ func startMCPRecovery(
 		ctx,
 		recoveryStore,
 		func() {
-			fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
+			fmt.Fprintln(stderr, "belay mcp: issue analysis delayed; reads remain available")
 		},
 		func() {
-			fmt.Fprintln(stderr, "belay mcp: attempt monitoring recovery pending")
+			fmt.Fprintln(stderr, "belay mcp: fix history update delayed; reads remain available")
 		},
 	)
 	done := make(chan struct{})
@@ -1262,7 +1262,7 @@ func startMCPIntelligence(
 		func() {
 			fmt.Fprintln(
 				stderr,
-				"belay mcp: intelligence freshness retry pending; reads remain available",
+				"belay mcp: background analysis delayed; reads remain available",
 			)
 		},
 	)
@@ -1282,7 +1282,7 @@ func startLocalRecoveryWithDedicatedStore(
 		if err != nil {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: recovery pending; Local remains available\n",
+				"belay %s: local data recovery delayed; Local remains available\n",
 				commandName,
 			)
 			return
@@ -1294,14 +1294,14 @@ func startLocalRecoveryWithDedicatedStore(
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: issue analysis recovery pending; Local remains available\n",
+					"belay %s: issue analysis delayed; Local remains available\n",
 					commandName,
 				)
 			},
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: attempt monitoring recovery pending; Local remains available\n",
+					"belay %s: fix history update delayed; Local remains available\n",
 					commandName,
 				)
 			},
