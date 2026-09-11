@@ -13,9 +13,34 @@ separate product and is not included in this Local alpha.
 
 ## Belay Local Developer Alpha
 
-The prepared version is `0.0.1-alpha.1`. It is an **unsigned, unnotarized,
-Apple Silicon-only Developer Alpha**, not a published release or production
-installer.
+The prepared version is `0.0.1-alpha.1`. Local source builds remain unsigned
+and unnotarized. The external distribution path is Apple Silicon-only and
+publishes only after Developer ID signing, Apple notarization, checksum
+verification, packaged smoke testing, and installer validation all pass.
+
+### Install
+
+After the signed alpha release is published, installation is:
+
+```bash
+curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash
+belay quickstart
+```
+
+To install and begin onboarding in one command:
+
+```bash
+curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash -s -- --quickstart
+```
+
+The installer accepts only the expected Apple Silicon archive, verifies both
+external and internal checksums, and rejects dirty, unsigned, or unnotarized
+builds. Re-running it upgrades the stable installation. Uninstall preserves
+encrypted local history:
+
+```bash
+curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash -s -- --uninstall
+```
 
 Alpha scope:
 

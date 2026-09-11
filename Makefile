@@ -13,6 +13,8 @@ verify: test
 	bash -n scripts/smoke-developer-preview.sh
 	bash -n scripts/alpha-readiness.sh
 	bash -n scripts/alpha-readiness_test.sh
+	bash -n scripts/install.sh
+	bash -n scripts/notarize-release.sh
 	bash -n scripts/validate-alpha-surface.sh
 	scripts/alpha-readiness_test.sh
 	scripts/validate-alpha-surface.sh
@@ -22,6 +24,8 @@ verify-release-surface:
 	bash -n scripts/smoke-developer-preview.sh
 	bash -n scripts/alpha-readiness.sh
 	bash -n scripts/alpha-readiness_test.sh
+	bash -n scripts/install.sh
+	bash -n scripts/notarize-release.sh
 	bash -n scripts/validate-alpha-surface.sh
 	scripts/alpha-readiness_test.sh
 	scripts/validate-alpha-surface.sh

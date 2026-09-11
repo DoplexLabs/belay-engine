@@ -231,6 +231,9 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 		}
 	}
 	belayExecutable, _ := currentExecutablePath()
+	if resolvedExecutable, resolveErr := filepath.EvalSymlinks(belayExecutable); resolveErr == nil {
+		belayExecutable = resolvedExecutable
+	}
 	binary, err := localapp.ResolveNumbatBinaryForExecutable(
 		paths,
 		config,

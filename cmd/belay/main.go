@@ -19,6 +19,11 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
 
+var (
+	buildVersion = "dev"
+	buildCommit  = "unknown"
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -34,6 +39,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return errors.New("missing command")
 	}
 	switch args[0] {
+	case "version":
+		fmt.Fprintf(stdout, "belay %s (%s)\n", buildVersion, buildCommit)
+		return nil
 	case "quickstart":
 		return runQuickstart(ctx, args[1:], stdout, stderr)
 	case "local":
@@ -230,6 +238,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `usage: belay COMMAND
 
 Commands:
+  version         print the installed Belay version
   quickstart      consent to private setup, monitor-only hooks, scan, and browser
   local           scan agents and run the offline Local browser
   scan            discover and backfill supported local agent history
