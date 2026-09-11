@@ -796,7 +796,7 @@ Pass criteria:
   configuration allowlist and returns a diff without applying it.
 - `record_fix_applied` records only an approved proposal's path, SHA-256, and
   optional commit; it does not edit the target.
-- MCP server information reports implementation version `1.6.0`.
+- MCP server information reports implementation version `1.7.0`.
 - `get_mission_pack` reports generator `mission-pack.det.v3` and returns
   bounded guidance with `instruction_authority=none`.
 - Managed Claude and Codex calls pass their actual `harness`; calls without a

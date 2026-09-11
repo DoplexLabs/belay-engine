@@ -286,7 +286,7 @@ session; transcript evidence remains untrusted.
 
 ### Mission Packs
 
-The MCP implementation is `1.6.0`; Mission Packs use
+The MCP implementation is `1.7.0`; Mission Packs use
 `mission-pack.det.v3`. The managed `/belay` skill calls `get_mission_pack` with
 the actual host harness (`claude` or `codex`), current project and intent, and
 a task hint only when the user has stated a concrete active task.

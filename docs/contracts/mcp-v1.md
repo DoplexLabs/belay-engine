@@ -2,7 +2,7 @@
 
 - **Status:** Governed Local Alpha evidence and experience surface
 - **Local protocol:** V1
-- **Implementation version:** `1.6.0`
+- **Implementation version:** `1.7.0`
 - **Hosted:** V1.1
 
 ## Boundary
