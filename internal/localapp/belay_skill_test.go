@@ -30,98 +30,93 @@ func TestInstallBelaySkillsUsesHarnessConfigRootsAndIsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(body) != belaySkillBody ||
-			!strings.Contains(string(body), "Only after explicit approval") ||
-			!strings.Contains(string(body), "verification are deferred") ||
-			!strings.Contains(string(body), "/belay start --issue <issue_id>") ||
-			!strings.Contains(
-				string(body),
-				"Use this Mission Pack for this session?",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Mission Pack mode must not edit any file",
-			) ||
-			!strings.Contains(
-				string(body),
-				"`readmodel.rendered_markdown` as the canonical preview",
-			) ||
-			!strings.Contains(
-				string(body),
-				"`verification[].command` exactly as returned",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Whenever the conversation contains a concrete",
-			) ||
-			!strings.Contains(
-				string(body),
-				"active user task, pass a",
-			) ||
-			!strings.Contains(
-				string(body),
-				"concise `task_hint` that describes that task "+
-					"in at most 280 characters",
-			) ||
-			!strings.Contains(
-				string(body),
-				"`/belay start` itself is not a task hint",
-			) ||
-			!strings.Contains(
-				string(body),
-				"When no concrete active task",
-			) ||
-			!strings.Contains(
-				string(body),
-				"exists, omit `task_hint`; do not invent one",
-			) ||
-			!strings.Contains(
-				string(body),
-				"use `harness: claude` in",
-			) ||
-			!strings.Contains(
-				string(body),
-				"`harness: codex` in Codex",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Never infer or guess another",
-			) ||
-			!strings.Contains(
-				string(body),
-				"If `readmodel.status` is `empty`",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Do not show project metadata or ask",
-			) ||
-			!strings.Contains(
-				string(body),
-				"command in its own fenced code block",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Do not invent an operating rule",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Never display warnings, coverage, freshness",
-			) ||
-			!strings.Contains(
-				string(body),
-				"Belay found no useful",
-			) ||
-			!strings.Contains(
-				string(body),
-				"guidance for this session.",
-			) {
-			t.Fatalf("skill body at %s = %q", path, body)
+		if string(body) != belaySkillBody {
+			t.Fatalf("installed skill body at %s differs from embed", path)
 		}
+		assertBelaySkillInvariants(t, string(body))
 	}
 	results, err = InstallBelaySkills(inventory)
 	if err != nil || results[0].Status != "unchanged" ||
 		results[1].Status != "unchanged" {
 		t.Fatalf("idempotent results/error = %+v/%v", results, err)
+	}
+}
+
+func assertBelaySkillInvariants(t *testing.T, body string) {
+	t.Helper()
+
+	required := []string{
+		"Invoke the skill with `/belay` in Claude Code and `$belay` in Codex.",
+		"Claude Code: `/belay start` or `/belay start --issue <issue_id>`.",
+		"Codex: `$belay start` or `$belay start --issue <issue_id>`.",
+		"`readmodel.rendered_markdown` as the canonical preview",
+		"Use this Mission Pack for this session?",
+		"explicit, unambiguous yes",
+		"`experiences` is nonempty",
+		"`authority: user_approved`",
+		"`record_mission_pack_accepted` with only the exact structured `pack_id`",
+		"only after that call\n    succeeds",
+		"Belay could not activate the Mission Pack for\n    this session",
+		"must not create a receipt",
+		"legacy or no-experience pack",
+		"never call `record_mission_pack_accepted`",
+		"Claude Code: `/belay status`",
+		"Codex: `$belay status`",
+		"`get_mission_pack_status` only with the exact hidden `receipt_id`",
+		"exact receipt ID explicitly supplied by the user",
+		"say status is unavailable",
+		"Never search for, infer, or guess a receipt",
+		"at most two evidence\n   excerpts",
+		"Never describe verifier satisfaction as task success",
+		"Claude Code: `/belay learn`",
+		"Codex: `$belay learn`",
+		"`list_experience_proposals` with that cwd, harness, and `limit: 5`",
+		"Belay found no new guidance to review.",
+		"Make no mutation until the choice is explicit and\n   unambiguous",
+		"`resolve_experience_proposal` once with the\n   first item's exact hidden `proposal_id`",
+		"`approval_mode: as_proposed`",
+		"change only what the user explicitly requested",
+		"ask for a second explicit confirmation",
+		"Activate this guidance now?",
+		"Only an explicit yes may continue",
+		"transition committed but delivery is pending",
+		"Do not replay\n    the lifecycle mutation",
+		"Claude Code: `/belay pause`",
+		"Codex: `$belay pause`",
+		"`list_active_experiences` with that cwd and `limit: 5`",
+		"Do not pass or\n   infer a harness filter",
+		"Belay found no active guidance to\n   pause.",
+		"Show at most five plain-language choices",
+		"Never\n   display experience IDs",
+		"Do not infer a latest, closest, or\n   default item",
+		"exact hidden `experience` reference",
+		"Only after an explicit, unambiguous selection",
+		"Preparing is read-only and does not pause",
+		"Pause this guidance now?",
+		"separate\n   explicit confirmation immediately before apply",
+		"No explicit, unambiguous yes means no mutation",
+		"`apply_experience_lifecycle` once with the same exact hidden experience",
+		"Never\n   replay the spent lifecycle token",
+		"absent from\n   newly generated Mission Packs",
+		"Claude Code: `/belay <issue_id>`. Codex: `$belay <issue_id>`.",
+		"Keep this workflow unchanged",
+		"`propose_fix`",
+		"`record_fix_applied`",
+	}
+	for _, snippet := range required {
+		if !strings.Contains(body, snippet) {
+			t.Errorf("skill is missing behavioral invariant %q", snippet)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"evidence IDs",
+		"action tokens:",
+		"proposal IDs:",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("skill exposes forbidden Learn detail %q", forbidden)
+		}
 	}
 }
 

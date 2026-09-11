@@ -318,9 +318,10 @@ Agent clients launch `./bin/belay mcp` over stdio on demand. The tools are:
 
 The MCP implementation is `1.6.0`. `get_mission_pack` uses
 `mission-pack.det.v3` to prepare bounded, inactive guidance for the current
-project. Managed `/belay` calls pass the actual host harness (`claude` or
-`codex`) and a concise active-task hint when one exists. Without a current
-harness, Belay omits semantic rules; without a relevant task hint, it does not
+project. Managed Belay skill calls—`/belay` in Claude Code and `$belay` in
+Codex—pass the actual host harness and a concise active-task hint when one
+exists. Without a current harness, Belay omits semantic rules; without a
+relevant task hint, it does not
 surface unrelated unanchored correction clusters. Stale, low-confidence, or
 unsupported semantic rules are omitted, cross-harness targets are safely
 adapted or suppressed, and at most three verification commands are selected

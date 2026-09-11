@@ -1512,6 +1512,473 @@ func TestBuildEnforcesCompactRenderedBoundsAndTrust(t *testing.T) {
 	}
 }
 
+func TestBuildNoExperienceCompatibility(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	input := testBuildInput(now)
+	input.Issues = []issueintel.Issue{
+		testIssue(
+			"issue_legacy_compatibility",
+			"Retry loop repeated.",
+			12,
+			3,
+			now,
+		),
+	}
+	input.ProjectFiles = []DiscoveredCommand{{
+		Command:    "go test ./...",
+		SourceFile: "Makefile",
+	}}
+
+	pack, err := Build(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantMarkdown = `# Mission Pack: project
+
+Implement · feature/mission-pack
+
+## Known traps
+
+- Retry loop repeated. — $12.00 attributed
+
+## Verification commands to consider
+
+- go test ./...
+
+## Completion checklist
+
+- [ ] Review the selected known traps before making changes.
+- [ ] Run at least one listed verification command after the final edit.
+- [ ] Report the verification result before claiming completion.
+`
+	if pack.RenderedMarkdown != wantMarkdown {
+		t.Fatalf(
+			"legacy Markdown changed:\ngot:\n%s\nwant:\n%s",
+			pack.RenderedMarkdown,
+			wantMarkdown,
+		)
+	}
+	const wantPackID = "mpk_yy2npgxgxkf4bab3f6p67bral5mcogbt42egw44daocwi3kwreva"
+	if pack.PackID != wantPackID {
+		t.Fatalf("legacy pack ID = %q; want %q", pack.PackID, wantPackID)
+	}
+	encoded, err := json.Marshal(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "experience_generation") ||
+		strings.Contains(string(encoded), `"experiences"`) {
+		t.Fatalf("legacy pack serialized experience fields: %s", encoded)
+	}
+}
+
+func TestBuildExperiencePackIsDeterministicAndExperienceFirst(t *testing.T) {
+	now := time.Date(2026, 9, 10, 13, 0, 0, 0, time.UTC)
+	input := testBuildInput(now)
+	input.ExperienceGeneration = 11
+	input.Experiences = []ExperienceItem{
+		testExperienceItem(
+			"exp_schema_first",
+			1,
+			"Edit the schema source before regenerating clients.",
+			"Run the schema regeneration check successfully.",
+		),
+		testExperienceItem(
+			"exp_verify_final",
+			2,
+			"Run project verification after the final edit.",
+			"Observe a successful verification after the last edit.",
+		),
+	}
+	input.Experiences[0].Sources = []SourceRef{
+		{Kind: "transcript_turn", SessionKey: "ses_b"},
+		{Kind: "canonical_event", EventID: "evt_a"},
+	}
+	input.Issues = []issueintel.Issue{
+		testIssue("issue_hidden_trap", "Legacy trap must stay hidden.", 8, 3, now),
+	}
+	input.ProjectFiles = []DiscoveredCommand{{
+		Command:    "go test ./...",
+		SourceFile: "Makefile",
+	}}
+	input.Facts = []CanonicalFact{{
+		FactID:       "fact_hidden",
+		Kind:         CanonicalFactFileWritten,
+		Value:        "internal/hidden.go",
+		SessionCount: 5,
+		ObservedAt:   now,
+	}}
+
+	first, err := Build(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reorderedLegacy := input
+	reorderedLegacy.Issues = reverseCopy(input.Issues)
+	reorderedLegacy.ProjectFiles = reverseCopy(input.ProjectFiles)
+	reorderedLegacy.Facts = reverseCopy(input.Facts)
+	second, err := Build(reorderedLegacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("experience pack is not deterministic:\n%#v\n%#v", first, second)
+	}
+	const wantMarkdown = `# Mission Pack: project
+
+## Project guidance
+
+- Edit the schema source before regenerating clients.
+  Verify: Run the schema regeneration check successfully.
+- Run project verification after the final edit.
+  Verify: Observe a successful verification after the last edit.
+
+## Completion
+
+- Run the schema regeneration check successfully.
+- Observe a successful verification after the last edit.
+`
+	if first.RenderedMarkdown != wantMarkdown {
+		t.Fatalf(
+			"experience Markdown:\ngot:\n%s\nwant:\n%s",
+			first.RenderedMarkdown,
+			wantMarkdown,
+		)
+	}
+	for _, forbidden := range []string{
+		"Known traps",
+		"Proposed operating rules",
+		"Verification commands",
+		"Completion checklist",
+		"feature/mission-pack",
+		"Implement",
+		"issue_hidden_trap",
+		"exp_schema_first",
+		"experience_generation",
+		"user_approved",
+		"transcript",
+		"canonical",
+		"coverage",
+		"Numbat",
+	} {
+		if strings.Contains(first.RenderedMarkdown, forbidden) {
+			t.Fatalf(
+				"experience Markdown exposed %q:\n%s",
+				forbidden,
+				first.RenderedMarkdown,
+			)
+		}
+	}
+	if first.Status != "ready" ||
+		first.Trust.InstructionAuthority != "none" ||
+		first.Trust.GuidanceState != "proposal" ||
+		first.Trust.EvidenceState != "untrusted" ||
+		!first.Trust.ActivationRequired {
+		t.Fatalf("experience trust/status = %q, %#v", first.Status, first.Trust)
+	}
+	if len(first.KnownTraps) != 1 ||
+		len(first.Verification) != 1 ||
+		len(first.Context.Facts) != 1 {
+		t.Fatalf("legacy structured fields were removed: %#v", first)
+	}
+	for _, item := range first.Experiences {
+		if item.Authority != experienceAuthorityUserApproved {
+			t.Fatalf("experience authority = %q", item.Authority)
+		}
+		if item.Sources == nil {
+			t.Fatal("experience sources are nil")
+		}
+	}
+}
+
+func TestBuildExperienceIdentityDoesNotLeakIntoMarkdown(t *testing.T) {
+	now := time.Date(2026, 9, 10, 14, 0, 0, 0, time.UTC)
+	input := testBuildInput(now)
+	input.ExperienceGeneration = 4
+	input.Experiences = []ExperienceItem{
+		testExperienceItem(
+			"exp_identity_a",
+			1,
+			"Use the approved project workflow.",
+			"Confirm the project workflow was followed.",
+		),
+	}
+
+	base, err := Build(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := []BuildInput{input, input, input}
+	variants[0].ExperienceGeneration = 5
+	variants[1].Experiences = append(
+		[]ExperienceItem(nil),
+		input.Experiences...,
+	)
+	variants[1].Experiences[0].ExperienceID = "exp_identity_b"
+	variants[2].Experiences = append(
+		[]ExperienceItem(nil),
+		input.Experiences...,
+	)
+	variants[2].Experiences[0].Version = 2
+	for index, variant := range variants {
+		got, err := Build(variant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.PackID == base.PackID {
+			t.Fatalf("variant %d did not change pack ID", index)
+		}
+		if got.RenderedMarkdown != base.RenderedMarkdown {
+			t.Fatalf(
+				"variant %d changed Markdown:\nbase=%s\ngot=%s",
+				index,
+				base.RenderedMarkdown,
+				got.RenderedMarkdown,
+			)
+		}
+	}
+	for _, hidden := range []string{
+		"exp_identity_a",
+		"exp_identity_b",
+		"version",
+		"generation",
+	} {
+		if strings.Contains(base.RenderedMarkdown, hidden) {
+			t.Fatalf("Markdown exposed %q: %s", hidden, base.RenderedMarkdown)
+		}
+	}
+
+	ordered := input
+	ordered.Experiences = []ExperienceItem{
+		testExperienceItem(
+			"exp_order_a",
+			1,
+			"Apply the same visible guidance.",
+			"Confirm the same visible result.",
+		),
+		testExperienceItem(
+			"exp_order_b",
+			2,
+			"Apply the same visible guidance.",
+			"Confirm the same visible result.",
+		),
+	}
+	firstOrder, err := Build(ordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordered.Experiences = reverseCopy(ordered.Experiences)
+	secondOrder, err := Build(ordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstOrder.RenderedMarkdown != secondOrder.RenderedMarkdown {
+		t.Fatal("ordered ref test changed visible Markdown")
+	}
+	if firstOrder.PackID == secondOrder.PackID {
+		t.Fatal("ordered experience refs did not affect pack ID")
+	}
+}
+
+func TestBuildRejectsInvalidExperienceInput(t *testing.T) {
+	now := time.Date(2026, 9, 10, 15, 0, 0, 0, time.UTC)
+	valid := testExperienceItem(
+		"exp_valid",
+		1,
+		"Follow the approved workflow.",
+		"Confirm the approved workflow was followed.",
+	)
+	tests := []struct {
+		name       string
+		generation int64
+		items      []ExperienceItem
+	}{
+		{
+			name:       "generation without items",
+			generation: 1,
+		},
+		{
+			name:  "items without generation",
+			items: []ExperienceItem{valid},
+		},
+		{
+			name:       "too many",
+			generation: 1,
+			items: []ExperienceItem{
+				valid,
+				withExperienceID(valid, "exp_two"),
+				withExperienceID(valid, "exp_three"),
+				withExperienceID(valid, "exp_four"),
+			},
+		},
+		{
+			name:       "empty ID",
+			generation: 1,
+			items:      []ExperienceItem{withExperienceID(valid, "")},
+		},
+		{
+			name:       "long ID",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceID(
+					valid,
+					strings.Repeat("x", maxExperienceIDRunes+1),
+				),
+			},
+		},
+		{
+			name:       "nonpositive version",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceVersion(valid, 0),
+			},
+		},
+		{
+			name:       "wrong authority",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceAuthority(valid, "none"),
+			},
+		},
+		{
+			name:       "empty guidance",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceGuidance(valid, ""),
+			},
+		},
+		{
+			name:       "multiline guidance",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceGuidance(valid, "first\nsecond"),
+			},
+		},
+		{
+			name:       "empty verifier summary",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceVerifierSummary(valid, ""),
+			},
+		},
+		{
+			name:       "long verifier summary",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceVerifierSummary(
+					valid,
+					strings.Repeat(
+						"x",
+						maxExperienceVerifierRunes+1,
+					),
+				),
+			},
+		},
+		{
+			name:       "too many sources",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceSources(valid, []SourceRef{
+					{Kind: "transcript_turn"},
+					{Kind: "canonical_event"},
+					{Kind: "workspace_hash"},
+				}),
+			},
+		},
+		{
+			name:       "source identifier too long",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceSources(valid, []SourceRef{{
+					Kind:       "transcript_turn",
+					SessionKey: strings.Repeat("s", maxExperienceIDRunes+1),
+				}}),
+			},
+		},
+		{
+			name:       "over token budget",
+			generation: 1,
+			items: []ExperienceItem{
+				withExperienceGuidance(
+					withExperienceRationale(
+						valid,
+						strings.Repeat("r", 500),
+					),
+					strings.Repeat("g", 2000),
+				),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := testBuildInput(now)
+			input.ExperienceGeneration = test.generation
+			input.Experiences = test.items
+			if _, err := Build(input); err == nil {
+				t.Fatal("Build() succeeded for invalid experience input")
+			}
+		})
+	}
+}
+
+func TestBuildExperienceChecklistDeduplicatesWithoutPartialTruncation(
+	t *testing.T,
+) {
+	now := time.Date(2026, 9, 10, 16, 0, 0, 0, time.UTC)
+	const summary = "Confirm the approved verification completed."
+	input := testBuildInput(now)
+	input.ExperienceGeneration = 8
+	input.Experiences = []ExperienceItem{
+		testExperienceItem(
+			"exp_whole_one",
+			1,
+			"Preserve "+strings.Repeat("*", 500)+" first.",
+			summary,
+		),
+		testExperienceItem(
+			"exp_whole_two",
+			1,
+			"Preserve "+strings.Repeat("_", 500)+" second.",
+			summary,
+		),
+		testExperienceItem(
+			"exp_whole_three",
+			1,
+			"Preserve "+strings.Repeat("\\", 500)+" third.",
+			summary,
+		),
+	}
+
+	pack, err := Build(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Truncated {
+		t.Fatal("experience guidance was marked truncated")
+	}
+	for _, item := range input.Experiences {
+		if !strings.Contains(
+			pack.RenderedMarkdown,
+			markdownText(item.Guidance),
+		) {
+			t.Fatalf("guidance was partially removed: %q", item.Guidance)
+		}
+	}
+	if strings.Count(pack.RenderedMarkdown, "  Verify: "+summary) != 3 {
+		t.Fatalf("verifier lines:\n%s", pack.RenderedMarkdown)
+	}
+	if strings.Count(pack.RenderedMarkdown, "\n- "+summary+"\n") != 1 {
+		t.Fatalf("completion checklist was not deduplicated:\n%s", pack.RenderedMarkdown)
+	}
+	if !withinBudget(pack.RenderedMarkdown) {
+		t.Fatalf(
+			"experience Markdown exceeded total budget: bytes=%d tokens=%d",
+			len(pack.RenderedMarkdown),
+			pack.EstimatedTokens,
+		)
+	}
+}
+
 func testBuildInput(now time.Time) BuildInput {
 	return BuildInput{
 		Request: Request{
@@ -1541,6 +2008,67 @@ func testBuildInput(now time.Time) BuildInput {
 			CanonicalContextAvailable: true,
 		},
 	}
+}
+
+func testExperienceItem(
+	experienceID string,
+	version int,
+	guidance string,
+	verifierSummary string,
+) ExperienceItem {
+	return ExperienceItem{
+		ExperienceID: experienceID,
+		Version:      version,
+		Type:         "procedure",
+		Guidance:     guidance,
+		Rationale:    "The approved evidence supports this project guidance.",
+		Verifier: VerifierSummary{
+			Kind:    "command_succeeded",
+			Summary: verifierSummary,
+		},
+		Authority: experienceAuthorityUserApproved,
+	}
+}
+
+func withExperienceID(value ExperienceItem, experienceID string) ExperienceItem {
+	value.ExperienceID = experienceID
+	return value
+}
+
+func withExperienceVersion(value ExperienceItem, version int) ExperienceItem {
+	value.Version = version
+	return value
+}
+
+func withExperienceAuthority(value ExperienceItem, authority string) ExperienceItem {
+	value.Authority = authority
+	return value
+}
+
+func withExperienceGuidance(value ExperienceItem, guidance string) ExperienceItem {
+	value.Guidance = guidance
+	return value
+}
+
+func withExperienceRationale(value ExperienceItem, rationale string) ExperienceItem {
+	value.Rationale = rationale
+	return value
+}
+
+func withExperienceVerifierSummary(
+	value ExperienceItem,
+	summary string,
+) ExperienceItem {
+	value.Verifier.Summary = summary
+	return value
+}
+
+func withExperienceSources(
+	value ExperienceItem,
+	sources []SourceRef,
+) ExperienceItem {
+	value.Sources = sources
+	return value
 }
 
 func correctionClusterInput(

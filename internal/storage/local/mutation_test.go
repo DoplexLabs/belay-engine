@@ -126,8 +126,8 @@ func TestMutationGuardsAreInstalledOnEveryPooledConnection(t *testing.T) {
 		).Scan(&triggerCount); err != nil {
 			t.Fatalf("connection %d inspect guards: %v", index, err)
 		}
-		if triggerCount != 58 {
-			t.Fatalf("connection %d guard count = %d, want 58", index, triggerCount)
+		if triggerCount != 107 {
+			t.Fatalf("connection %d guard count = %d, want 107", index, triggerCount)
 		}
 		if _, err := connection.ExecContext(ctx,
 			"UPDATE events SET action = 'unauthorized' WHERE event_id = ?",

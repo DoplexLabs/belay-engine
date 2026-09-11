@@ -115,6 +115,183 @@ func TestNormalizeCommandStripsVolatileArguments(t *testing.T) {
 	}
 }
 
+func TestRetainedCommandAndErrorHelpersShareDetectorSemantics(t *testing.T) {
+	exitCode := 1
+	call := transcript.Turn{
+		Role: transcript.RoleToolCall,
+		Payload: transcript.Payload{
+			RawCommand: "go test ./internal/service -count=17",
+		},
+	}
+	class, signature, raw, ok := RetainedCommandInfo(
+		call,
+		issueintel.ProjectConfig{},
+	)
+	if !ok || class != commandClassTest ||
+		signature != "go test ./internal/service -count=<n>" ||
+		raw != call.Payload.RawCommand {
+		t.Fatalf(
+			"retained command = %q/%q/%q/%t",
+			class,
+			signature,
+			raw,
+			ok,
+		)
+	}
+	result := transcript.Turn{
+		Role: transcript.RoleToolResult,
+		Payload: transcript.Payload{
+			ToolResult: "failed: /tmp/run-17/service_test.go:42",
+			ExitCode:   &exitCode,
+		},
+	}
+	if !ToolResultFailed(result) {
+		t.Fatal("explicit non-zero result was not classified as failed")
+	}
+	if got := NormalizedErrorSignature(result); got == "" {
+		t.Fatal("normalized error signature was not extracted")
+	}
+}
+
+func TestExportedTrajectoryClassifiersReuseDetectorSemantics(t *testing.T) {
+	first, ok := NormalizedCommandSignature(transcript.Turn{
+		Role: transcript.RoleToolCall,
+		Payload: transcript.Payload{
+			RawCommand: "run-task 123 --port 4312 /tmp/run-a",
+		},
+	})
+	if !ok {
+		t.Fatal("normalized command signature was not extracted")
+	}
+	second, ok := NormalizedCommandSignature(transcript.Turn{
+		Role: transcript.RoleToolCall,
+		Payload: transcript.Payload{
+			RawCommand: "run-task 456 --port 9921 /private/tmp/run-b",
+		},
+	})
+	if !ok || first != second {
+		t.Fatalf("normalized signatures = %q / %q", first, second)
+	}
+	if !IsCompletionClaim(transcript.Turn{
+		Role:    transcript.RoleAssistant,
+		Payload: transcript.Payload{Text: "Implementation is complete."},
+	}) {
+		t.Fatal("completion claim was not recognized")
+	}
+	if IsCompletionClaim(transcript.Turn{
+		Role:    transcript.RoleAssistant,
+		Payload: transcript.Payload{Text: "I am still investigating."},
+	}) {
+		t.Fatal("ordinary assistant text was treated as completion")
+	}
+}
+
+func TestCommandRepairFamilyIsConservativeAndUnwrapsEnvironment(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{command: "go test -v ./x", want: "go test"},
+		{
+			command: "env GOCACHE=/tmp/x go test -v ./x",
+			want:    "go test",
+		},
+		{command: "rg -n TODO internal", want: "rg"},
+		{
+			command: "wc -l report.txt && awk '{print $1}' report.txt && rg TODO .",
+			want:    "wc",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			got, ok := CommandRepairFamily(transcript.Turn{
+				Role: transcript.RoleToolCall,
+				Payload: transcript.Payload{
+					RawCommand: test.command,
+				},
+			})
+			if !ok || got != test.want {
+				t.Fatalf("repair family = %q/%t, want %q/true", got, ok, test.want)
+			}
+		})
+	}
+}
+
+func TestMachineGeneratedEnvelopeBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{
+			name:  "mode raw query envelope",
+			value: "MODE: planning\nRAW QUERY:\nNo, inspect the failure.",
+			want:  true,
+		},
+		{
+			name:  "compact task json",
+			value: `{"description":"Investigate failure","prompt":"No, inspect the logs."}`,
+			want:  true,
+		},
+		{
+			name:  "ordinary mode prose",
+			value: "No, keep the words MODE: planning and RAW QUERY: in the documentation.",
+		},
+		{
+			name:  "ordinary description prompt prose",
+			value: "No, the description and prompt are separate concepts here.",
+		},
+		{
+			name:  "json words only",
+			value: `{"message":"The description and prompt are documented."}`,
+		},
+		{
+			name:  "nested task-shaped json",
+			value: `{"task":{"description":"Investigate","prompt":"Inspect logs"}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsMachineGeneratedEnvelope(test.value); got != test.want {
+				t.Fatalf(
+					"IsMachineGeneratedEnvelope(%q) = %t, want %t",
+					test.value,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestHighConfidenceCorrectionMarkerRequiresEarlyCue(t *testing.T) {
+	for _, value := range []string{
+		"why is the build still failing; do not delegate...",
+		"wait, I think you're wrong about the failing test",
+		"Again, edit the schema source instead.",
+		"No, inspect the implementation before changing it.",
+	} {
+		if marker := HighConfidenceCorrectionMarker(value); marker == "" {
+			t.Errorf("early correction cue was rejected: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"TASK: Add speaker-notes scripts to an existing PowerPoint deck. Do NOT...",
+		strings.Repeat("delegated task context ", 5) +
+			"review every package and do not skip the final verification",
+		strings.Repeat("skill body guidance ", 5) +
+			"the example says the previous approach was wrong",
+	} {
+		if marker := HighConfidenceCorrectionMarker(value); marker != "" {
+			t.Errorf(
+				"late correction cue %q was accepted in %q",
+				marker,
+				value,
+			)
+		}
+	}
+}
+
 func TestEditedFilesExtractsStructuredAndPatchPaths(t *testing.T) {
 	input, err := json.Marshal(map[string]any{
 		"patch":     "*** Update File: internal/a.go\n@@\n",
@@ -123,7 +300,7 @@ func TestEditedFilesExtractsStructuredAndPatchPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := editedFiles(transcript.Turn{
+	files := ExtractEditedFiles(transcript.Turn{
 		Role:     transcript.RoleToolCall,
 		ToolName: "apply_patch",
 		Payload:  transcript.Payload{ToolInput: input},

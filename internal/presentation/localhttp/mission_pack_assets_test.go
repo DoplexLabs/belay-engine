@@ -17,7 +17,7 @@ func TestMissionPackBrowserContract(t *testing.T) {
 		`id="mission-pack-copy"`,
 		`id="mission-pack-show-evidence"`,
 		`id="report-evidence-fix-command"`,
-		`Fix this issue`,
+		`Copy fix commands`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("Mission Pack browser shell is missing %q", required)
@@ -32,7 +32,8 @@ func TestMissionPackBrowserContract(t *testing.T) {
 		`missionPackCacheByID.clear();`,
 		`state.missionPackRequestController.abort();`,
 		"`/belay start --issue ${issueID}`",
-		"`/belay ${state.reportEvidenceIssueID}`",
+		"`$belay start --issue ${issueID}`",
+		"Claude Code: /belay ${issueID}\\nCodex: $belay ${issueID}",
 		`openReportEvidenceDrawer(issue);`,
 		`state.activeModal === "mission-pack"`,
 		`document.createTextNode`,

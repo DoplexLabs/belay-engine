@@ -73,25 +73,27 @@ type Request struct {
 }
 
 type Pack struct {
-	SchemaVersion    string          `json:"schema_version"`
-	GeneratorVersion string          `json:"generator_version"`
-	PackID           string          `json:"pack_id"`
-	GeneratedAt      time.Time       `json:"generated_at"`
-	Project          Project         `json:"project"`
-	Intent           Intent          `json:"intent"`
-	Harness          Harness         `json:"harness,omitempty"`
-	Status           string          `json:"status"`
-	Trust            Trust           `json:"trust"`
-	SourceState      SourceState     `json:"source_state"`
-	Context          Context         `json:"context"`
-	KnownTraps       []GuidanceItem  `json:"known_traps"`
-	OperatingRules   []GuidanceItem  `json:"operating_rules"`
-	Verification     []CommandItem   `json:"verification"`
-	Completion       []ChecklistItem `json:"completion_checklist"`
-	Warnings         []Warning       `json:"warnings"`
-	EstimatedTokens  int             `json:"estimated_tokens"`
-	Truncated        bool            `json:"truncated"`
-	RenderedMarkdown string          `json:"rendered_markdown"`
+	SchemaVersion        string           `json:"schema_version"`
+	GeneratorVersion     string           `json:"generator_version"`
+	PackID               string           `json:"pack_id"`
+	GeneratedAt          time.Time        `json:"generated_at"`
+	Project              Project          `json:"project"`
+	Intent               Intent           `json:"intent"`
+	Harness              Harness          `json:"harness,omitempty"`
+	Status               string           `json:"status"`
+	Trust                Trust            `json:"trust"`
+	SourceState          SourceState      `json:"source_state"`
+	ExperienceGeneration int64            `json:"experience_generation,omitempty"`
+	Experiences          []ExperienceItem `json:"experiences,omitempty"`
+	Context              Context          `json:"context"`
+	KnownTraps           []GuidanceItem   `json:"known_traps"`
+	OperatingRules       []GuidanceItem   `json:"operating_rules"`
+	Verification         []CommandItem    `json:"verification"`
+	Completion           []ChecklistItem  `json:"completion_checklist"`
+	Warnings             []Warning        `json:"warnings"`
+	EstimatedTokens      int              `json:"estimated_tokens"`
+	Truncated            bool             `json:"truncated"`
+	RenderedMarkdown     string           `json:"rendered_markdown"`
 }
 
 type Project struct {
@@ -146,6 +148,22 @@ type SourceRef struct {
 	SourceFileID    string     `json:"source_file_id,omitempty"`
 	JSONLByteOffset *int64     `json:"jsonl_byte_offset,omitempty"`
 	ObservedAt      *time.Time `json:"observed_at,omitempty"`
+}
+
+type ExperienceItem struct {
+	ExperienceID string          `json:"experience_id"`
+	Version      int             `json:"version"`
+	Type         string          `json:"type"`
+	Guidance     string          `json:"guidance"`
+	Rationale    string          `json:"rationale"`
+	Verifier     VerifierSummary `json:"verifier"`
+	Authority    string          `json:"authority"`
+	Sources      []SourceRef     `json:"sources"`
+}
+
+type VerifierSummary struct {
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
 }
 
 type GuidanceItem struct {
@@ -267,16 +285,18 @@ type EvidenceSnapshot struct {
 }
 
 type BuildInput struct {
-	Request      Request
-	Project      ResolvedProject
-	Workspace    WorkspaceSnapshot
-	SourceState  SourceState
-	Issues       []issueintel.Issue
-	Insight      *issueintel.InsightRecord
-	Candidates   map[string]issueintel.CorrectionCandidate
-	Commands     []ObservedCommand
-	ProjectFiles []DiscoveredCommand
-	Facts        []CanonicalFact
-	Coverage     Coverage
-	InsightStale bool
+	Request              Request
+	Project              ResolvedProject
+	Workspace            WorkspaceSnapshot
+	SourceState          SourceState
+	Issues               []issueintel.Issue
+	Insight              *issueintel.InsightRecord
+	Candidates           map[string]issueintel.CorrectionCandidate
+	Commands             []ObservedCommand
+	ProjectFiles         []DiscoveredCommand
+	Facts                []CanonicalFact
+	Coverage             Coverage
+	InsightStale         bool
+	ExperienceGeneration int64
+	Experiences          []ExperienceItem
 }

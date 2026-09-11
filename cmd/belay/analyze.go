@@ -11,6 +11,34 @@ import (
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/storage/local"
+)
+
+var (
+	runLegacySemanticProjects = func(
+		ctx context.Context,
+		store *local.Store,
+		harness localapp.SemanticHarness,
+	) (localapp.SemanticAnalysisReport, error) {
+		return localapp.AnalyzeSemanticProjects(
+			ctx,
+			store,
+			harness,
+			localapp.RunInstalledSemanticHarness,
+		)
+	}
+	runExperienceSemanticProjects = func(
+		ctx context.Context,
+		store *local.Store,
+		harness localapp.SemanticHarness,
+	) (localapp.ExperienceProjectAnalysisReport, error) {
+		return localapp.AnalyzeExperienceProjectsOnce(
+			ctx,
+			store,
+			harness,
+			localapp.RunInstalledExperienceSemanticHarness,
+		)
+	}
 )
 
 func runAnalyze(
@@ -59,16 +87,36 @@ func runAnalyze(
 		"belay analyze: Analyzing with your %s\n",
 		semanticHarnessDisplayName(harness),
 	)
-	report, err := localapp.AnalyzeSemanticProjects(
+	report, err := runSemanticProjectAnalyses(
 		ctx,
 		store,
 		harness,
-		localapp.RunInstalledSemanticHarness,
 	)
 	if writeErr := writeJSON(stdout, report); writeErr != nil {
 		return writeErr
 	}
 	return err
+}
+
+func runSemanticProjectAnalyses(
+	ctx context.Context,
+	store *local.Store,
+	harness localapp.SemanticHarness,
+) (localapp.SemanticAnalysisReport, error) {
+	report, legacyErr := runLegacySemanticProjects(ctx, store, harness)
+	if ctx.Err() != nil {
+		return report, errors.Join(legacyErr, ctx.Err())
+	}
+	experienceReport, experienceErr := runExperienceSemanticProjects(
+		ctx,
+		store,
+		harness,
+	)
+	report.AddExperience(experienceReport)
+	if ctx.Err() != nil {
+		return report, errors.Join(legacyErr, experienceErr, ctx.Err())
+	}
+	return report, errors.Join(legacyErr, experienceErr)
 }
 
 func selectSemanticHarness(

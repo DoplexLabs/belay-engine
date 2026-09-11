@@ -31,6 +31,7 @@ type State struct {
 	Model                   string                       `json:"model,omitempty"`
 	CurrentTurnID           string                       `json:"current_turn_id,omitempty"`
 	CurrentThreadID         string                       `json:"current_thread_id,omitempty"`
+	ParentThreadID          string                       `json:"parent_thread_id,omitempty"`
 	CallTools               map[string]string            `json:"call_tools,omitempty"`
 	ThreadParentTool        map[string]string            `json:"thread_parent_tool,omitempty"`
 	ResultCalls             map[string]bool              `json:"result_calls,omitempty"`

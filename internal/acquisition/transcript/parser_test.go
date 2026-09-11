@@ -255,6 +255,118 @@ func TestParseCodexTokenCountFallbackUsesLastDeltaOnly(t *testing.T) {
 	}
 }
 
+func TestParseCodexChildRolloutParentLinkage(t *testing.T) {
+	const (
+		groupSessionID = "56565656-5656-4656-8656-565656565656"
+		childThreadID  = "child-thread-1"
+		parentThreadID = "parent-thread-1"
+	)
+	childBody := strings.Join([]string{
+		`{"timestamp":"2026-09-10T10:00:00Z","type":"session_meta","payload":{"id":"` + childThreadID + `","parent_thread_id":"` + parentThreadID + `","cwd":"/synthetic/codex"}}`,
+		`{"timestamp":"2026-09-10T10:00:00.100Z","type":"turn_context","payload":{"turn_id":"turn-child","model":"openai.gpt-5.6"}}`,
+		`{"timestamp":"2026-09-10T10:00:00.200Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the delegated task."}]}}`,
+		`{"timestamp":"2026-09-10T10:00:00.300Z","type":"response_item","payload":{"type":"function_call","call_id":"call-child","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}"}}`,
+		`{"timestamp":"2026-09-10T10:00:00.400Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-child","output":"ok"}}`,
+		"",
+	}, "\n")
+	parse := func(
+		t *testing.T,
+		body string,
+		sourceSessionID string,
+		options ParseOptions,
+	) Result {
+		t.Helper()
+		result, err := Parse(
+			context.Background(),
+			Source{
+				Agent:           AgentCodex,
+				Path:            "/synthetic/codex-parent.jsonl",
+				NativeSessionID: sourceSessionID,
+			},
+			strings.NewReader(body),
+			0,
+			testParseOptions(options),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	t.Run("stable fallback", func(t *testing.T) {
+		result := parse(
+			t,
+			childBody,
+			groupSessionID,
+			ParseOptions{},
+		)
+		want := "codex-parent-thread:" + parentThreadID
+		if len(result.Turns) != 3 ||
+			result.State.ParentThreadID != parentThreadID {
+			t.Fatalf("child rollout result = %+v", result)
+		}
+		for _, turn := range result.Turns {
+			if turn.Payload.ParentToolUseID != want {
+				t.Fatalf(
+					"child turn parent = %q, want %q: %+v",
+					turn.Payload.ParentToolUseID,
+					want,
+					turn,
+				)
+			}
+		}
+		encoded, err := json.Marshal(result.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var persisted State
+		if err := json.Unmarshal(encoded, &persisted); err != nil ||
+			persisted.ParentThreadID != parentThreadID {
+			t.Fatalf(
+				"persisted parent thread state = %+v/%v",
+				persisted,
+				err,
+			)
+		}
+	})
+
+	t.Run("exact mapping wins", func(t *testing.T) {
+		result := parse(
+			t,
+			childBody,
+			groupSessionID,
+			ParseOptions{State: State{
+				ThreadParentTool: map[string]string{
+					childThreadID: "collab-tool-call-1",
+				},
+			}},
+		)
+		if len(result.Turns) != 3 {
+			t.Fatalf("exact-mapping turns = %+v", result.Turns)
+		}
+		for _, turn := range result.Turns {
+			if turn.Payload.ParentToolUseID != "collab-tool-call-1" {
+				t.Fatalf("exact parent mapping lost: %+v", turn)
+			}
+		}
+	})
+
+	t.Run("top level remains unparented", func(t *testing.T) {
+		topLevelID := "67676767-6767-4767-8767-676767676767"
+		body := strings.Join([]string{
+			`{"timestamp":"2026-09-10T10:10:00Z","type":"session_meta","payload":{"id":"` + topLevelID + `","cwd":"/synthetic/codex"}}`,
+			`{"timestamp":"2026-09-10T10:10:00.100Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Top-level request."}]}}`,
+			"",
+		}, "\n")
+		result := parse(t, body, topLevelID, ParseOptions{})
+		if len(result.Turns) != 1 ||
+			result.State.ParentThreadID != "" ||
+			result.Turns[0].Payload.ParentToolUseID != "" {
+			t.Fatalf("top-level rollout was parented: %+v", result)
+		}
+	})
+}
+
 func TestCodexLiveUsageWaitsForExactDeltaAcrossPolls(t *testing.T) {
 	const sessionID = "34343434-3434-4434-8434-343434343434"
 	first := strings.Join([]string{

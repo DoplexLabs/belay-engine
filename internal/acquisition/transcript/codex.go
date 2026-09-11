@@ -64,6 +64,7 @@ func (p *parser) parseCodex(raw jsonObject) {
 func (p *parser) parseCodexSessionMeta(payload jsonObject) {
 	id := stringField(payload, "id")
 	parentThreadID := stringField(payload, "parent_thread_id")
+	p.result.State.ParentThreadID = parentThreadID
 	if parentThreadID == "" && id != "" &&
 		!p.result.State.NativeIdentityConfirmed {
 		p.result.State.NativeSessionID = id

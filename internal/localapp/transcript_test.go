@@ -20,8 +20,9 @@ type transcriptStoreCall struct {
 }
 
 type recordingTranscriptStore struct {
-	calls []transcriptStoreCall
-	err   error
+	calls       []transcriptStoreCall
+	err         error
+	afterAppend func()
 }
 
 func (store *recordingTranscriptStore) AppendTranscriptBatch(
@@ -37,6 +38,11 @@ func (store *recordingTranscriptStore) AppendTranscriptBatch(
 		session: session,
 		turns:   copied,
 	})
+	if store.afterAppend != nil {
+		afterAppend := store.afterAppend
+		store.afterAppend = nil
+		afterAppend()
+	}
 	return len(turns), nil
 }
 
@@ -658,6 +664,228 @@ func TestImportRecentTranscriptsRotatesAcrossRecentGroups(t *testing.T) {
 	}
 	if len(seen) != len(sessionIDs) {
 		t.Fatalf("recent scheduler repeated a group: %+v", store.calls)
+	}
+}
+
+func TestDrainScanTranscriptsPrioritizesSmallPendingEligibleGroups(t *testing.T) {
+	root := t.TempDir()
+	claudeRoot := filepath.Join(root, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeRoot)
+	t.Setenv("CODEX_HOME", filepath.Join(root, "missing-codex"))
+	now := time.Now().UTC()
+	sessions := []struct {
+		id        string
+		project   string
+		modified  time.Time
+		tailOwned bool
+		eligible  bool
+		large     bool
+	}{
+		{
+			id:        "53000000-0000-4000-8000-000000000003",
+			project:   "-small-tail-owned",
+			modified:  now.Add(-time.Hour),
+			tailOwned: true,
+			eligible:  true,
+		},
+		{
+			id:       "51000000-0000-4000-8000-000000000001",
+			project:  "-newer-large",
+			modified: now.Add(-time.Minute),
+			eligible: true,
+			large:    true,
+		},
+		{
+			id:       "54000000-0000-4000-8000-000000000004",
+			project:  "-historical",
+			modified: now.Add(-time.Hour),
+		},
+	}
+	paths, err := ResolvePaths(filepath.Join(root, "belay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePaths := make(map[string]string, len(sessions))
+	for _, session := range sessions {
+		path := filepath.Join(
+			claudeRoot,
+			"projects",
+			session.project,
+			session.id+".jsonl",
+		)
+		text := session.project
+		if session.large {
+			text = strings.Repeat("x", transcriptFastStartMax+1)
+		}
+		writeTranscriptTestFile(
+			t,
+			path,
+			[]byte(claudeUserLine(
+				session.id,
+				"2026-09-10T17:00:00Z",
+				text,
+			)+"\n"),
+		)
+		if err := os.Chtimes(path, session.modified, session.modified); err != nil {
+			t.Fatal(err)
+		}
+		sourcePaths[session.id] = path
+		if session.tailOwned {
+			if err := saveTranscriptCursor(
+				transcriptCursorPath(paths, path),
+				transcriptCursor{Owner: transcriptOwnerTail},
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	store := &recordingTranscriptStore{}
+	if err := DrainScanTranscripts(context.Background(), paths, store); err != nil {
+		t.Fatal(err)
+	}
+	largeInfo, err := os.Stat(sourcePaths[sessions[1].id])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if largeInfo.Size() <= transcriptFastStartMax {
+		t.Fatalf(
+			"large transcript size = %d, want over %d",
+			largeInfo.Size(),
+			transcriptFastStartMax,
+		)
+	}
+	wantOrder := []string{sessions[0].id, sessions[1].id}
+	if len(store.calls) != len(wantOrder) {
+		t.Fatalf("drain calls = %d, want %d", len(store.calls), len(wantOrder))
+	}
+	for index, want := range wantOrder {
+		if got := store.calls[index].session.NativeSessionID; got != want {
+			t.Fatalf("drain call %d session = %q, want %q", index, got, want)
+		}
+	}
+	for _, session := range sessions {
+		cursor, err := loadTranscriptCursor(
+			transcriptCursorPath(paths, sourcePaths[session.id]),
+		)
+		if !session.eligible {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cursor.Offset != 0 {
+				t.Fatalf("historical cursor offset = %d, want 0", cursor.Offset)
+			}
+			continue
+		}
+		info, err := os.Stat(sourcePaths[session.id])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cursor.Offset != info.Size() {
+			t.Fatalf(
+				"session %s cursor offset = %d, want %d",
+				session.id,
+				cursor.Offset,
+				info.Size(),
+			)
+		}
+	}
+}
+
+func TestDrainScanTranscriptsFullyDrainsLargeSnapshotAndDefersAppend(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	claudeRoot := filepath.Join(root, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeRoot)
+	t.Setenv("CODEX_HOME", filepath.Join(root, "missing-codex"))
+	sessionID := "55000000-0000-4000-8000-000000000005"
+	path := filepath.Join(
+		claudeRoot,
+		"projects",
+		"-project",
+		sessionID+".jsonl",
+	)
+	initial := claudeUserLine(
+		sessionID,
+		"2026-09-10T17:00:00Z",
+		"initial",
+	) + "\n"
+	writeTranscriptTestFile(t, path, []byte(initial))
+	paths, _ := ResolvePaths(filepath.Join(root, "belay"))
+	store := &recordingTranscriptStore{}
+	if err := ImportRecentTranscriptsOnce(
+		context.Background(),
+		paths,
+		store,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	line := claudeUserLine(
+		sessionID,
+		"2026-09-10T17:00:01Z",
+		strings.Repeat("x", 1024),
+	) + "\n"
+	var growth strings.Builder
+	for growth.Len() <= 2*transcriptTailChunk {
+		growth.WriteString(line)
+	}
+	snapshotBody := initial + growth.String()
+	writeTranscriptTestFile(t, path, []byte(snapshotBody))
+	snapshotSize := int64(len(snapshotBody))
+	if pendingBytes := snapshotSize - int64(len(initial)); pendingBytes <= transcriptTailChunk {
+		t.Fatalf(
+			"pending snapshot bytes = %d, want more than tail chunk %d",
+			pendingBytes,
+			transcriptTailChunk,
+		)
+	}
+	lateAppend := claudeUserLine(
+		sessionID,
+		"2026-09-10T17:00:02Z",
+		"arrived during drain",
+	) + "\n"
+	store.afterAppend = func() {
+		writeTranscriptTestFile(
+			t,
+			path,
+			[]byte(snapshotBody+lateAppend),
+		)
+	}
+	callsBeforeDrain := len(store.calls)
+	if err := DrainScanTranscripts(context.Background(), paths, store); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := loadTranscriptCursor(transcriptCursorPath(paths, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.Offset != snapshotSize {
+		t.Fatalf(
+			"first drain cursor offset = %d, want snapshot %d",
+			cursor.Offset,
+			snapshotSize,
+		)
+	}
+	if calls := len(store.calls) - callsBeforeDrain; calls < 2 {
+		t.Fatalf("large snapshot drain calls = %d, want multiple", calls)
+	}
+
+	if err := DrainScanTranscripts(context.Background(), paths, store); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = loadTranscriptCursor(transcriptCursorPath(paths, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalSize := int64(len(snapshotBody + lateAppend))
+	if cursor.Offset != finalSize {
+		t.Fatalf(
+			"second drain cursor offset = %d, want %d",
+			cursor.Offset,
+			finalSize,
+		)
 	}
 }
 
