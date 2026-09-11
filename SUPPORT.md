@@ -43,11 +43,13 @@ The supported alpha surface is:
 - historical scan;
 - explicit monitor-only live hooks;
 - loopback Local browser;
-- six read-only MCP tools;
+- governed local MCP tools for evidence, issues, fixes, Mission Packs, and
+  experience learning;
 - offline Local operation.
 
-Intel, Linux, Windows, Teams, write-capable MCP, enforcement, automatic updates,
-signed installation, and production support guarantees are outside the alpha.
+Intel, Linux, Windows, Teams, arbitrary MCP writes, MCP command execution,
+enforcement, automatic updates, signed installation, and production support
+guarantees are outside the alpha.
 
 ## Known limitations
 
