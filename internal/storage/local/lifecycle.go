@@ -15,7 +15,7 @@ import (
 const keyCheckPlaintext = "belay-local-key-check-v1"
 
 var ErrMaintenanceBusy = errors.New(
-	"local store maintenance is blocked by an active database reader; retry after readers close",
+	"local database is busy; wait for other Belay work to finish, then retry",
 )
 
 type storedPayload struct {
