@@ -29,7 +29,8 @@ Alpha scope:
 - Bounded fix proposals and append-only application records with no arbitrary
   project-file write
 - Exact post-attempt recurrence monitoring with bounded retained evidence
-- Fifteen local MCP tools: thirteen read-only and two bounded additive tools
+- Governed local MCP tools for evidence, issues, fixes, Mission Packs, and
+  experience learning
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
 part of the alpha support claim until it passes the clean-machine checklist.

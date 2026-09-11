@@ -147,7 +147,7 @@ Alpha limitations:
 Privacy:
 - no raw prompt bodies or transcripts in canonical events;
 - no Local product telemetry;
-- no Belay product-network request from Local or its fifteen MCP tools;
+- no Belay product-network request from Local or its governed MCP tools;
 - a configured MCP client/model may process or transmit results under that
   product's policy and the user's configuration;
 - allowed minimized evidence can include executable/tool names, bounded option
