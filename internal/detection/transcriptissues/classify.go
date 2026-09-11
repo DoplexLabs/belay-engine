@@ -16,27 +16,36 @@ import (
 )
 
 const (
-	commandClassTest      = "test"
-	commandClassBuild     = "build"
-	commandClassTypecheck = "typecheck"
-	commandClassLint      = "lint"
-	commandClassFormat    = "format_check"
-	commandClassOther     = "other"
+	commandClassTest           = "test"
+	commandClassBuild          = "build"
+	commandClassTypecheck      = "typecheck"
+	commandClassLint           = "lint"
+	commandClassFormat         = "format_check"
+	commandClassOther          = "other"
+	correctionMarkerWords      = 8
+	maxRepairCommandBytes      = 16 * 1024
+	maxRepairCommandTokens     = 64
+	maxRepairCommandTokenBytes = 1024
 )
 
 var (
-	numberPattern       = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
-	hashPattern         = regexp.MustCompile(`\b[0-9a-f]{7,}\b`)
-	portPattern         = regexp.MustCompile(`(?i)(?::|--port[=\s]+)\d{2,5}\b`)
-	tempPathPattern     = regexp.MustCompile(`(?i)(?:/private)?/tmp/[^\s"'` + "`" + `]+|/var/folders/[^\s"'` + "`" + `]+`)
-	absolutePathPattern = regexp.MustCompile(`(?:[A-Za-z]:\\|/)[^\s"'` + "`" + `:]+`)
-	spacePattern        = regexp.MustCompile(`\s+`)
-	errorMarkerPattern  = regexp.MustCompile(`(?i)\b(error|failed|failure|fatal|panic|exception|denied|not found|timed out)\b`)
-	completionPattern   = regexp.MustCompile(`(?i)\b(done|complete|completed|implemented|finished|tests? pass(?:ed)?)\b`)
-	correctionPattern   = regexp.MustCompile(`(?i)\b(no|don't|do not|stop|wrong|not that|i said|again|undo|revert)\b|(?i)\buse\b.+\bnot\b`)
-	approvalPattern     = regexp.MustCompile(`(?i)^(yes|y|allow|allowed|approve|approved|continue|go ahead|ok|okay)$`)
-	denialPattern       = regexp.MustCompile(`(?i)^(no|n|deny|denied|reject|rejected|cancel|stop)$`)
-	patchFilePattern    = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
+	numberPattern           = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
+	hashPattern             = regexp.MustCompile(`\b[0-9a-f]{7,}\b`)
+	portPattern             = regexp.MustCompile(`(?i)(?::|--port[=\s]+)\d{2,5}\b`)
+	tempPathPattern         = regexp.MustCompile(`(?i)(?:/private)?/tmp/[^\s"'` + "`" + `]+|/var/folders/[^\s"'` + "`" + `]+`)
+	absolutePathPattern     = regexp.MustCompile(`(?:[A-Za-z]:\\|/)[^\s"'` + "`" + `:]+`)
+	spacePattern            = regexp.MustCompile(`\s+`)
+	errorMarkerPattern      = regexp.MustCompile(`(?i)\b(error|failed|failure|fatal|panic|exception|denied|not found|timed out)\b`)
+	completionPattern       = regexp.MustCompile(`(?i)\b(done|complete|completed|implemented|finished|tests? pass(?:ed)?)\b`)
+	correctionPattern       = regexp.MustCompile(`(?i)\b(no|don't|do not|stop|wrong|not that|i said|again|undo|revert)\b|(?i)\buse\b.+\bnot\b`)
+	strongCorrectionPattern = regexp.MustCompile(
+		`(?i)\b(don't|do not|stop|wrong|not that|i said|again|undo|revert)\b|` +
+			`(?i)\buse\b.+\bnot\b`,
+	)
+	leadingNoCorrectionPattern = regexp.MustCompile(`(?i)^\s*no(?:\b|[!,:;.-])`)
+	approvalPattern            = regexp.MustCompile(`(?i)^(yes|y|allow|allowed|approve|approved|continue|go ahead|ok|okay)$`)
+	denialPattern              = regexp.MustCompile(`(?i)^(no|n|deny|denied|reject|rejected|cancel|stop)$`)
+	patchFilePattern           = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
 )
 
 func commandInfo(
@@ -236,6 +245,375 @@ func ClassifyVerificationCommand(
 	default:
 		return "", false
 	}
+}
+
+// ExtractEditedFiles returns normalized file paths explicitly present in a
+// retained file-edit tool call. It does not infer paths from surrounding turns.
+func ExtractEditedFiles(turn transcript.Turn) []string {
+	return editedFiles(turn)
+}
+
+// NormalizedCommandSignature returns the detector's stable command signature
+// for a retained command turn.
+func NormalizedCommandSignature(turn transcript.Turn) (string, bool) {
+	_, normalized, _, ok := commandInfo(turn, issueintel.ProjectConfig{})
+	return normalized, ok
+}
+
+// RetainedCommandInfo returns the shared deterministic command
+// classification, normalized signature, and retained raw command for one turn.
+func RetainedCommandInfo(
+	turn transcript.Turn,
+	config issueintel.ProjectConfig,
+) (class, normalized, raw string, ok bool) {
+	return commandInfo(turn, config)
+}
+
+// ToolResultFailed reports whether the retained tool result is classified as
+// a failure by the transcript issue detector's deterministic rules.
+func ToolResultFailed(turn transcript.Turn) bool {
+	return turnFailed(turn)
+}
+
+// NormalizedErrorSignature returns the detector's stable normalized error
+// signature for a retained tool result.
+func NormalizedErrorSignature(turn transcript.Turn) string {
+	return normalizedErrorSignature(turn)
+}
+
+// CommandRepairFamily returns the first logical command's stable executable
+// family for conservative repair comparison. It only tokenizes shell syntax;
+// it never expands variables, substitutions, or executes any input.
+func CommandRepairFamily(turn transcript.Turn) (string, bool) {
+	_, _, raw, ok := commandInfo(turn, issueintel.ProjectConfig{})
+	if !ok {
+		return "", false
+	}
+	tokens, ok := firstLogicalCommandTokens(raw)
+	if !ok {
+		return "", false
+	}
+	index := 0
+	for index < len(tokens) && shellAssignment(tokens[index]) {
+		index++
+	}
+	if index < len(tokens) &&
+		strings.EqualFold(filepath.Base(tokens[index]), "env") {
+		index++
+		for index < len(tokens) {
+			token := tokens[index]
+			switch {
+			case shellAssignment(token):
+				index++
+			case token == "--":
+				index++
+				goto executable
+			case token == "-i" || token == "--ignore-environment":
+				index++
+			case token == "-u" || token == "--unset" ||
+				token == "-C" || token == "--chdir":
+				if index+1 >= len(tokens) {
+					return "", false
+				}
+				index += 2
+			case strings.HasPrefix(token, "--unset=") ||
+				strings.HasPrefix(token, "--chdir="):
+				index++
+			case strings.HasPrefix(token, "-"):
+				return "", false
+			default:
+				goto executable
+			}
+		}
+	}
+
+executable:
+	for index < len(tokens) && shellAssignment(tokens[index]) {
+		index++
+	}
+	if index >= len(tokens) {
+		return "", false
+	}
+	executable := strings.ToLower(filepath.Base(tokens[index]))
+	if !safeCommandFamilyPart(executable) {
+		return "", false
+	}
+	family := executable
+	if subcommand := meaningfulRepairSubcommand(executable, tokens[index+1:]); subcommand != "" {
+		family += " " + subcommand
+	}
+	if len(family) > 128 {
+		return "", false
+	}
+	return family, true
+}
+
+func firstLogicalCommandTokens(raw string) ([]string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > maxRepairCommandBytes {
+		return nil, false
+	}
+	tokens := make([]string, 0, 8)
+	var current strings.Builder
+	var quote byte
+	escaped := false
+	flush := func() bool {
+		if current.Len() == 0 {
+			return true
+		}
+		if current.Len() > maxRepairCommandTokenBytes ||
+			len(tokens) >= maxRepairCommandTokens {
+			return false
+		}
+		tokens = append(tokens, current.String())
+		current.Reset()
+		return true
+	}
+	for index := 0; index < len(raw); index++ {
+		character := raw[index]
+		if escaped {
+			current.WriteByte(character)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if character == quote {
+				quote = 0
+				continue
+			}
+			if character == '\\' && quote == '"' {
+				escaped = true
+				continue
+			}
+			current.WriteByte(character)
+			continue
+		}
+		switch character {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			quote = character
+		case '\n', '\r', ';', '&', '|':
+			if !flush() {
+				return nil, false
+			}
+			return tokens, len(tokens) > 0
+		case ' ', '\t':
+			if !flush() {
+				return nil, false
+			}
+		default:
+			current.WriteByte(character)
+			if current.Len() > maxRepairCommandTokenBytes {
+				return nil, false
+			}
+		}
+	}
+	if escaped || quote != 0 || !flush() {
+		return nil, false
+	}
+	return tokens, len(tokens) > 0
+}
+
+func shellAssignment(value string) bool {
+	separator := strings.IndexByte(value, '=')
+	if separator <= 0 {
+		return false
+	}
+	for index, character := range value[:separator] {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			character == '_' ||
+			(index > 0 && character >= '0' && character <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func safeCommandFamilyPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) ||
+			unicode.IsDigit(character) ||
+			strings.ContainsRune("._+-", character) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func meaningfulRepairSubcommand(executable string, arguments []string) string {
+	switch executable {
+	case "go":
+		return allowlistedLeadingArgument(arguments, map[string]bool{
+			"build": true, "clean": true, "env": true, "fmt": true,
+			"generate": true, "get": true, "install": true, "list": true,
+			"mod": true, "run": true, "test": true, "tool": true,
+			"version": true, "vet": true, "work": true,
+		})
+	case "cargo":
+		return allowlistedLeadingArgument(arguments, map[string]bool{
+			"build": true, "check": true, "clean": true, "clippy": true,
+			"fmt": true, "run": true, "test": true,
+		})
+	case "git":
+		return allowlistedLeadingArgument(arguments, map[string]bool{
+			"add": true, "apply": true, "branch": true, "checkout": true,
+			"clean": true, "commit": true, "diff": true, "fetch": true,
+			"log": true, "merge": true, "pull": true, "push": true,
+			"rebase": true, "restore": true, "show": true, "status": true,
+			"switch": true,
+		})
+	case "python", "python3":
+		if len(arguments) >= 2 && arguments[0] == "-m" &&
+			safeCommandFamilyPart(arguments[1]) {
+			return "-m " + strings.ToLower(arguments[1])
+		}
+	case "make":
+		for _, argument := range arguments {
+			if strings.HasPrefix(argument, "-") || shellAssignment(argument) {
+				continue
+			}
+			if safeCommandFamilyPart(argument) {
+				return strings.ToLower(argument)
+			}
+			return ""
+		}
+	case "npm", "pnpm", "yarn", "bun":
+		index := 0
+		if index < len(arguments) && arguments[index] == "run" {
+			index++
+		}
+		if index < len(arguments) && safeCommandFamilyPart(arguments[index]) {
+			return strings.ToLower(arguments[index])
+		}
+	}
+	return ""
+}
+
+func allowlistedLeadingArgument(
+	arguments []string,
+	allowed map[string]bool,
+) string {
+	if len(arguments) == 0 {
+		return ""
+	}
+	argument := strings.ToLower(arguments[0])
+	if allowed[argument] {
+		return argument
+	}
+	return ""
+}
+
+// IsCompletionClaim reports whether an assistant turn contains the detector's
+// deterministic completion marker.
+func IsCompletionClaim(turn transcript.Turn) bool {
+	return isCompletionClaim(turn)
+}
+
+// HighConfidenceCorrectionMarker returns the explicit correction marker used
+// by deterministic correction detection. Short-turn length alone is not a
+// high-confidence correction signal.
+func HighConfidenceCorrectionMarker(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" ||
+		strings.HasPrefix(normalized, "no problem") ||
+		strings.HasPrefix(normalized, "no worries") ||
+		strings.HasPrefix(normalized, "no thank") ||
+		IsMachineGeneratedEnvelope(value) {
+		return ""
+	}
+	if match := leadingNoCorrectionPattern.FindString(value); match != "" {
+		return strings.ToLower(strings.TrimSpace(match))
+	}
+	words := strings.Fields(value)
+	if len(words) > correctionMarkerWords {
+		words = words[:correctionMarkerWords]
+	}
+	match := strongCorrectionPattern.FindString(strings.Join(words, " "))
+	return strings.ToLower(strings.TrimSpace(match))
+}
+
+// IsMachineGeneratedEnvelope reports whether text is a retained task,
+// system, or subagent notification rather than a real user instruction.
+func IsMachineGeneratedEnvelope(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	normalized := strings.ToLower(trimmed)
+	for _, prefix := range []string{
+		"<task-notification",
+		"<task_notification",
+		"<system-reminder",
+		"<system_reminder",
+		"<subagent-notification",
+		"<subagent_notification",
+		"[task-notification",
+		"[task_notification",
+		"[system-reminder",
+		"[system_reminder",
+		"[subagent-notification",
+		"[subagent_notification",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	if modeRawQueryEnvelope(trimmed) {
+		return true
+	}
+	if !strings.HasPrefix(normalized, "{") {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &object) != nil {
+		return false
+	}
+	var envelopeType string
+	if raw, ok := object["type"]; ok {
+		_ = json.Unmarshal(raw, &envelopeType)
+	}
+	switch strings.ToLower(strings.TrimSpace(envelopeType)) {
+	case "task_notification",
+		"task-notification",
+		"system_reminder",
+		"system-reminder",
+		"subagent_notification",
+		"subagent-notification":
+		return true
+	}
+	return nonEmptyJSONString(object["description"]) &&
+		nonEmptyJSONString(object["prompt"])
+}
+
+func modeRawQueryEnvelope(value string) bool {
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) < 2 {
+		return false
+	}
+	first := strings.TrimSpace(lines[0])
+	second := strings.TrimSpace(lines[1])
+	if len(first) < len("MODE:") ||
+		!strings.EqualFold(first[:len("MODE:")], "MODE:") ||
+		strings.TrimSpace(first[len("MODE:"):]) == "" {
+		return false
+	}
+	return len(second) >= len("RAW QUERY:") &&
+		strings.EqualFold(second[:len("RAW QUERY:")], "RAW QUERY:")
+}
+
+func nonEmptyJSONString(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value string
+	return json.Unmarshal(raw, &value) == nil &&
+		strings.TrimSpace(value) != ""
 }
 
 func normalizeCommand(value string) string {

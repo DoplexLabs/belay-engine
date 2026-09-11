@@ -23,6 +23,7 @@ import (
 	"github.com/DoplexLabs/belay-engine/internal/initialization"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/localhttp"
+	"github.com/DoplexLabs/belay-engine/internal/presentation/localmcp"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 	"github.com/DoplexLabs/belay-engine/internal/transcript"
@@ -1135,8 +1136,14 @@ func TestDoctorTranscriptCoverageExposesCompletePartialAndWithoutCounts(
 
 func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
 	previousImport := importRecentTranscriptsOnce
+	previousReconcile := reconcileMissionPackReceiptsOnce
+	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousTrajectory := deriveSessionTrajectoriesOnce
 	t.Cleanup(func() {
 		importRecentTranscriptsOnce = previousImport
+		reconcileMissionPackReceiptsOnce = previousReconcile
+		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveSessionTrajectoriesOnce = previousTrajectory
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := make(chan struct{}, 2)
@@ -1147,6 +1154,26 @@ func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
 	) error {
 		calls <- struct{}{}
 		return errors.New("private transcript payload")
+	}
+	reconciliations := 0
+	reconcileMissionPackReceiptsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		reconciliations++
+		return nil
+	}
+	evaluateExperienceApplicationsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		return nil
+	}
+	deriveSessionTrajectoriesOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		return nil
 	}
 	warnings := 0
 	pollTranscripts(
@@ -1167,25 +1194,201 @@ func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
 	if warnings != 2 {
 		t.Fatalf("transcript polling warnings = %d, want 2", warnings)
 	}
+	if reconciliations != 2 {
+		t.Fatalf("receipt reconciliations = %d, want 2", reconciliations)
+	}
 }
 
-func TestRunScanImportsTranscripts(t *testing.T) {
+func TestTranscriptPollingImportsDespiteReceiptReconciliationError(t *testing.T) {
+	previousImport := importRecentTranscriptsOnce
+	previousReconcile := reconcileMissionPackReceiptsOnce
+	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousTrajectory := deriveSessionTrajectoriesOnce
+	t.Cleanup(func() {
+		importRecentTranscriptsOnce = previousImport
+		reconcileMissionPackReceiptsOnce = previousReconcile
+		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveSessionTrajectoriesOnce = previousTrajectory
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	imports := 0
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		imports++
+		return nil
+	}
+	reconciliations := 0
+	reconcileMissionPackReceiptsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		reconciliations++
+		return errors.New("private receipt payload")
+	}
+	evaluations := 0
+	trajectories := 0
+	deriveSessionTrajectoriesOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		trajectories++
+		return nil
+	}
+	evaluateExperienceApplicationsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		evaluations++
+		return nil
+	}
+	warnings := 0
+	pollTranscripts(
+		ctx,
+		localapp.Paths{},
+		nil,
+		time.Hour,
+		func() {
+			warnings++
+			cancel()
+		},
+	)
+	if imports != 1 {
+		t.Fatalf("transcript imports = %d, want 1", imports)
+	}
+	if reconciliations != 1 {
+		t.Fatalf("receipt reconciliations = %d, want 1", reconciliations)
+	}
+	if warnings != 1 {
+		t.Fatalf("receipt reconciliation warnings = %d, want 1", warnings)
+	}
+	if evaluations != 1 {
+		t.Fatalf("experience evaluations = %d, want 1", evaluations)
+	}
+	if trajectories != 1 {
+		t.Fatalf("trajectory derivations = %d, want 1", trajectories)
+	}
+}
+
+func TestTranscriptPollingEvaluatesAfterMaterializationAndFailsOpen(
+	t *testing.T,
+) {
+	previousImport := importRecentTranscriptsOnce
+	previousReconcile := reconcileMissionPackReceiptsOnce
+	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousTrajectory := deriveSessionTrajectoriesOnce
+	t.Cleanup(func() {
+		importRecentTranscriptsOnce = previousImport
+		reconcileMissionPackReceiptsOnce = previousReconcile
+		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveSessionTrajectoriesOnce = previousTrajectory
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	var order []string
+	importRecentTranscriptsOnce = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		order = append(order, "import")
+		return nil
+	}
+	reconcileMissionPackReceiptsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		order = append(order, "reconcile_materialize")
+		return nil
+	}
+	deriveSessionTrajectoriesOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		order = append(order, "trajectory")
+		return nil
+	}
+	evaluateExperienceApplicationsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		order = append(order, "evaluate")
+		return errors.New("private evaluation payload")
+	}
+	warnings := 0
+	pollTranscripts(
+		ctx,
+		localapp.Paths{},
+		nil,
+		time.Hour,
+		func() {
+			warnings++
+			cancel()
+		},
+	)
+	if got, want := strings.Join(order, ","), "import,reconcile_materialize,trajectory,evaluate"; got != want {
+		t.Fatalf("poll order = %q, want %q", got, want)
+	}
+	if warnings != 1 {
+		t.Fatalf("evaluation warnings = %d, want 1", warnings)
+	}
+}
+
+func TestRunScanDrainsRecentBeforeAndAfterHistoricalBackfill(t *testing.T) {
+	previousDiscover := discoverAndScan
 	previousScan := scanTranscripts
+	previousDrain := drainScanTranscripts
 	previousOpen := openLocalCommandStore
 	t.Cleanup(func() {
+		discoverAndScan = previousDiscover
 		scanTranscripts = previousScan
+		drainScanTranscripts = previousDrain
 		openLocalCommandStore = previousOpen
 	})
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
-	transcriptScans := 0
+
+	recentBeforeErr := errors.New("recent transcript drain before scan")
+	numbatErr := errors.New("numbat historical scan")
+	transcriptErr := errors.New("historical transcript backfill")
+	recentAfterErr := errors.New("recent transcript drain after backfill")
+	var order []string
+	recentDrains := 0
+	drainScanTranscripts = func(
+		context.Context,
+		localapp.Paths,
+		*local.Store,
+	) error {
+		recentDrains++
+		if recentDrains == 1 {
+			order = append(order, "drain_before")
+			return recentBeforeErr
+		}
+		order = append(order, "drain_after")
+		return recentAfterErr
+	}
+	reports := []localapp.HarnessScan{{
+		Agent:    "claude",
+		Detected: true,
+		ExitCode: 0,
+	}}
+	discoverAndScan = func(
+		context.Context,
+		*numbat.Client,
+		*local.Store,
+		localapp.Config,
+	) (numbat.Inventory, []localapp.HarnessScan, error) {
+		order = append(order, "numbat")
+		return numbat.Inventory{}, reports, numbatErr
+	}
 	scanTranscripts = func(
 		context.Context,
 		localapp.Paths,
 		*local.Store,
 	) error {
-		transcriptScans++
-		return nil
+		order = append(order, "historical_transcripts")
+		return transcriptErr
 	}
 	keyProvider := &doctorKeyProvider{keys: make(map[string][]byte)}
 	openLocalCommandStore = func(path string) (*local.Store, error) {
@@ -1195,7 +1398,7 @@ func TestRunScanImportsTranscripts(t *testing.T) {
 	}
 	binary := writeInventoryNumbat(t, "[]")
 	var stdout, stderr bytes.Buffer
-	if err := runScan(
+	err := runScan(
 		context.Background(),
 		[]string{
 			"--home", t.TempDir(),
@@ -1204,11 +1407,36 @@ func TestRunScanImportsTranscripts(t *testing.T) {
 		},
 		&stdout,
 		&stderr,
-	); err != nil {
-		t.Fatalf("runScan() error = %v stderr=%s", err, stderr.String())
+	)
+	if got, want := strings.Join(order, ","), "drain_before,numbat,historical_transcripts,drain_after"; got != want {
+		t.Fatalf("runScan order = %q, want %q", got, want)
 	}
-	if transcriptScans != 1 {
-		t.Fatalf("transcript scans = %d, want 1", transcriptScans)
+	for _, want := range []error{
+		recentBeforeErr,
+		numbatErr,
+		transcriptErr,
+		recentAfterErr,
+	} {
+		if !errors.Is(err, want) {
+			t.Errorf("runScan() error = %v, want joined error %v", err, want)
+		}
+	}
+	var output struct {
+		Scans []localapp.HarnessScan `json:"scans"`
+	}
+	if decodeErr := json.Unmarshal(stdout.Bytes(), &output); decodeErr != nil {
+		t.Fatalf(
+			"runScan() JSON = %q, decode error = %v; stderr=%s",
+			stdout.String(),
+			decodeErr,
+			stderr.String(),
+		)
+	}
+	if len(output.Scans) != 1 ||
+		output.Scans[0].Agent != reports[0].Agent ||
+		output.Scans[0].Detected != reports[0].Detected ||
+		output.Scans[0].ExitCode != reports[0].ExitCode {
+		t.Fatalf("runScan() scans = %#v, want %#v", output.Scans, reports)
 	}
 }
 
@@ -1267,6 +1495,139 @@ func TestLocalHTTPWiresFixCapabilityExplicitly(t *testing.T) {
 		readmodel.FixMonitoringListRequest{},
 	); err == nil {
 		t.Fatal("core-only readmodel unexpectedly exposes fix monitoring")
+	}
+}
+
+func TestLocalMCPConstructsAndInjectsMissionPackAcceptance(t *testing.T) {
+	previousConstructor := newMissionPackAcceptanceService
+	previousOption := withMissionPackAcceptanceService
+	t.Cleanup(func() {
+		newMissionPackAcceptanceService = previousConstructor
+		withMissionPackAcceptanceService = previousOption
+	})
+	store, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "belay.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	constructorCalls := 0
+	newMissionPackAcceptanceService = func(
+		repository localapp.MissionPackAcceptanceRepository,
+	) (*localapp.MissionPackAcceptanceService, error) {
+		constructorCalls++
+		return previousConstructor(repository)
+	}
+	optionCalls := 0
+	withMissionPackAcceptanceService = func(
+		service localmcp.MissionPackAcceptanceService,
+	) localmcp.Option {
+		optionCalls++
+		return previousOption(service)
+	}
+	if _, err := newLocalMCPServer(store); err != nil {
+		t.Fatal(err)
+	}
+	if constructorCalls != 1 {
+		t.Fatalf("acceptance constructor calls = %d, want 1", constructorCalls)
+	}
+	if optionCalls != 1 {
+		t.Fatalf("acceptance option calls = %d, want 1", optionCalls)
+	}
+}
+
+func TestLocalMCPConstructsAndInjectsMissionPackStatus(t *testing.T) {
+	previousConstructor := newMissionPackStatusService
+	previousOption := withMissionPackStatusService
+	t.Cleanup(func() {
+		newMissionPackStatusService = previousConstructor
+		withMissionPackStatusService = previousOption
+	})
+	store, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "belay.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	constructorCalls := 0
+	newMissionPackStatusService = func(
+		repository localapp.MissionPackStatusRepository,
+	) (*localapp.MissionPackStatusService, error) {
+		constructorCalls++
+		return previousConstructor(repository)
+	}
+	optionCalls := 0
+	withMissionPackStatusService = func(
+		service localmcp.MissionPackStatusService,
+	) localmcp.Option {
+		optionCalls++
+		return previousOption(service)
+	}
+	if _, err := newLocalMCPServer(store); err != nil {
+		t.Fatal(err)
+	}
+	if constructorCalls != 1 {
+		t.Fatalf("status constructor calls = %d, want 1", constructorCalls)
+	}
+	if optionCalls != 1 {
+		t.Fatalf("status option calls = %d, want 1", optionCalls)
+	}
+}
+
+func TestLocalMCPConstructsAndInjectsExperienceLearning(t *testing.T) {
+	previousConstructor := newExperienceLearningService
+	previousOption := withExperienceLearningService
+	t.Cleanup(func() {
+		newExperienceLearningService = previousConstructor
+		withExperienceLearningService = previousOption
+	})
+	store, err := local.OpenWithOptions(
+		filepath.Join(t.TempDir(), "belay.sqlite"),
+		local.OpenOptions{
+			KeyProvider: &doctorKeyProvider{keys: make(map[string][]byte)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	constructorCalls := 0
+	newExperienceLearningService = func(
+		repository localapp.ExperienceLearningStore,
+		options ...localapp.ExperienceLearningServiceOption,
+	) (*localapp.ExperienceLearningService, error) {
+		constructorCalls++
+		return previousConstructor(repository, options...)
+	}
+	optionCalls := 0
+	withExperienceLearningService = func(
+		service localmcp.ExperienceLearningService,
+	) localmcp.Option {
+		optionCalls++
+		if service == nil {
+			t.Fatal("experience learning service was not adapted")
+		}
+		return previousOption(service)
+	}
+	if _, err := newLocalMCPServer(store); err != nil {
+		t.Fatal(err)
+	}
+	if constructorCalls != 1 {
+		t.Fatalf("learning constructor calls = %d, want 1", constructorCalls)
+	}
+	if optionCalls != 1 {
+		t.Fatalf("learning option calls = %d, want 1", optionCalls)
 	}
 }
 

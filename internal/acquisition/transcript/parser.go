@@ -154,6 +154,10 @@ func (p *parser) emitWithIdentity(
 		p.result.Issues++
 		return -1
 	}
+	if p.source.Agent == AgentCodex &&
+		strings.TrimSpace(payload.ParentToolUseID) == "" {
+		payload.ParentToolUseID = p.parentToolUseID("", "")
+	}
 	block := p.block
 	p.block++
 	version := p.options.SourceRecordKeyVersion
@@ -236,6 +240,14 @@ func (p *parser) parentToolUseID(explicit, sourceAssistantUUID string) string {
 	}
 	if value := p.result.State.ThreadParentTool[p.result.State.CurrentThreadID]; value != "" {
 		return value
+	}
+	// Child Codex rollouts do not always retain the originating
+	// CollabAgentToolCall ID. Preserve an explicit stable parent linkage so
+	// delegated turns cannot be mistaken for top-level user feedback.
+	if parentThreadID := strings.TrimSpace(
+		p.result.State.ParentThreadID,
+	); parentThreadID != "" {
+		return "codex-parent-thread:" + parentThreadID
 	}
 	return ""
 }

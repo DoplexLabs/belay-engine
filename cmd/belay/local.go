@@ -85,6 +85,13 @@ var (
 	) error {
 		return localapp.ImportRecentTranscriptsOnce(ctx, paths, store)
 	}
+	drainScanTranscripts = func(
+		ctx context.Context,
+		paths localapp.Paths,
+		store *local.Store,
+	) error {
+		return localapp.DrainScanTranscripts(ctx, paths, store)
+	}
 	scanTranscripts = func(
 		ctx context.Context,
 		paths localapp.Paths,
@@ -99,8 +106,60 @@ var (
 	) error {
 		return localapp.ScanHistoricalTranscripts(ctx, paths, store)
 	}
-	pollLive             = localapp.PollLive
-	startLocalHTTPServer = func(
+	reconcileMissionPackReceiptsOnce = func(
+		ctx context.Context,
+		store *local.Store,
+	) error {
+		reconciliation, err := localapp.NewMissionPackReceiptReconciliationCoordinator(
+			store,
+		)
+		if err != nil {
+			return err
+		}
+		reconciliationErr := reconciliation.Reconcile(
+			ctx,
+			time.Now().UTC(),
+			64,
+		)
+		materialization, err :=
+			localapp.NewMissionPackApplicationMaterializationCoordinator(store)
+		if err != nil {
+			return errors.Join(reconciliationErr, err)
+		}
+		_, materializationErr := materialization.Materialize(ctx, 64)
+		return errors.Join(reconciliationErr, materializationErr)
+	}
+	evaluateExperienceApplicationsOnce = func(
+		ctx context.Context,
+		store *local.Store,
+	) error {
+		coordinator, err := localapp.NewExperienceEvaluationCoordinator(store)
+		if err != nil {
+			return err
+		}
+		_, err = coordinator.Evaluate(ctx, 64)
+		return err
+	}
+	deriveSessionTrajectoriesOnce = func(
+		ctx context.Context,
+		store *local.Store,
+	) error {
+		_, err := localapp.AnalyzeTrajectorySessionsOnce(ctx, store, 25)
+		return err
+	}
+	newMissionPackAcceptanceService  = localapp.NewMissionPackAcceptanceService
+	withMissionPackAcceptanceService = localmcp.WithMissionPackAcceptanceService
+	newMissionPackStatusService      = localapp.NewMissionPackStatusService
+	withMissionPackStatusService     = localmcp.WithMissionPackStatusService
+	newExperienceLearningService     = func(
+		store localapp.ExperienceLearningStore,
+		options ...localapp.ExperienceLearningServiceOption,
+	) (*localapp.ExperienceLearningService, error) {
+		return localapp.NewExperienceLearningService(store, options...)
+	}
+	withExperienceLearningService = localmcp.WithExperienceLearningService
+	pollLive                      = localapp.PollLive
+	startLocalHTTPServer          = func(
 		ctx context.Context,
 		store *local.Store,
 		token string,
@@ -413,7 +472,7 @@ func runLocalLaunch(
 			onboardingComplete = false
 		}
 	} else if options.commandName == "quickstart" {
-		fmt.Fprintln(stderr, "belay quickstart: mcp skipped_by_user")
+		fmt.Fprintln(stderr, "belay quickstart: MCP setup skipped")
 	}
 	if options.commandName == "quickstart" && options.installHooks {
 		if !onboardBelaySkills(ctx, runtime.client, stderr) {
@@ -476,7 +535,7 @@ func runLocalLaunch(
 				if err != nil {
 					fmt.Fprintf(
 						stderr,
-						"belay %s: historical worker storage unavailable; Local will continue\n",
+						"belay %s: history scan could not access local data; Local will continue\n",
 						options.commandName,
 					)
 					return errors.New(
@@ -502,7 +561,7 @@ func runLocalLaunch(
 					); err != nil {
 						fmt.Fprintf(
 							stderr,
-							"belay %s: semantic analysis incomplete; Local will continue\n",
+							"belay %s: AI-assisted analysis did not finish; deterministic results remain available\n",
 							options.commandName,
 						)
 					}
@@ -592,11 +651,10 @@ func runQuickstartSemanticAnalysis(
 		"belay quickstart: Analyzing with your %s\n",
 		semanticHarnessDisplayName(harness),
 	)
-	_, err = localapp.AnalyzeSemanticProjects(
+	_, err = runSemanticProjectAnalyses(
 		ctx,
 		store,
 		harness,
-		localapp.RunInstalledSemanticHarness,
 	)
 	return err
 }
@@ -664,11 +722,22 @@ func pollTranscripts(
 		interval = 2 * time.Second
 	}
 	run := func() {
-		if err := importRecentTranscriptsOnce(ctx, paths, store); err != nil &&
-			!errors.Is(err, context.Canceled) &&
-			ctx.Err() == nil &&
-			onError != nil {
-			onError()
+		importErr := importRecentTranscriptsOnce(ctx, paths, store)
+		reconciliationErr := reconcileMissionPackReceiptsOnce(ctx, store)
+		trajectoryErr := deriveSessionTrajectoriesOnce(ctx, store)
+		evaluationErr := evaluateExperienceApplicationsOnce(ctx, store)
+		for _, err := range []error{
+			importErr,
+			reconciliationErr,
+			trajectoryErr,
+			evaluationErr,
+		} {
+			if err != nil &&
+				!errors.Is(err, context.Canceled) &&
+				ctx.Err() == nil &&
+				onError != nil {
+				onError()
+			}
 		}
 	}
 	run()
@@ -702,7 +771,7 @@ func runIntelligenceWorkers(
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: transcript import retry pending\n",
+					"belay %s: session update delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -718,7 +787,7 @@ func runIntelligenceWorkers(
 			func(error) {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: cost issue analysis retry pending\n",
+					"belay %s: issue analysis delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -744,7 +813,7 @@ func startLocalIntelligence(
 		func() {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: intelligence freshness retry pending; Local remains available\n",
+				"belay %s: background analysis delayed; Local remains available\n",
 				commandName,
 			)
 		},
@@ -766,7 +835,7 @@ func startLocalLiveWithDedicatedStore(
 		if err != nil {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: live acquisition storage unavailable; Local remains available\n",
+				"belay %s: live session updates unavailable; Local remains available\n",
 				commandName,
 			)
 			return
@@ -781,7 +850,7 @@ func startLocalLiveWithDedicatedStore(
 			func(error) {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: live import retry pending\n",
+					"belay %s: live session update delayed; retrying\n",
 					commandName,
 				)
 			},
@@ -838,7 +907,15 @@ func newLocalHTTPServer(
 	if err != nil {
 		return nil, err
 	}
-	missionPacks, err := localapp.NewMissionPackService(store)
+	experienceCompiler, err := localapp.NewExperienceCompilerService(store)
+	if err != nil {
+		return nil, err
+	}
+	missionPacks, err := localapp.NewMissionPackService(
+		store,
+		localapp.WithMissionPackExperienceSelector(experienceCompiler),
+		localapp.WithMissionPackPreviewRepository(store),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -882,9 +959,29 @@ func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	missionPacks, err := localapp.NewMissionPackService(store)
+	experienceCompiler, err := localapp.NewExperienceCompilerService(store)
 	if err != nil {
 		return nil, err
+	}
+	missionPacks, err := localapp.NewMissionPackService(
+		store,
+		localapp.WithMissionPackExperienceSelector(experienceCompiler),
+		localapp.WithMissionPackPreviewRepository(store),
+	)
+	if err != nil {
+		return nil, err
+	}
+	missionPackAcceptance, err := newMissionPackAcceptanceService(store)
+	if err != nil {
+		return nil, err
+	}
+	missionPackStatus, err := newMissionPackStatusService(store)
+	if err != nil {
+		return nil, err
+	}
+	experienceLearning, err := newExperienceLearningService(store)
+	if err != nil {
+		return nil, fmt.Errorf("construct experience learning service: %w", err)
 	}
 	return localmcp.New(readmodel.New(
 		store,
@@ -894,6 +991,11 @@ func newLocalMCPServer(store *local.Store) (*localmcp.Server, error) {
 	),
 		localmcp.WithCostIssueFixService(fixService),
 		localmcp.WithMissionPackService(missionPacks),
+		withMissionPackAcceptanceService(missionPackAcceptance),
+		withMissionPackStatusService(missionPackStatus),
+		withExperienceLearningService(
+			localmcp.AdaptExperienceLearningService(experienceLearning),
+		),
 	)
 }
 
@@ -1006,15 +1108,21 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return err
 	}
 	defer store.Close()
-	inventory, reports, err := localapp.DiscoverAndScan(ctx, runtime.client, store, runtime.config)
+	recentTranscriptErr := drainScanTranscripts(ctx, runtime.paths, store)
+	inventory, reports, err := discoverAndScan(ctx, runtime.client, store, runtime.config)
 	transcriptErr := scanTranscripts(ctx, runtime.paths, store)
-	if writeErr := writeJSON(stdout, map[string]any{
+	appendedTranscriptErr := drainScanTranscripts(ctx, runtime.paths, store)
+	writeErr := writeJSON(stdout, map[string]any{
 		"inventory": projectCLIInventory(inventory),
 		"scans":     reports,
-	}); writeErr != nil {
-		return writeErr
-	}
-	return errors.Join(err, transcriptErr)
+	})
+	return errors.Join(
+		recentTranscriptErr,
+		err,
+		transcriptErr,
+		appendedTranscriptErr,
+		writeErr,
+	)
 }
 
 func runAgents(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -1110,7 +1218,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	return runErr
 }
 
-const mcpRecoveryPendingMessage = "belay mcp: recovery pending"
+const mcpRecoveryPendingMessage = "belay mcp: local data recovery delayed; reads remain available"
 
 func startMCPRecovery(
 	ctx context.Context,
@@ -1126,10 +1234,10 @@ func startMCPRecovery(
 		ctx,
 		recoveryStore,
 		func() {
-			fmt.Fprintln(stderr, "belay mcp: issue analysis recovery pending")
+			fmt.Fprintln(stderr, "belay mcp: issue analysis delayed; reads remain available")
 		},
 		func() {
-			fmt.Fprintln(stderr, "belay mcp: attempt monitoring recovery pending")
+			fmt.Fprintln(stderr, "belay mcp: fix history update delayed; reads remain available")
 		},
 	)
 	done := make(chan struct{})
@@ -1154,7 +1262,7 @@ func startMCPIntelligence(
 		func() {
 			fmt.Fprintln(
 				stderr,
-				"belay mcp: intelligence freshness retry pending; reads remain available",
+				"belay mcp: background analysis delayed; reads remain available",
 			)
 		},
 	)
@@ -1174,7 +1282,7 @@ func startLocalRecoveryWithDedicatedStore(
 		if err != nil {
 			fmt.Fprintf(
 				stderr,
-				"belay %s: recovery pending; Local remains available\n",
+				"belay %s: local data recovery delayed; Local remains available\n",
 				commandName,
 			)
 			return
@@ -1186,14 +1294,14 @@ func startLocalRecoveryWithDedicatedStore(
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: issue analysis recovery pending; Local remains available\n",
+					"belay %s: issue analysis delayed; Local remains available\n",
 					commandName,
 				)
 			},
 			func() {
 				fmt.Fprintf(
 					stderr,
-					"belay %s: attempt monitoring recovery pending; Local remains available\n",
+					"belay %s: fix history update delayed; Local remains available\n",
 					commandName,
 				)
 			},

@@ -3,14 +3,86 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DoplexLabs/belay-engine/internal/acquisition/numbat"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 )
+
+func TestRunSemanticProjectAnalysesRunsBothBranchesAndAggregatesErrors(
+	t *testing.T,
+) {
+	previousLegacy := runLegacySemanticProjects
+	previousExperience := runExperienceSemanticProjects
+	t.Cleanup(func() {
+		runLegacySemanticProjects = previousLegacy
+		runExperienceSemanticProjects = previousExperience
+	})
+	legacyErr := errors.New("legacy failed")
+	experienceErr := errors.New("experience failed")
+	var calls []string
+	runLegacySemanticProjects = func(
+		context.Context,
+		*local.Store,
+		localapp.SemanticHarness,
+	) (localapp.SemanticAnalysisReport, error) {
+		calls = append(calls, "legacy")
+		return localapp.SemanticAnalysisReport{
+			Projects: 2,
+			Clusters: 3,
+			Fixes:    4,
+		}, legacyErr
+	}
+	runExperienceSemanticProjects = func(
+		context.Context,
+		*local.Store,
+		localapp.SemanticHarness,
+	) (localapp.ExperienceProjectAnalysisReport, error) {
+		calls = append(calls, "experience")
+		return localapp.ExperienceProjectAnalysisReport{
+			ProjectsConsidered: 5,
+			ProjectsCompiled:   4,
+			ProjectsAnalyzed:   3,
+			ProjectFailures:    2,
+			CandidatesInserted: 7,
+			CandidatesReplayed: 8,
+			Proposals:          9,
+			Rejections:         10,
+			Defers:             11,
+		}, experienceErr
+	}
+	report, err := runSemanticProjectAnalyses(
+		context.Background(),
+		nil,
+		localapp.SemanticHarnessCodex,
+	)
+	if got, want := strings.Join(calls, ","), "legacy,experience"; got != want {
+		t.Fatalf("analysis calls = %q, want %q", got, want)
+	}
+	if !errors.Is(err, legacyErr) || !errors.Is(err, experienceErr) {
+		t.Fatalf("joined analysis error = %v", err)
+	}
+	if report.Projects != 2 ||
+		report.Clusters != 3 ||
+		report.Fixes != 4 ||
+		report.ExperienceProjectsConsidered != 5 ||
+		report.ExperienceProjectsCompiled != 4 ||
+		report.ExperienceProjectsAnalyzed != 3 ||
+		report.ExperienceProjectFailures != 2 ||
+		report.ExperienceCandidatesInserted != 7 ||
+		report.ExperienceCandidatesReplayed != 8 ||
+		report.ExperienceProposals != 9 ||
+		report.ExperienceRejections != 10 ||
+		report.ExperienceDefers != 11 {
+		t.Fatalf("combined semantic report = %+v", report)
+	}
+}
 
 func TestSelectSemanticHarnessHonorsDetectionAndPreference(t *testing.T) {
 	bin := t.TempDir()

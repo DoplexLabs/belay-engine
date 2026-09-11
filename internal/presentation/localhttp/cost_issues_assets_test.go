@@ -43,7 +43,7 @@ func TestCostIssueAttentionAssetsExposeRankedIssuesAndSeparateSafety(t *testing.
 		`setAttentionMode("safety")`,
 		`"propose-cost-issue-fix.v1"`,
 		`"belay.cost-issue-fix.v1"`,
-		`use /belay to apply it with approval`,
+		`apply it with /belay in Claude Code or $belay in Codex`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Fatalf("cost issue application missing %q", required)

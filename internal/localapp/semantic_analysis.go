@@ -65,6 +65,11 @@ type SemanticHarnessResult struct {
 	Model  string
 }
 
+type ExperienceSemanticHarnessResult struct {
+	Output []byte
+	Model  string
+}
+
 type SemanticHarnessRunner func(
 	context.Context,
 	SemanticHarness,
@@ -72,11 +77,52 @@ type SemanticHarnessRunner func(
 	[]byte,
 ) (SemanticHarnessResult, error)
 
+type ExperienceSemanticHarnessRunner func(
+	context.Context,
+	SemanticHarness,
+	[]byte,
+	[]byte,
+) (ExperienceSemanticHarnessResult, error)
+
+type semanticRawHarnessResult struct {
+	body  []byte
+	model string
+}
+
 type SemanticAnalysisReport struct {
-	Projects int `json:"projects"`
-	Skipped  int `json:"skipped"`
-	Clusters int `json:"clusters"`
-	Fixes    int `json:"fixes"`
+	Projects                     int `json:"projects"`
+	Skipped                      int `json:"skipped"`
+	Clusters                     int `json:"clusters"`
+	Fixes                        int `json:"fixes"`
+	ExperienceProjectsConsidered int `json:"experience_projects_considered"`
+	ExperienceProjectsCompiled   int `json:"experience_projects_compiled"`
+	ExperienceProjectsAnalyzed   int `json:"experience_projects_analyzed"`
+	ExperienceProjectFailures    int `json:"experience_project_failures"`
+	ExperienceCandidatesInserted int `json:"experience_candidates_inserted"`
+	ExperienceCandidatesReplayed int `json:"experience_candidates_replayed"`
+	ExperienceProposals          int `json:"experience_proposals"`
+	ExperienceRejections         int `json:"experience_rejections"`
+	ExperienceDefers             int `json:"experience_defers"`
+}
+
+func (report *SemanticAnalysisReport) AddExperience(
+	experienceReport ExperienceProjectAnalysisReport,
+) {
+	if report == nil {
+		return
+	}
+	report.ExperienceProjectsConsidered +=
+		experienceReport.ProjectsConsidered
+	report.ExperienceProjectsCompiled += experienceReport.ProjectsCompiled
+	report.ExperienceProjectsAnalyzed += experienceReport.ProjectsAnalyzed
+	report.ExperienceProjectFailures += experienceReport.ProjectFailures
+	report.ExperienceCandidatesInserted +=
+		experienceReport.CandidatesInserted
+	report.ExperienceCandidatesReplayed +=
+		experienceReport.CandidatesReplayed
+	report.ExperienceProposals += experienceReport.Proposals
+	report.ExperienceRejections += experienceReport.Rejections
+	report.ExperienceDefers += experienceReport.Defers
 }
 
 func AnalyzeSemanticProjects(
@@ -203,21 +249,52 @@ func RunInstalledSemanticHarness(
 	prompt []byte,
 	schema []byte,
 ) (SemanticHarnessResult, error) {
+	raw, err := runInstalledSemanticHarnessRaw(ctx, harness, prompt, schema)
+	if err != nil {
+		return SemanticHarnessResult{}, err
+	}
+	return decodeSemanticResult(raw.body, raw.model)
+}
+
+func RunInstalledExperienceSemanticHarness(
+	ctx context.Context,
+	harness SemanticHarness,
+	prompt []byte,
+	schema []byte,
+) (ExperienceSemanticHarnessResult, error) {
+	raw, err := runInstalledSemanticHarnessRaw(ctx, harness, prompt, schema)
+	if err != nil {
+		return ExperienceSemanticHarnessResult{}, err
+	}
+	return ExperienceSemanticHarnessResult{
+		Output: append([]byte(nil), raw.body...),
+		Model:  raw.model,
+	}, nil
+}
+
+func runInstalledSemanticHarnessRaw(
+	ctx context.Context,
+	harness SemanticHarness,
+	prompt []byte,
+	schema []byte,
+) (semanticRawHarnessResult, error) {
 	if !harness.Valid() {
-		return SemanticHarnessResult{}, errors.New("invalid semantic harness")
+		return semanticRawHarnessResult{}, errors.New(
+			"invalid semantic harness",
+		)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, defaultSemanticRunTimeout)
 	defer cancel()
 	tempDir, err := os.MkdirTemp("", "belay-analyze-*")
 	if err != nil {
-		return SemanticHarnessResult{}, errors.New(
+		return semanticRawHarnessResult{}, errors.New(
 			"create semantic analysis workspace",
 		)
 	}
 	defer os.RemoveAll(tempDir)
 	schemaPath := filepath.Join(tempDir, "schema.json")
 	if err := os.WriteFile(schemaPath, schema, 0o600); err != nil {
-		return SemanticHarnessResult{}, errors.New(
+		return semanticRawHarnessResult{}, errors.New(
 			"write semantic output schema",
 		)
 	}
@@ -227,7 +304,7 @@ func RunInstalledSemanticHarness(
 	switch harness {
 	case SemanticHarnessClaude:
 		if len(schema) > maxClaudeInlineSchema {
-			return SemanticHarnessResult{}, errors.New(
+			return semanticRawHarnessResult{}, errors.New(
 				"Claude semantic output schema exceeds inline safety limit",
 			)
 		}
@@ -263,7 +340,7 @@ func RunInstalledSemanticHarness(
 	}
 	executable, err := exec.LookPath(name)
 	if err != nil {
-		return SemanticHarnessResult{}, fmt.Errorf(
+		return semanticRawHarnessResult{}, fmt.Errorf(
 			"%s harness is not installed",
 			name,
 		)
@@ -282,7 +359,7 @@ func RunInstalledSemanticHarness(
 		limit:  maxSemanticCommandOutput,
 	}
 	if err := command.Run(); err != nil {
-		return SemanticHarnessResult{}, semanticHarnessFailure(
+		return semanticRawHarnessResult{}, semanticHarnessFailure(
 			name,
 			err,
 			stderr.Bytes(),
@@ -292,13 +369,13 @@ func RunInstalledSemanticHarness(
 	if outputPath != "" {
 		body, err := os.ReadFile(outputPath)
 		if err != nil {
-			return SemanticHarnessResult{}, errors.New(
+			return semanticRawHarnessResult{}, errors.New(
 				"read Codex semantic output",
 			)
 		}
-		return decodeSemanticResult(body, "")
+		return semanticRawHarnessResult{body: body}, nil
 	}
-	return decodeClaudeSemanticResult(stdout.Bytes())
+	return decodeClaudeSemanticPayload(stdout.Bytes())
 }
 
 func semanticHarnessFailure(
@@ -850,25 +927,49 @@ func insightTargetSchema() map[string]any {
 }
 
 func decodeClaudeSemanticResult(body []byte) (SemanticHarnessResult, error) {
+	raw, err := decodeClaudeSemanticPayload(body)
+	if err != nil {
+		return SemanticHarnessResult{}, err
+	}
+	return decodeSemanticResult(raw.body, raw.model)
+}
+
+func decodeClaudeSemanticPayload(
+	body []byte,
+) (semanticRawHarnessResult, error) {
 	var envelope struct {
 		Model            string          `json:"model"`
 		StructuredOutput json.RawMessage `json:"structured_output"`
 		Result           json.RawMessage `json:"result"`
 	}
 	if json.Unmarshal(body, &envelope) != nil {
-		return SemanticHarnessResult{}, errors.New(
+		return semanticRawHarnessResult{}, errors.New(
 			"decode Claude semantic response",
 		)
 	}
 	if len(envelope.StructuredOutput) > 0 &&
 		string(envelope.StructuredOutput) != "null" {
-		return decodeSemanticResult(envelope.StructuredOutput, envelope.Model)
+		return semanticRawHarnessResult{
+			body:  append([]byte(nil), envelope.StructuredOutput...),
+			model: strings.TrimSpace(envelope.Model),
+		}, nil
 	}
 	var text string
 	if json.Unmarshal(envelope.Result, &text) == nil {
-		return decodeSemanticResult([]byte(text), envelope.Model)
+		return semanticRawHarnessResult{
+			body:  []byte(text),
+			model: strings.TrimSpace(envelope.Model),
+		}, nil
 	}
-	return decodeSemanticResult(envelope.Result, envelope.Model)
+	if len(envelope.Result) == 0 {
+		return semanticRawHarnessResult{}, errors.New(
+			"decode Claude semantic response",
+		)
+	}
+	return semanticRawHarnessResult{
+		body:  append([]byte(nil), envelope.Result...),
+		model: strings.TrimSpace(envelope.Model),
+	}, nil
 }
 
 func decodeSemanticResult(

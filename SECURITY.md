@@ -43,7 +43,9 @@ Belay Local:
 - encrypts canonical payloads and scrubbed local transcript payloads using a
   macOS Keychain-backed key;
 - binds its browser API to loopback and requires a per-launch token;
-- exposes read-only stdio MCP tools;
+- exposes a local stdio MCP catalog whose state-changing tools are limited to
+  bounded user-governed records and lifecycle decisions;
+- does not let MCP tools execute commands or write project files;
 - sends no Local product telemetry.
 
 Belay Local is not a tamper-proof boundary against a process running as the same

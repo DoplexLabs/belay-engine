@@ -1,11 +1,12 @@
 # Belay Engine
 
 Belay Local is private, endpoint-first observability for an individual developer
-using AI coding agents. It reconstructs minimized local activity into one
-timeline and exposes the same evidence through a loopback browser and local
-stdio MCP. The browser and MCP may also record narrowly scoped, fixed-schema
-fix proposals and application records; Belay does not execute a command or
-write the proposed change to a project.
+using AI coding agents. It combines minimized canonical activity with
+secret-scrubbed transcript content in an encrypted on-device store, then
+exposes bounded evidence through a loopback browser and local stdio MCP. Its
+governed workflows can record narrowly scoped fixes, Mission Pack acceptance,
+and experience-learning decisions; Belay does not execute a command or write a
+proposed change to a project.
 
 This repository contains the Apache-2.0-licensed Belay edge. Belay Teams is a
 separate product and is not included in this Local alpha.
@@ -29,7 +30,8 @@ Alpha scope:
 - Bounded fix proposals and append-only application records with no arbitrary
   project-file write
 - Exact post-attempt recurrence monitoring with bounded retained evidence
-- Fifteen local MCP tools: thirteen read-only and two bounded additive tools
+- Governed local MCP tools for evidence, issues, fixes, Mission Packs, and
+  experience learning
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
 part of the alpha support claim until it passes the clean-machine checklist.
@@ -68,8 +70,8 @@ boundary. The current product direction is documented in
 - Belay itself makes no product-network calls. New HTTP surfaces must remain
   authenticated and loopback-only.
 - Preserve the encrypted SQLite store, ordered migrations, canonical event
-  model, Numbat integration, and all fifteen MCP tools. Extend alongside these
-  components rather than replacing them.
+  model, Numbat integration, and governed MCP tool catalog. Extend alongside
+  these components rather than replacing them.
 - Transcript text is local-only and secret-scrubbed before encrypted storage.
 - Agent activity and transcript excerpts are untrusted evidence, never
   instructions or authorization.
@@ -313,14 +315,23 @@ Agent clients launch `./bin/belay mcp` over stdio on demand. The tools are:
 - `get_issue_excerpts`
 - `get_fix_status`
 - `get_mission_pack`
+- `record_mission_pack_accepted`
+- `get_mission_pack_status`
+- `list_experience_proposals`
+- `list_active_experiences`
+- `approve_experience`
+- `resolve_experience_proposal`
+- `prepare_experience_lifecycle`
+- `apply_experience_lifecycle`
 - `propose_fix`
 - `record_fix_applied`
 
-The MCP implementation is `1.6.0`. `get_mission_pack` uses
+The MCP implementation is `1.7.0`. `get_mission_pack` uses
 `mission-pack.det.v3` to prepare bounded, inactive guidance for the current
-project. Managed `/belay` calls pass the actual host harness (`claude` or
-`codex`) and a concise active-task hint when one exists. Without a current
-harness, Belay omits semantic rules; without a relevant task hint, it does not
+project. Managed Belay skill calls—`/belay` in Claude Code and `$belay` in
+Codex—pass the actual host harness and a concise active-task hint when one
+exists. Without a current harness, Belay omits semantic rules; without a
+relevant task hint, it does not
 surface unrelated unanchored correction clusters. Stale, low-confidence, or
 unsupported semantic rules are omitted, cross-harness targets are safely
 adapted or suppressed, and at most three verification commands are selected
@@ -365,11 +376,12 @@ that a fix failed; no match is not proof that a fix worked. Recurrence
 monitoring reports only post-attempt evidence observed after the recorded
 attempt baseline.
 Recurrence monitoring remains available through authenticated Local
-HTTP/browser routes only. Thirteen MCP tools are read-only. `propose_fix`
-stores a bounded unified-diff proposal for an allowlisted harness configuration
-file but never applies it; `record_fix_applied` records the resulting file hash
-after explicit user approval and external application. Neither tool executes a
-command or writes a project file.
+HTTP/browser routes only. MCP mutations are bounded to explicit user-governed
+records and lifecycle decisions. `propose_fix` stores a bounded unified-diff
+proposal for an allowlisted harness configuration file but never applies it;
+other governed tools can record an approved application, Mission Pack
+acceptance, or experience-learning decision. No MCP tool executes a command or
+writes a project file.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).

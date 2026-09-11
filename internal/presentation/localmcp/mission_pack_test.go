@@ -3,10 +3,13 @@ package localmcp
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DoplexLabs/belay-engine/internal/experience"
+	"github.com/DoplexLabs/belay-engine/internal/localapp"
 	"github.com/DoplexLabs/belay-engine/internal/missionpack"
 	"github.com/DoplexLabs/belay-engine/internal/presentation/readmodel"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -24,6 +27,34 @@ func (s *testMissionPackService) Generate(
 ) (missionpack.Pack, error) {
 	s.request = request
 	return s.pack, s.err
+}
+
+type testMissionPackAcceptanceService struct {
+	result  localapp.MissionPackAcceptanceResult
+	err     error
+	packIDs []string
+}
+
+func (s *testMissionPackAcceptanceService) Accept(
+	_ context.Context,
+	packID string,
+) (localapp.MissionPackAcceptanceResult, error) {
+	s.packIDs = append(s.packIDs, packID)
+	return s.result, s.err
+}
+
+type testMissionPackStatusService struct {
+	result     localapp.MissionPackStatusResult
+	err        error
+	receiptIDs []string
+}
+
+func (s *testMissionPackStatusService) Get(
+	_ context.Context,
+	receiptID string,
+) (localapp.MissionPackStatusResult, error) {
+	s.receiptIDs = append(s.receiptIDs, receiptID)
+	return s.result, s.err
 }
 
 type testMissionPackError string
@@ -104,6 +135,354 @@ func TestMissionPackToolRegistersWithClosedSchemaAndTrustEnvelope(
 	}
 }
 
+func TestMissionPackAcceptanceToolRegistersOnlyWhenConfigured(t *testing.T) {
+	withoutAcceptance := newMissionPackTestClient(
+		t,
+		&testMissionPackService{pack: testMissionPack()},
+	)
+	tools, err := withoutAcceptance.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "record_mission_pack_accepted" {
+			t.Fatal("acceptance tool registered without acceptance service")
+		}
+	}
+
+	acceptance := &testMissionPackAcceptanceService{}
+	withAcceptance := newMissionPackTestClientWithServerOptions(
+		t,
+		WithMissionPackService(
+			&testMissionPackService{pack: testMissionPack()},
+		),
+		WithMissionPackAcceptanceService(acceptance),
+	)
+	tools, err = withAcceptance.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "record_mission_pack_accepted" {
+			continue
+		}
+		if tool.Annotations == nil ||
+			tool.Annotations.ReadOnlyHint ||
+			tool.Annotations.DestructiveHint == nil ||
+			*tool.Annotations.DestructiveHint ||
+			tool.Annotations.OpenWorldHint == nil ||
+			*tool.Annotations.OpenWorldHint {
+			t.Fatalf("acceptance annotations = %#v", tool.Annotations)
+		}
+		schemas, err := missionPackAcceptanceSchemas()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if schemas.input.AdditionalProperties == nil ||
+			schemas.output.AdditionalProperties == nil {
+			t.Fatal("acceptance schemas are not closed")
+		}
+		if len(schemas.input.Properties) != 1 ||
+			schemas.input.Properties["pack_id"] == nil {
+			t.Fatalf(
+				"acceptance input properties = %#v",
+				schemas.input.Properties,
+			)
+		}
+		return
+	}
+	t.Fatal("record_mission_pack_accepted was not registered")
+}
+
+func TestMissionPackStatusToolRegistersOnlyWhenConfiguredWithClosedSchema(
+	t *testing.T,
+) {
+	withoutStatus := newMissionPackTestClientWithServerOptions(t)
+	tools, err := withoutStatus.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "get_mission_pack_status" {
+			t.Fatal("status tool registered without status service")
+		}
+	}
+
+	status := &testMissionPackStatusService{
+		result: testMissionPackStatusResult(),
+	}
+	withStatus := newMissionPackTestClientWithServerOptions(
+		t,
+		WithMissionPackStatusService(status),
+	)
+	tools, err = withStatus.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *mcp.Tool
+	for _, tool := range tools.Tools {
+		if tool.Name == "get_mission_pack_status" {
+			found = tool
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("get_mission_pack_status was not registered")
+	}
+	if found.Annotations == nil || !found.Annotations.ReadOnlyHint {
+		t.Fatalf("status annotations = %#v", found.Annotations)
+	}
+	schemas, err := missionPackStatusSchemas()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schemas.input.AdditionalProperties == nil ||
+		schemas.output.AdditionalProperties == nil ||
+		len(schemas.input.Properties) != 1 ||
+		schemas.input.Properties["receipt_id"] == nil {
+		t.Fatalf("status schemas are not strict: %#v", schemas.input)
+	}
+
+	receiptID := "mpr_" + strings.Repeat("a", 64)
+	result := callTool(
+		t,
+		withStatus,
+		"get_mission_pack_status",
+		map[string]any{"receipt_id": receiptID},
+	)
+	if result.IsError {
+		t.Fatalf("status call failed: %#v", result.Content)
+	}
+	if !reflect.DeepEqual(status.receiptIDs, []string{receiptID}) {
+		t.Fatalf("status receipt IDs = %#v", status.receiptIDs)
+	}
+	structured := asObject(t, result.StructuredContent)
+	if structured["untrusted_observations"] != true {
+		t.Fatalf("status trust wrapper = %#v", structured)
+	}
+	readModel := asObject(t, structured["readmodel"])
+	if readModel["receipt_state"] != "bound" ||
+		readModel["destination_harness"] != "codex" {
+		t.Fatalf("status readmodel = %#v", readModel)
+	}
+	item := asObject(t, readModel["items"].([]any)[0])
+	if item["status"] != "evaluated" ||
+		item["verifier_state"] != "satisfied" ||
+		item["task_outcome_state"] != "unknown" {
+		t.Fatalf("status item = %#v", item)
+	}
+	for _, forbidden := range []string{
+		"application_id",
+		"evaluation_id",
+		"project_identity",
+		"generation",
+		"derivation_version",
+	} {
+		if _, exists := item[forbidden]; exists {
+			t.Fatalf("status item exposed %q: %#v", forbidden, item)
+		}
+	}
+}
+
+func TestMissionPackStatusToolMapsInputNotFoundAndMismatchSafely(
+	t *testing.T,
+) {
+	receiptID := "mpr_" + strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		args map[string]any
+		err  error
+		want strictToolErrorCode
+	}{
+		{
+			name: "invalid",
+			args: map[string]any{"receipt_id": "mpr_invalid"},
+			want: strictInvalidInput,
+		},
+		{
+			name: "unknown field",
+			args: map[string]any{
+				"receipt_id": receiptID,
+				"latest":     true,
+			},
+			want: strictInvalidInput,
+		},
+		{
+			name: "not found",
+			args: map[string]any{"receipt_id": receiptID},
+			err:  localapp.ErrMissionPackStatusNotFound,
+			want: strictIssueNotFound,
+		},
+		{
+			name: "mismatch",
+			args: map[string]any{"receipt_id": receiptID},
+			err:  localapp.ErrMissionPackStatusMismatch,
+			want: strictReadFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := newMissionPackTestClientWithServerOptions(
+				t,
+				WithMissionPackStatusService(
+					&testMissionPackStatusService{err: test.err},
+				),
+			)
+			result := callTool(
+				t,
+				session,
+				"get_mission_pack_status",
+				test.args,
+			)
+			if got := missionPackResultErrorCode(result); got !=
+				string(test.want) {
+				t.Fatalf("error code = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMissionPackAcceptanceToolReturnsCrispIdempotentReceipt(t *testing.T) {
+	packID := testMissionPack().PackID
+	expiresAt := time.Date(
+		2026,
+		time.September,
+		10,
+		16,
+		5,
+		0,
+		0,
+		time.UTC,
+	)
+	acceptance := &testMissionPackAcceptanceService{
+		result: localapp.MissionPackAcceptanceResult{
+			ReceiptID: "mpr_example",
+			State:     "pending",
+			ExpiresAt: expiresAt,
+		},
+	}
+	session := newMissionPackTestClientWithServerOptions(
+		t,
+		WithMissionPackService(
+			&testMissionPackService{pack: testMissionPack()},
+		),
+		WithMissionPackAcceptanceService(acceptance),
+	)
+	for iteration := 0; iteration < 2; iteration++ {
+		result := callTool(
+			t,
+			session,
+			"record_mission_pack_accepted",
+			map[string]any{"pack_id": packID},
+		)
+		if result.IsError {
+			t.Fatalf("acceptance failed: %#v", result.Content)
+		}
+		readModel := asObject(
+			t,
+			asObject(t, result.StructuredContent)["readmodel"],
+		)
+		if readModel["receipt_id"] != "mpr_example" ||
+			readModel["state"] != "pending" ||
+			readModel["expires_at"] != expiresAt.Format(time.RFC3339) {
+			t.Fatalf("acceptance result = %#v", readModel)
+		}
+	}
+	if !reflect.DeepEqual(acceptance.packIDs, []string{packID, packID}) {
+		t.Fatalf("accepted pack IDs = %#v", acceptance.packIDs)
+	}
+}
+
+func TestGetMissionPackDoesNotAcceptPreview(t *testing.T) {
+	acceptance := &testMissionPackAcceptanceService{}
+	session := newMissionPackTestClientWithServerOptions(
+		t,
+		WithMissionPackService(
+			&testMissionPackService{pack: testExperienceMissionPack()},
+		),
+		WithMissionPackAcceptanceService(acceptance),
+	)
+	result := callTool(
+		t,
+		session,
+		"get_mission_pack",
+		map[string]any{"cwd": "/tmp/example"},
+	)
+	if result.IsError {
+		t.Fatalf("get_mission_pack failed: %#v", result.Content)
+	}
+	if len(acceptance.packIDs) != 0 {
+		t.Fatalf("get_mission_pack accepted packs: %#v", acceptance.packIDs)
+	}
+}
+
+func TestMissionPackAcceptanceToolMapsFailuresSafely(t *testing.T) {
+	packID := testMissionPack().PackID
+	tests := []struct {
+		name string
+		err  error
+		args map[string]any
+		want strictToolErrorCode
+	}{
+		{
+			name: "invalid",
+			args: map[string]any{"pack_id": "mpk_invalid"},
+			want: strictInvalidInput,
+		},
+		{
+			name: "missing",
+			err:  localapp.ErrMissionPackPreviewNotFound,
+			args: map[string]any{"pack_id": packID},
+			want: strictIssueNotFound,
+		},
+		{
+			name: "expired",
+			err:  localapp.ErrMissionPackPreviewExpired,
+			args: map[string]any{"pack_id": packID},
+			want: strictReadFailed,
+		},
+		{
+			name: "conflict",
+			err:  localapp.ErrMissionPackPreviewConflict,
+			args: map[string]any{"pack_id": packID},
+			want: strictReadFailed,
+		},
+		{
+			name: "unknown field",
+			args: map[string]any{
+				"pack_id": packID,
+				"approve": true,
+			},
+			want: strictInvalidInput,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			acceptance := &testMissionPackAcceptanceService{err: test.err}
+			session := newMissionPackTestClientWithServerOptions(
+				t,
+				WithMissionPackAcceptanceService(acceptance),
+			)
+			result := callTool(
+				t,
+				session,
+				"record_mission_pack_accepted",
+				test.args,
+			)
+			if got := missionPackResultErrorCode(result); got !=
+				string(test.want) {
+				t.Fatalf("error code = %q, want %q", got, test.want)
+			}
+			if strings.Contains(
+				missionPackResultErrorCode(result),
+				"preview",
+			) {
+				t.Fatalf("private acceptance detail leaked: %#v", result)
+			}
+		})
+	}
+}
+
 func TestMissionPackToolPassesHarnessAndExposesIt(t *testing.T) {
 	pack := testMissionPack()
 	pack.Harness = missionpack.HarnessClaude
@@ -126,6 +505,86 @@ func TestMissionPackToolPassesHarnessAndExposesIt(t *testing.T) {
 	)
 	if readModel["harness"] != "claude" {
 		t.Fatalf("pack harness = %#v", readModel["harness"])
+	}
+}
+
+func TestMissionPackToolReturnsApprovedExperiences(t *testing.T) {
+	pack := testExperienceMissionPack()
+	session := newMissionPackTestClient(
+		t,
+		&testMissionPackService{pack: pack},
+	)
+
+	result := callTool(t, session, "get_mission_pack", map[string]any{
+		"cwd": "/tmp/example",
+	})
+	if result.IsError {
+		t.Fatalf("experience pack failed: %v", result.Content)
+	}
+	readModel := asObject(
+		t,
+		asObject(t, result.StructuredContent)["readmodel"],
+	)
+	if readModel["experience_generation"] != float64(7) {
+		t.Fatalf(
+			"experience_generation = %#v",
+			readModel["experience_generation"],
+		)
+	}
+	experiences, ok := readModel["experiences"].([]any)
+	if !ok || len(experiences) != 1 {
+		t.Fatalf("experiences = %#v", readModel["experiences"])
+	}
+	experience := asObject(t, experiences[0])
+	if experience["experience_id"] != "exp_verify_after_edit" ||
+		experience["version"] != float64(2) ||
+		experience["type"] != "procedure" ||
+		experience["guidance"] !=
+			"Run project verification after the final edit." ||
+		experience["rationale"] !=
+			"Prior sessions regressed after unverified edits." ||
+		experience["authority"] != "user_approved" {
+		t.Fatalf("experience = %#v", experience)
+	}
+	verifier := asObject(t, experience["verifier"])
+	if verifier["kind"] != "command_succeeded" ||
+		verifier["summary"] !=
+			"Observe a successful verification after the last edit." {
+		t.Fatalf("verifier = %#v", verifier)
+	}
+	sources, ok := experience["sources"].([]any)
+	if !ok || len(sources) != 1 ||
+		asObject(t, sources[0])["session_key"] != "ses_example" {
+		t.Fatalf("sources = %#v", experience["sources"])
+	}
+}
+
+func TestMissionPackToolPreservesLegacyPackWithoutExperienceFields(
+	t *testing.T,
+) {
+	session := newMissionPackTestClient(
+		t,
+		&testMissionPackService{pack: testMissionPack()},
+	)
+
+	result := callTool(t, session, "get_mission_pack", map[string]any{
+		"cwd": "/tmp/example",
+	})
+	if result.IsError {
+		t.Fatalf("legacy pack failed: %v", result.Content)
+	}
+	readModel := asObject(
+		t,
+		asObject(t, result.StructuredContent)["readmodel"],
+	)
+	if _, exists := readModel["experience_generation"]; exists {
+		t.Fatalf(
+			"legacy pack exposed experience_generation: %#v",
+			readModel,
+		)
+	}
+	if _, exists := readModel["experiences"]; exists {
+		t.Fatalf("legacy pack exposed experiences: %#v", readModel)
 	}
 }
 
@@ -165,6 +624,99 @@ func TestMissionPackToolAcceptsEmptyNonActivatablePack(t *testing.T) {
 		trust["guidance_state"] != "unavailable" ||
 		trust["activation_required"] != false {
 		t.Fatalf("empty pack/trust = %#v / %#v", readModel, trust)
+	}
+}
+
+func TestMissionPackToolRejectsInvalidExperienceTrust(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*missionpack.Pack)
+	}{
+		{
+			name: "zero generation",
+			mutate: func(pack *missionpack.Pack) {
+				pack.ExperienceGeneration = 0
+			},
+		},
+		{
+			name: "generation without experiences",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Experiences = nil
+			},
+		},
+		{
+			name: "wrong authority",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Experiences[0].Authority = "agent_generated"
+			},
+		},
+		{
+			name: "invalid version",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Experiences[0].Version = 0
+			},
+		},
+		{
+			name: "too many experiences",
+			mutate: func(pack *missionpack.Pack) {
+				item := pack.Experiences[0]
+				pack.Experiences = []missionpack.ExperienceItem{
+					item,
+					item,
+					item,
+					item,
+				}
+			},
+		},
+		{
+			name: "experience in empty pack",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Status = "empty"
+				pack.Trust.GuidanceState = "unavailable"
+				pack.Trust.ActivationRequired = false
+				pack.KnownTraps = nil
+				pack.OperatingRules = nil
+				pack.Verification = nil
+			},
+		},
+		{
+			name: "experience guidance unavailable",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Trust.GuidanceState = "unavailable"
+			},
+		},
+		{
+			name: "experience activation not required",
+			mutate: func(pack *missionpack.Pack) {
+				pack.Trust.ActivationRequired = false
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pack := testExperienceMissionPack()
+			test.mutate(&pack)
+			session := newMissionPackTestClient(
+				t,
+				&testMissionPackService{pack: pack},
+			)
+
+			result := callTool(
+				t,
+				session,
+				"get_mission_pack",
+				map[string]any{"cwd": "/tmp/example"},
+			)
+			if !result.IsError ||
+				missionPackResultErrorCode(result) !=
+					string(strictReadFailed) {
+				t.Fatalf(
+					"result = %#v, want %s",
+					result,
+					strictReadFailed,
+				)
+			}
+		})
 	}
 }
 
@@ -279,6 +831,34 @@ func TestMissionPackToolAcceptsEvidenceOnlyKnownTrap(t *testing.T) {
 	rules, ok := readModel["operating_rules"].([]any)
 	if !ok || len(rules) != 0 {
 		t.Fatalf("operating_rules = %#v", readModel["operating_rules"])
+	}
+}
+
+func TestMissionPackToolKeepsExperienceResponseByteBound(t *testing.T) {
+	pack := testExperienceMissionPack()
+	item := pack.Experiences[0]
+	item.Rationale = strings.Repeat("r", 8*1024)
+	pack.Experiences = []missionpack.ExperienceItem{item, item, item}
+	pack.RenderedMarkdown = strings.Repeat(
+		"approved guidance ",
+		missionpack.MaxRenderedMarkdown/len("approved guidance "),
+	)
+	session := newMissionPackTestClient(
+		t,
+		&testMissionPackService{pack: pack},
+	)
+
+	result := callTool(t, session, "get_mission_pack", map[string]any{
+		"cwd": "/tmp/example",
+	})
+	if !result.IsError ||
+		missionPackResultErrorCode(result) !=
+			string(strictResultTooLarge) {
+		t.Fatalf(
+			"result = %#v, want %s",
+			result,
+			strictResultTooLarge,
+		)
 	}
 }
 
@@ -455,6 +1035,17 @@ func newMissionPackTestClient(
 	service MissionPackService,
 ) *mcp.ClientSession {
 	t.Helper()
+	return newMissionPackTestClientWithServerOptions(
+		t,
+		WithMissionPackService(service),
+	)
+}
+
+func newMissionPackTestClientWithServerOptions(
+	t *testing.T,
+	options ...Option,
+) *mcp.ClientSession {
+	t.Helper()
 	repository := &testRepository{}
 	server, err := New(
 		readmodel.New(
@@ -464,7 +1055,7 @@ func newMissionPackTestClient(
 			readmodel.WithCostIssueRepository(repository),
 			readmodel.WithClock(testTime),
 		),
-		WithMissionPackService(service),
+		options...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -549,6 +1140,64 @@ func testMissionPack() missionpack.Pack {
 		EstimatedTokens:  4,
 		RenderedMarkdown: "# Mission Pack\n",
 	}
+}
+
+func testMissionPackStatusResult() localapp.MissionPackStatusResult {
+	acceptedAt := time.Date(2026, 9, 10, 20, 0, 0, 0, time.UTC)
+	deliveredAt := acceptedAt
+	evaluatedAt := acceptedAt.Add(time.Minute)
+	turn := int64(4)
+	return localapp.MissionPackStatusResult{
+		ReceiptState:       "bound",
+		DestinationHarness: "codex",
+		BoundSession:       "ses_status",
+		AcceptedAt:         acceptedAt,
+		ExpiresAt:          acceptedAt.Add(5 * time.Minute),
+		Items: []localapp.MissionPackStatusItem{{
+			Instruction:        "Run the focused verifier.",
+			Version:            1,
+			Status:             localapp.MissionPackItemEvaluated,
+			DeliveredAt:        &deliveredAt,
+			EvaluatedAt:        &evaluatedAt,
+			OpportunityState:   "observed",
+			ApplicabilityState: "applicable",
+			VerifierState:      "satisfied",
+			TaskOutcomeState:   "unknown",
+			CoverageGaps:       []experience.CoverageRequirement{},
+			Evidence: []localapp.MissionPackStatusEvidence{{
+				Kind:      "transcript_turn",
+				TurnIndex: &turn,
+				Excerpt:   "focused verifier passed",
+			}},
+		}},
+	}
+}
+
+func testExperienceMissionPack() missionpack.Pack {
+	pack := testMissionPack()
+	pack.ExperienceGeneration = 7
+	pack.Experiences = []missionpack.ExperienceItem{{
+		ExperienceID: "exp_verify_after_edit",
+		Version:      2,
+		Type:         "procedure",
+		Guidance:     "Run project verification after the final edit.",
+		Rationale:    "Prior sessions regressed after unverified edits.",
+		Verifier: missionpack.VerifierSummary{
+			Kind:    "command_succeeded",
+			Summary: "Observe a successful verification after the last edit.",
+		},
+		Authority: "user_approved",
+		Sources: []missionpack.SourceRef{{
+			Kind:       "transcript_turn",
+			SessionKey: "ses_example",
+			TurnIndex:  int64Pointer(12),
+		}},
+	}}
+	return pack
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func missionPackResultErrorCode(result *mcp.CallToolResult) string {

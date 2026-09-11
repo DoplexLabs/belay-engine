@@ -42,8 +42,8 @@ func TestMigration014TranscriptSchemaConstraintsAndIndexes(t *testing.T) {
 	var migrations int
 	if err := store.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM schema_migrations",
-	).Scan(&migrations); err != nil || migrations != 16 {
-		t.Fatalf("migration count/error = %d/%v, want 16", migrations, err)
+	).Scan(&migrations); err != nil || migrations != 23 {
+		t.Fatalf("migration count/error = %d/%v, want 23", migrations, err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
 		INSERT INTO transcript_sessions (

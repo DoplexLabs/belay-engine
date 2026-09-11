@@ -1,15 +1,15 @@
 # Local MCP V1 Contract
 
-- **Status:** Fifteen-tool Local Alpha issue-intelligence surface
+- **Status:** Governed Local Alpha evidence and experience surface
 - **Local protocol:** V1
-- **Implementation version:** `1.6.0`
+- **Implementation version:** `1.7.0`
 - **Hosted:** V1.1
 
 ## Boundary
 
-MCP exposes Belay's local read contract plus two bounded additive records.
-Belay supplies bounded structured evidence; the developer's configured calling
-agent decides how to interpret it.
+MCP exposes Belay's local read contract plus bounded, explicit user-governed
+records and lifecycle decisions. Belay supplies bounded structured evidence;
+the developer's configured calling agent decides how to interpret it.
 
 Belay does not:
 
@@ -17,7 +17,7 @@ Belay does not:
 - execute a command, write a file, or modify an agent;
 - expose P0-04 recurrence monitoring through MCP.
 
-The server advertises exactly these fifteen tools:
+The fully configured Local server advertises these tools:
 
 1. `list_sessions`
 2. `get_session`
@@ -32,15 +32,23 @@ The server advertises exactly these fifteen tools:
 11. `get_issue_excerpts`
 12. `get_fix_status`
 13. `get_mission_pack`
-14. `propose_fix`
-15. `record_fix_applied`
+14. `record_mission_pack_accepted`
+15. `get_mission_pack_status`
+16. `list_experience_proposals`
+17. `list_active_experiences`
+18. `approve_experience`
+19. `resolve_experience_proposal`
+20. `prepare_experience_lifecycle`
+21. `apply_experience_lifecycle`
+22. `propose_fix`
+23. `record_fix_applied`
 
-The first thirteen tools are read-only. `propose_fix` and
-`record_fix_applied` are non-destructive, closed-world additive tools that
-write only bounded records to Belay's encrypted local store. They cannot apply
-a diff, write a project file, execute a command, or authorize remediation. No
-prompts, resources, logging, completions, shell, arbitrary filesystem, or
-recurrence-monitoring capability is advertised.
+Read tools perform no mutation. State-changing tools are non-destructive,
+closed-world operations that write only bounded records or lifecycle
+transitions to Belay's encrypted local store after explicit user confirmation.
+They cannot apply a diff, write a project file, execute a command, or authorize
+remediation. No prompts, resources, logging, completions, shell, arbitrary
+filesystem, or recurrence-monitoring capability is advertised.
 
 ## Local registration
 
@@ -492,6 +500,30 @@ verification command remains, the pack returns `status=empty`,
 offer activation. Mission Pack preparation does not verify that a later change
 held, prevented recurrence, or reduced cost.
 
+## Governed Mission Pack and experience tools
+
+- `record_mission_pack_accepted` records acceptance of one exact eligible
+  `pack_id` after the user explicitly approves the rendered pack. It returns a
+  receipt used for later status reads and does not edit project files.
+- `get_mission_pack_status` reads one exact receipt and keeps instruction
+  delivery, verifier evidence, and task outcome separate.
+- `list_experience_proposals` returns at most five bounded proposals for an
+  exact project and harness. Deferred proposals are included only when the
+  caller explicitly requests early review.
+- `list_active_experiences` reads at most five active, user-approved guidance
+  items for an exact project.
+- `approve_experience` records an explicit as-proposed, narrowed, or
+  user-edited approval. Approval does not activate guidance.
+- `resolve_experience_proposal` records an explicit defer or reject decision.
+- `prepare_experience_lifecycle` is a read-only stale-safe preview that returns
+  a single-use action token for activation or pause.
+- `apply_experience_lifecycle` activates or pauses one exact experience only
+  after separate explicit confirmation and a valid prepared token.
+
+Action tokens, hidden identifiers, and evidence metadata are workflow data,
+not user-facing instruction text. Clients must not infer approval, activation,
+pause, receipt acceptance, or proposal disposition from ambiguous language.
+
 ## Trust wrapper and privacy
 
 Every new-tool success uses:
@@ -519,10 +551,10 @@ tool descriptions, trust metadata, catalog prose, next actions, or fixed error
 codes.
 
 Belay Local makes no product-network request and sends no product telemetry.
-The fifteen-tool server can run without network access. A configured MCP client
-or remotely hosted model may process or transmit tool results according to
-that product's policy and the user's configuration. Belay does not control or
-sandbox that actor and does not claim prompt-injection immunity.
+The governed MCP server can run without network access. A configured MCP
+client or remotely hosted model may process or transmit tool results according
+to that product's policy and the user's configuration. Belay does not control
+or sandbox that actor and does not claim prompt-injection immunity.
 
 Allowed minimized evidence can include executable/tool names, bounded option
 names, project-relative paths or basenames, model/provider labels, and network
@@ -575,7 +607,8 @@ detail is reflected.
 - `diagnose_issue`
 - `record_fix`
 - `recurrence_since`
-- any `write_*`, `execute_*`, `apply_*`, or `remediate_*` tool
+- arbitrary `write_*`, `execute_*`, or `remediate_*` tools
+- arbitrary project-file mutation or command execution
 - arbitrary shell, filesystem, browser, hook, or network access
 - P0-03 fix history/actions and P0-04 monitoring repositories
 

@@ -29,7 +29,7 @@
       briefOpenAttention: "Open all issues",
       briefOpenSessions: "Open history",
       briefRecentEmptyDetail:
-        "Use /belay from Claude Code or Codex to review the top issue.",
+        "Use /belay in Claude Code or $belay in Codex to review the top issue.",
       attentionAriaLabel: "Attention inbox",
       attentionEyebrow: "Findings",
       attentionHeading: "Attention",
@@ -52,7 +52,7 @@
       briefOpenAttention: "Open all issues",
       briefOpenSessions: "Open history",
       briefRecentEmptyDetail:
-        "Use /belay from Claude Code or Codex to review the top issue.",
+        "Use /belay in Claude Code or $belay in Codex to review the top issue.",
       attentionAriaLabel: "Review findings",
       attentionEyebrow: "Findings and evidence gaps",
       attentionHeading: "Review",
@@ -2567,8 +2567,16 @@
       const issueID = readText(
         state.missionPackIssue && state.missionPackIssue.issue_id,
       );
+      const claudeCommand = issueID
+        ? `/belay start --issue ${issueID}`
+        : "";
+      const codexCommand = issueID
+        ? `$belay start --issue ${issueID}`
+        : "";
       void copyText(
-        issueID ? `/belay start --issue ${issueID}` : "",
+        issueID
+          ? `Claude Code: ${claudeCommand}\nCodex: ${codexCommand}`
+          : "",
         elements.missionPackCopy,
       );
     });
@@ -2589,9 +2597,10 @@
       closeReportEvidenceDrawer(true);
     });
     elements.reportEvidenceFixCommand.addEventListener("click", () => {
+      const issueID = state.reportEvidenceIssueID;
       void copyText(
-        state.reportEvidenceIssueID
-          ? `/belay ${state.reportEvidenceIssueID}`
+        issueID
+          ? `Claude Code: /belay ${issueID}\nCodex: $belay ${issueID}`
           : "",
         elements.reportEvidenceFixCommand,
       );
@@ -3071,7 +3080,7 @@
         diff.textContent = readText(response.data.unified_diff);
         diff.hidden = false;
         fixStatus.textContent =
-          "Proposal ready. Review this diff, then use /belay to apply it with approval.";
+          "Proposal ready. Review the diff, then apply it with /belay in Claude Code or $belay in Codex.";
         prepareButton.textContent = "Prepared";
       } catch (error) {
         fixStatus.textContent =

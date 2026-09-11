@@ -113,9 +113,7 @@ for path in \
 done
 for path in \
   README.md \
-  llms.txt \
   docs/launch/developer-preview.md \
-  docs/launch/clean-machine-alpha-qa.md \
   docs/contracts/mcp-v1.md; do
   for tool in \
     list_sessions \
@@ -126,7 +124,21 @@ for path in \
     get_stats \
     list_issues \
     get_issue \
-    lookup_session_events; do
+    lookup_session_events \
+    get_top_issues \
+    get_issue_excerpts \
+    get_fix_status \
+    get_mission_pack \
+    record_mission_pack_accepted \
+    get_mission_pack_status \
+    list_experience_proposals \
+    list_active_experiences \
+    approve_experience \
+    resolve_experience_proposal \
+    prepare_experience_lifecycle \
+    apply_experience_lifecycle \
+    propose_fix \
+    record_fix_applied; do
     require_text "${repository_root}/${path}" "${tool}"
   done
 done
@@ -171,15 +183,16 @@ if grep -Eiq \
 fi
 
 if grep -Eiq \
-  'exposes exactly six tools|MCP remains exactly six( read-only)? tools|server advertises exactly six tools' \
+  '(six|nine|thirteen|fifteen|exactly [0-9]+)[- ]tool MCP|MCP (still )?(exposes|remains|advertises)( exactly| the expected)? (six|nine|thirteen|fifteen)|MCP (server )?(is|remains) read-only|read-only (stdio )?MCP server|two additive tools' \
   "${repository_root}/README.md" \
+  "${repository_root}/SECURITY.md" \
+  "${repository_root}/CONTRIBUTING.md" \
   "${repository_root}/SUPPORT.md" \
   "${repository_root}/llms.txt" \
   "${repository_root}/docs/contracts/mcp-v1.md" \
   "${repository_root}/docs/launch/developer-preview.md" \
-  "${repository_root}/docs/launch/clean-machine-alpha-qa.md" \
-  "${repository_root}/docs/launch/local-v0-requirements.md"; then
-  die "release documentation contains stale six-tool MCP wording"
+  "${repository_root}/docs/launch/clean-machine-alpha-qa.md"; then
+  die "current release documentation contains a stale numeric or read-only MCP claim"
 fi
 
 if grep -Eiq \

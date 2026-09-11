@@ -18,7 +18,24 @@ const (
 	maxTranscriptTurnLimit        = 10000
 	defaultTranscriptSessionLimit = 50
 	maxTranscriptSessionLimit     = 200
+	defaultTranscriptProjectLimit = 25
+	maxTranscriptProjectLimit     = 101
 )
+
+const reindexTranscriptSessionSQL = `
+	WITH ranked AS MATERIALIZED (
+		SELECT rowid AS turn_rowid,
+			ROW_NUMBER() OVER (
+				ORDER BY occurred_at, source_record_key, turn_id
+			) - 1 AS next_turn_index
+		FROM transcript_turns
+		WHERE session_key = ?
+	)
+	UPDATE transcript_turns
+	SET turn_index = ranked.next_turn_index
+	FROM ranked
+	WHERE transcript_turns.rowid = ranked.turn_rowid
+		AND transcript_turns.turn_index <> ranked.next_turn_index`
 
 var validTranscriptRoles = map[transcript.Role]bool{
 	transcript.RoleUser:              true,
@@ -135,8 +152,10 @@ func (s *Store) AppendTranscriptBatch(
 			}
 			inserted += int(affected)
 		}
-		if err := reindexTranscriptSessionTx(ctx, tx, session.SessionKey); err != nil {
-			return err
+		if inserted > 0 {
+			if err := reindexTranscriptSessionTx(ctx, tx, session.SessionKey); err != nil {
+				return err
+			}
 		}
 		if err := recomputeTranscriptSessionTx(
 			ctx,
@@ -333,6 +352,42 @@ func (s *Store) QueryTranscriptSessions(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errors.New("query transcript sessions")
+	}
+	return result, nil
+}
+
+func (s *Store) ListTranscriptProjectIdentities(
+	ctx context.Context,
+	limit int,
+) ([]string, error) {
+	if limit <= 0 {
+		limit = defaultTranscriptProjectLimit
+	}
+	if limit > maxTranscriptProjectLimit {
+		return nil, errors.New("invalid transcript project identity limit")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT TRIM(project_identity)
+		FROM transcript_sessions
+		WHERE TRIM(project_identity) <> ''
+		ORDER BY 1 ASC
+		LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, errors.New("list transcript project identities")
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var projectIdentity string
+		if err := rows.Scan(&projectIdentity); err != nil {
+			return nil, errors.New("read transcript project identity")
+		}
+		result = append(result, projectIdentity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("list transcript project identities")
 	}
 	return result, nil
 }
@@ -654,25 +709,7 @@ func reindexTranscriptSessionTx(
 	tx *sql.Tx,
 	sessionKey string,
 ) error {
-	_, err := tx.ExecContext(ctx, `
-		WITH ranked AS (
-			SELECT turn_id,
-				ROW_NUMBER() OVER (
-					ORDER BY occurred_at, source_record_key, turn_id
-				) - 1 AS next_turn_index
-			FROM transcript_turns
-			WHERE session_key = ?
-		)
-		UPDATE transcript_turns
-		SET turn_index = (
-			SELECT next_turn_index
-			FROM ranked
-			WHERE ranked.turn_id = transcript_turns.turn_id
-		)
-		WHERE session_key = ?`,
-		sessionKey,
-		sessionKey,
-	)
+	_, err := tx.ExecContext(ctx, reindexTranscriptSessionSQL, sessionKey)
 	if err != nil {
 		return errors.New("reindex transcript session")
 	}

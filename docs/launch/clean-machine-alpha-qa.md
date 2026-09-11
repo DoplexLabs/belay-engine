@@ -132,7 +132,7 @@ From the extracted archive, start Belay with the packaged one-command path:
 ```
 
 This invocation is explicit consent to install reversible monitor-only hooks
-and the existing read-only Belay MCP server in detected Codex and Claude Code
+and the governed Belay MCP server in detected Codex and Claude Code
 user configuration, scan supported history, start Local, print its URL, and
 attempt to open the dashboard. The flag permits Codex `mcp add` only after
 Belay strictly verifies that the `belay` entry is absent and records explicit
@@ -551,10 +551,11 @@ Pass criteria:
   `pruned`, and `unknown`; the declarations themselves remain present.
 - No restart converts a declaration into a resolution claim or fabricates a
   recurrence observation.
-- MCP still exposes the expected fifteen tools. The thirteen read-only tools
-  remain non-mutating; the two additive tools can only store a bounded proposal
-  or approved-application record and cannot write a project file, execute a
-  command, retract history, replay activity, monitor recurrence, or remediate.
+- MCP still exposes the governed catalog documented in
+  `docs/contracts/mcp-v1.md`. Read tools remain non-mutating; state-changing
+  tools can only store bounded user-confirmed records or lifecycle decisions
+  and cannot write a project file, execute a command, retract history, replay
+  activity, monitor recurrence, or remediate.
 - The old tokenized browser URL is not used as the restarted launch credential.
 
 Evidence:
@@ -670,10 +671,10 @@ Pass criteria:
   observation.
 - History-only detail returns `current_issue_available=false` and
   `current_issue=null`.
-- MCP still exposes the expected fifteen-tool surface and no recurrence
+- MCP still exposes the governed contract surface and no recurrence
   repository, command execution, arbitrary write, or remediation capability.
-  The two additive tools remain limited to a bounded proposal and an
-  approved-application record.
+  State-changing tools remain limited to bounded user-confirmed records and
+  lifecycle decisions.
 
 Evidence:
 
@@ -795,7 +796,7 @@ Pass criteria:
   configuration allowlist and returns a diff without applying it.
 - `record_fix_applied` records only an approved proposal's path, SHA-256, and
   optional commit; it does not edit the target.
-- MCP server information reports implementation version `1.6.0`.
+- MCP server information reports implementation version `1.7.0`.
 - `get_mission_pack` reports generator `mission-pack.det.v3` and returns
   bounded guidance with `instruction_authority=none`.
 - Managed Claude and Codex calls pass their actual `harness`; calls without a
@@ -917,9 +918,10 @@ Pass criteria:
 - Browser refresh and timeline reads succeed.
 - Existing fix-attempt history remains readable; an eligible declaration and
   retraction can be recorded through loopback without hosted access.
-- All fifteen MCP tools remain discoverable. Representative session/timeline
-  reads, the issue list → detail → cited-event lookup loop, and Mission Pack
-  preparation succeed.
+- All tools in the governed MCP contract remain discoverable. Representative
+  session/timeline reads, the issue list → detail → cited-event lookup loop,
+  Mission Pack preparation/status, and experience review/lifecycle previews
+  succeed.
 - `./bin/belay mcp-config status` completes without a Belay product-network
   request. If a host CLI wrapper performs its own credential or network check,
   record that separately; quickstart must remain fail-open.

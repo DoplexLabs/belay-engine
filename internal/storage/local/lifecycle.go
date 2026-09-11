@@ -15,7 +15,7 @@ import (
 const keyCheckPlaintext = "belay-local-key-check-v1"
 
 var ErrMaintenanceBusy = errors.New(
-	"local store maintenance is blocked by an active database reader; retry after readers close",
+	"local database is busy; wait for other Belay work to finish, then retry",
 )
 
 type storedPayload struct {
@@ -166,6 +166,10 @@ func (s *Store) payloadEncodingCounts(ctx context.Context) (int, int, error) {
 			SELECT payload_encoding AS encoding FROM insights
 			UNION ALL
 			SELECT payload_encoding AS encoding FROM cost_issue_fixes
+			UNION ALL
+			SELECT payload_encoding AS encoding FROM mission_pack_previews
+			UNION ALL
+			SELECT payload_encoding AS encoding FROM experience_review_actions
 			)`,
 		payloadEncodingPlaintext,
 		payloadEncodingAESGCM,

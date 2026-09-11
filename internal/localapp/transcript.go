@@ -61,14 +61,16 @@ type transcriptCursor struct {
 }
 
 type transcriptGroupPlan struct {
-	key       string
-	sources   []acquisition.Source
-	modified  time.Time
-	bytes     int64
-	recent    bool
-	tailOwned bool
-	complete  bool
-	serviced  time.Time
+	key           string
+	sources       []acquisition.Source
+	snapshotSizes map[string]int64
+	modified      time.Time
+	bytes         int64
+	recent        bool
+	tailOwned     bool
+	complete      bool
+	pending       bool
+	serviced      time.Time
 }
 
 type orderedTranscriptTurn struct {
@@ -231,6 +233,69 @@ func ImportRecentTranscriptsOnce(
 	return importRecentTranscriptsAt(ctx, paths, store, time.Now())
 }
 
+// DrainScanTranscripts snapshots every active or tail-owned transcript group,
+// then drains each snapshot completely using tail-sized chunks. A second call
+// discovers a new snapshot, allowing explicit scans to catch appends that
+// arrived while another long-running scan phase was in progress.
+func DrainScanTranscripts(
+	ctx context.Context,
+	paths Paths,
+	store transcriptBatchStore,
+) error {
+	if store == nil {
+		return errors.New("transcript store is required")
+	}
+	now := time.Now()
+	sources, discoveryErr := acquisition.Discover()
+	plans, planErr := planTranscriptGroups(paths, sources, now)
+	candidates := make([]transcriptGroupPlan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.recent || plan.tailOwned {
+			candidates = append(candidates, plan)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.pending != right.pending {
+			return left.pending
+		}
+		leftFast := left.bytes <= transcriptFastStartMax
+		rightFast := right.bytes <= transcriptFastStartMax
+		if leftFast != rightFast {
+			return leftFast
+		}
+		if left.bytes != right.bytes {
+			return left.bytes < right.bytes
+		}
+		if !left.modified.Equal(right.modified) {
+			return left.modified.After(right.modified)
+		}
+		return left.key < right.key
+	})
+
+	var drainErrors []error
+	for _, plan := range candidates {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(
+				discoveryErr,
+				planErr,
+				errors.Join(drainErrors...),
+				err,
+			)
+		}
+		if err := drainTranscriptGroupSnapshot(
+			ctx,
+			paths,
+			store,
+			plan,
+			now,
+		); err != nil {
+			drainErrors = append(drainErrors, err)
+		}
+	}
+	return errors.Join(discoveryErr, planErr, errors.Join(drainErrors...))
+}
+
 func importRecentTranscriptsAt(
 	ctx context.Context,
 	paths Paths,
@@ -359,6 +424,26 @@ func importTranscriptGroupAt(
 	owner transcriptImportOwner,
 	now time.Time,
 ) error {
+	return importTranscriptGroupSnapshotAt(
+		ctx,
+		paths,
+		store,
+		sources,
+		owner,
+		now,
+		nil,
+	)
+}
+
+func importTranscriptGroupSnapshotAt(
+	ctx context.Context,
+	paths Paths,
+	store transcriptBatchStore,
+	sources []acquisition.Source,
+	owner transcriptImportOwner,
+	now time.Time,
+	snapshotSizes map[string]int64,
+) error {
 	items := make([]*openTranscriptSource, 0, len(sources))
 	var openErrors []error
 	for _, source := range sources {
@@ -368,7 +453,7 @@ func importTranscriptGroupAt(
 			openErrors = append(openErrors, err)
 			continue
 		}
-		file, identity, size, err := openRegularNoFollow(source.Path)
+		file, identity, actualSize, err := openRegularNoFollow(source.Path)
 		if err != nil {
 			openErrors = append(openErrors, err)
 			continue
@@ -378,6 +463,11 @@ func importTranscriptGroupAt(
 			file.Close()
 			openErrors = append(openErrors, statErr)
 			continue
+		}
+		size := actualSize
+		if snapshotSize, ok := snapshotSizes[source.Path]; ok &&
+			snapshotSize < size {
+			size = snapshotSize
 		}
 		item := &openTranscriptSource{
 			source:      source,
@@ -398,7 +488,7 @@ func importTranscriptGroupAt(
 				continue
 			}
 		}
-		if cursor.Offset > size ||
+		if cursor.Offset > actualSize ||
 			cursor.Device != 0 &&
 				(cursor.Device != identity.device || cursor.Inode != identity.inode) ||
 			cursor.PrefixSHA256 != "" && cursor.PrefixSHA256 != prefix {
@@ -406,6 +496,9 @@ func importTranscriptGroupAt(
 			item.startOffset = 0
 			item.cursor.State = acquisition.State{}
 			item.cursor.InactiveFinalized = false
+		}
+		if !item.reset && item.startOffset > size {
+			item.startOffset = size
 		}
 		chunkBytes := int64(transcriptBackfillChunk)
 		if owner == transcriptOwnerTail {
@@ -722,6 +815,83 @@ func groupTranscriptSources(
 	return result
 }
 
+func drainTranscriptGroupSnapshot(
+	ctx context.Context,
+	paths Paths,
+	store transcriptBatchStore,
+	plan transcriptGroupPlan,
+	now time.Time,
+) error {
+	_, _, pending, _, progress, statusErr := transcriptGroupCursorStatus(
+		paths,
+		plan.sources,
+		plan.snapshotSizes,
+	)
+	drainErrors := []error{statusErr}
+	maxPasses := int64(1)
+	if pending {
+		for _, size := range plan.snapshotSizes {
+			passes := size / int64(transcriptTailChunk)
+			if size%int64(transcriptTailChunk) != 0 {
+				passes++
+			}
+			if passes+1 > maxPasses {
+				maxPasses = passes + 1
+			}
+		}
+	}
+	for pass := int64(0); pass < maxPasses; pass++ {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(drainErrors, err)...)
+		}
+		if err := importTranscriptGroupSnapshotAt(
+			ctx,
+			paths,
+			store,
+			plan.sources,
+			transcriptOwnerTail,
+			now,
+			plan.snapshotSizes,
+		); err != nil {
+			drainErrors = append(drainErrors, err)
+		}
+		_, _, nextPending, _, nextProgress, err :=
+			transcriptGroupCursorStatus(
+				paths,
+				plan.sources,
+				plan.snapshotSizes,
+			)
+		if err != nil {
+			drainErrors = append(drainErrors, err)
+		}
+		if !nextPending {
+			return errors.Join(drainErrors...)
+		}
+		if nextProgress <= progress {
+			drainErrors = append(
+				drainErrors,
+				fmt.Errorf(
+					"drain transcript group %q made no progress",
+					plan.key,
+				),
+			)
+			return errors.Join(drainErrors...)
+		}
+		pending = nextPending
+		progress = nextProgress
+	}
+	if pending {
+		drainErrors = append(
+			drainErrors,
+			fmt.Errorf(
+				"drain transcript group %q exceeded its snapshot bound",
+				plan.key,
+			),
+		)
+	}
+	return errors.Join(drainErrors...)
+}
+
 func planTranscriptGroups(
 	paths Paths,
 	sources []acquisition.Source,
@@ -731,26 +901,31 @@ func planTranscriptGroups(
 	plans := make([]transcriptGroupPlan, 0, len(groups))
 	var planErrors []error
 	for key, groupSources := range groups {
-		modified, totalBytes, err := transcriptGroupFileStats(groupSources)
+		modified, totalBytes, snapshotSizes, err :=
+			transcriptGroupFileStats(groupSources)
 		if err != nil {
 			planErrors = append(planErrors, err)
 		}
-		tailOwned, complete, serviced, err := transcriptGroupCursorStatus(
-			paths,
-			groupSources,
-		)
+		tailOwned, complete, pending, serviced, _, err :=
+			transcriptGroupCursorStatus(
+				paths,
+				groupSources,
+				snapshotSizes,
+			)
 		if err != nil {
 			planErrors = append(planErrors, err)
 		}
 		plans = append(plans, transcriptGroupPlan{
-			key:       key,
-			sources:   groupSources,
-			modified:  modified,
-			bytes:     totalBytes,
-			recent:    transcriptModificationRecent(modified, now),
-			tailOwned: tailOwned,
-			complete:  complete,
-			serviced:  serviced,
+			key:           key,
+			sources:       groupSources,
+			snapshotSizes: snapshotSizes,
+			modified:      modified,
+			bytes:         totalBytes,
+			recent:        transcriptModificationRecent(modified, now),
+			tailOwned:     tailOwned,
+			complete:      complete,
+			pending:       pending,
+			serviced:      serviced,
 		})
 	}
 	sort.Slice(plans, func(i, j int) bool {
@@ -772,9 +947,10 @@ func planTranscriptGroups(
 
 func transcriptGroupFileStats(
 	sources []acquisition.Source,
-) (time.Time, int64, error) {
+) (time.Time, int64, map[string]int64, error) {
 	var latest time.Time
 	var totalBytes int64
+	snapshotSizes := make(map[string]int64, len(sources))
 	var statErrors []error
 	for _, source := range sources {
 		file, _, _, err := openRegularNoFollow(source.Path)
@@ -798,12 +974,13 @@ func transcriptGroupFileStats(
 			)
 			continue
 		}
+		snapshotSizes[source.Path] = info.Size()
 		if info.ModTime().After(latest) {
 			latest = info.ModTime()
 		}
 		totalBytes += info.Size()
 	}
-	return latest, totalBytes, errors.Join(statErrors...)
+	return latest, totalBytes, snapshotSizes, errors.Join(statErrors...)
 }
 
 func transcriptChunkEnd(
@@ -849,14 +1026,17 @@ func transcriptModificationRecent(modified, now time.Time) bool {
 func transcriptGroupCursorStatus(
 	paths Paths,
 	sources []acquisition.Source,
+	snapshotSizes map[string]int64,
 ) (
 	tailOwned bool,
 	complete bool,
+	pending bool,
 	serviced time.Time,
+	progress int64,
 	resultErr error,
 ) {
 	if len(sources) == 0 {
-		return false, false, time.Time{}, nil
+		return false, false, false, time.Time{}, 0, nil
 	}
 	allComplete := true
 	for _, source := range sources {
@@ -867,13 +1047,20 @@ func transcriptGroupCursorStatus(
 			resultErr = errors.Join(resultErr, err)
 			continue
 		}
+		targetSize := info.Size()
+		if snapshotSize, ok := snapshotSizes[source.Path]; ok &&
+			snapshotSize < targetSize {
+			targetSize = snapshotSize
+		}
 		_, err = os.Stat(cursorPath)
 		if errors.Is(err, os.ErrNotExist) {
 			allComplete = false
+			pending = pending || targetSize > 0
 			continue
 		}
 		if err != nil {
 			allComplete = false
+			pending = true
 			resultErr = errors.Join(resultErr, err)
 			continue
 		}
@@ -881,13 +1068,20 @@ func transcriptGroupCursorStatus(
 		if err != nil {
 			tailOwned = true
 			allComplete = false
+			pending = true
 			resultErr = errors.Join(resultErr, err)
 			continue
 		}
 		if serviced.IsZero() || cursor.ServicedAt.Before(serviced) {
 			serviced = cursor.ServicedAt
 		}
-		caughtUp := cursor.Offset == info.Size()
+		if cursor.Offset < targetSize {
+			progress += cursor.Offset
+		} else {
+			progress += targetSize
+		}
+		caughtUp := cursor.Offset >= targetSize
+		pending = pending || !caughtUp
 		finalized := caughtUp && cursor.InactiveFinalized
 		if (cursor.Owner == "" || cursor.Owner == transcriptOwnerTail) &&
 			!finalized {
@@ -897,7 +1091,7 @@ func transcriptGroupCursorStatus(
 			allComplete = false
 		}
 	}
-	return tailOwned, allComplete && !tailOwned, serviced, resultErr
+	return tailOwned, allComplete && !tailOwned, pending, serviced, progress, resultErr
 }
 
 func sortedGroupKeys(groups map[string][]acquisition.Source) []string {
@@ -1139,6 +1333,7 @@ func sanitizeTranscriptState(state acquisition.State) acquisition.State {
 	state.Model = scrubTranscriptMetadata(state.Model)
 	state.CurrentTurnID = scrubTranscriptMetadata(state.CurrentTurnID)
 	state.CurrentThreadID = scrubTranscriptMetadata(state.CurrentThreadID)
+	state.ParentThreadID = scrubTranscriptMetadata(state.ParentThreadID)
 	state.CallTools = scrubTranscriptMap(state.CallTools)
 	state.ThreadParentTool = scrubTranscriptMap(state.ThreadParentTool)
 	state.ResultCalls = scrubTranscriptBoolMap(state.ResultCalls)

@@ -1,12 +1,13 @@
 # Contributing to Belay Local
 
 Belay Local is an Apache-2.0 open-source edge project. Contributions should
-preserve its endpoint-first, privacy-minimized, fail-open design.
+preserve its endpoint-first, local-only, fail-open design.
 
 ## Before starting
 
-1. Read `README.md`, `docs/launch/local-v0-requirements.md`, and the applicable
-   contract documents.
+1. Read `README.md`, the current code, and the applicable contract documents.
+   Treat dated design and launch documents as historical context when they
+   conflict with shipped behavior.
 2. Search existing issues and discussions when the repository is public.
 3. For a substantial or contract-changing proposal, open a design discussion
    before implementation.
@@ -15,8 +16,10 @@ preserve its endpoint-first, privacy-minimized, fail-open design.
 
 - Do not modify or patch Numbat source. Belay consumes a pristine pinned
   upstream revision through its executable interface.
-- Do not add write-capable MCP, enforcement, remediation, or agent-action
-  dependencies.
+- Do not add arbitrary MCP project-file writes, command execution,
+  enforcement, remediation, or agent-action dependencies. State-changing MCP
+  operations must remain bounded, local, and gated by explicit user
+  confirmation.
 - Do not add Local product telemetry or hosted model calls.
 - Keep canonical Belay events minimized. Prompt bodies, transcripts, reasoning
   text, file contents, raw endpoint identity, and raw evidence paths do not

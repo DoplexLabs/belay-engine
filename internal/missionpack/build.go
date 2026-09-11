@@ -21,6 +21,15 @@ const (
 	maxCommandRunes    = 256
 	maxDisplayRunes    = 300
 	highConfidence     = 0.8
+
+	maxExperiences                  = 3
+	maxExperienceTokens             = 600
+	maxExperienceIDRunes            = 256
+	maxExperienceTypeRunes          = 64
+	maxExperienceGuidanceBytes      = 2 * 1024
+	maxExperienceRationaleBytes     = 8 * 1024
+	maxExperienceVerifierRunes      = 300
+	experienceAuthorityUserApproved = "user_approved"
 )
 
 var packIDEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -40,6 +49,13 @@ func Build(input BuildInput) (Pack, error) {
 	input.Project.IdentityKind = oneLine(input.Project.IdentityKind, 32)
 	if input.Project.Identity == "" || input.Project.Label == "" {
 		return Pack{}, errors.New("Mission Pack project is required")
+	}
+	experiences, err := normalizeExperienceItems(
+		input.ExperienceGeneration,
+		input.Experiences,
+	)
+	if err != nil {
+		return Pack{}, err
 	}
 
 	issues, err := selectIssues(input)
@@ -64,7 +80,9 @@ func Build(input BuildInput) (Pack, error) {
 			EvidenceState:        "untrusted",
 			ActivationRequired:   true,
 		},
-		SourceState: input.SourceState,
+		SourceState:          input.SourceState,
+		ExperienceGeneration: input.ExperienceGeneration,
+		Experiences:          experiences,
 		Context: Context{
 			Harnesses: sortedDistinctLines(input.Workspace.Harnesses, 64),
 			Facts:     selectFacts(input.Facts),
@@ -89,6 +107,18 @@ func Build(input BuildInput) (Pack, error) {
 	pack.Warnings = buildWarnings(input, pack)
 	pack.Completion = buildChecklist(pack)
 	setPackStatusAndTrust(&pack)
+	if len(pack.Experiences) > 0 {
+		pack.PackID = derivePackID(input, pack)
+		pack.RenderedMarkdown = renderMarkdown(pack)
+		if !withinBudget(pack.RenderedMarkdown) {
+			return Pack{}, errors.New(
+				"Mission Pack experience guidance exceeds pack budget",
+			)
+		}
+		pack.EstimatedTokens = estimateTokens(pack.RenderedMarkdown)
+		ensureNonNil(&pack)
+		return pack, nil
+	}
 	truncateToBudget(&pack, input.Request.IssueID)
 	pack.PackID = derivePackID(input, pack)
 	pack.RenderedMarkdown = renderMarkdown(pack)
@@ -101,6 +131,167 @@ func Build(input BuildInput) (Pack, error) {
 	pack.EstimatedTokens = estimateTokens(pack.RenderedMarkdown)
 	ensureNonNil(&pack)
 	return pack, nil
+}
+
+func normalizeExperienceItems(
+	generation int64,
+	values []ExperienceItem,
+) ([]ExperienceItem, error) {
+	if len(values) == 0 {
+		if generation != 0 {
+			return nil, errors.New(
+				"Mission Pack experience generation requires experience items",
+			)
+		}
+		return nil, nil
+	}
+	if generation <= 0 {
+		return nil, errors.New(
+			"Mission Pack experiences require a positive generation",
+		)
+	}
+	if len(values) > maxExperiences {
+		return nil, errors.New("Mission Pack has too many experiences")
+	}
+
+	result := make([]ExperienceItem, 0, len(values))
+	totalBytes := 0
+	for _, value := range values {
+		item, itemBytes, err := normalizeExperienceItem(value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+		totalBytes += itemBytes
+	}
+	if (totalBytes+3)/4 > maxExperienceTokens {
+		return nil, errors.New(
+			"Mission Pack experiences exceed the experience token budget",
+		)
+	}
+	return result, nil
+}
+
+func normalizeExperienceItem(
+	value ExperienceItem,
+) (ExperienceItem, int, error) {
+	var err error
+	if value.ExperienceID, err = validExperienceOneLine(
+		"experience ID",
+		value.ExperienceID,
+		maxExperienceIDRunes,
+	); err != nil {
+		return ExperienceItem{}, 0, err
+	}
+	if value.Version <= 0 {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience version must be positive",
+		)
+	}
+	if value.Type, err = validExperienceOneLine(
+		"experience type",
+		value.Type,
+		maxExperienceTypeRunes,
+	); err != nil {
+		return ExperienceItem{}, 0, err
+	}
+	value.Guidance = strings.TrimSpace(value.Guidance)
+	if value.Guidance == "" ||
+		strings.ContainsAny(value.Guidance, "\r\n") ||
+		len([]byte(value.Guidance)) > maxExperienceGuidanceBytes {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience guidance is invalid",
+		)
+	}
+	value.Rationale = strings.TrimSpace(value.Rationale)
+	if value.Rationale == "" ||
+		len([]byte(value.Rationale)) > maxExperienceRationaleBytes {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience rationale is invalid",
+		)
+	}
+	if value.Verifier.Kind, err = validExperienceOneLine(
+		"experience verifier kind",
+		value.Verifier.Kind,
+		maxExperienceTypeRunes,
+	); err != nil {
+		return ExperienceItem{}, 0, err
+	}
+	if value.Verifier.Summary, err = validExperienceOneLine(
+		"experience verifier summary",
+		value.Verifier.Summary,
+		maxExperienceVerifierRunes,
+	); err != nil {
+		return ExperienceItem{}, 0, err
+	}
+	if value.Authority != experienceAuthorityUserApproved {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience authority must be user_approved",
+		)
+	}
+	if len(value.Sources) > MaxSourcesPerItem {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience has too many sources",
+		)
+	}
+	for _, source := range value.Sources {
+		if err := validateExperienceSource(source); err != nil {
+			return ExperienceItem{}, 0, err
+		}
+	}
+	value.Sources = normalizeSources(value.Sources, MaxSourcesPerItem)
+
+	itemBytes := len([]byte(value.Guidance)) +
+		len([]byte(value.Rationale)) +
+		len([]byte(value.Verifier.Kind)) +
+		len([]byte(value.Verifier.Summary))
+	return value, itemBytes, nil
+}
+
+func validExperienceOneLine(
+	field string,
+	value string,
+	maxRunes int,
+) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" ||
+		strings.ContainsAny(value, "\r\n") ||
+		utf8.RuneCountInString(value) > maxRunes {
+		return "", fmt.Errorf("Mission Pack %s is invalid", field)
+	}
+	return value, nil
+}
+
+func validateExperienceSource(value SourceRef) error {
+	if _, err := validExperienceOneLine(
+		"experience source kind",
+		value.Kind,
+		64,
+	); err != nil {
+		return err
+	}
+	for _, identifier := range []string{
+		value.IssueID,
+		value.InsightID,
+		value.CandidateID,
+		value.SessionKey,
+		value.EventID,
+		value.ProjectFile,
+		value.SourceSHA256,
+		value.SourceFileID,
+	} {
+		if identifier == "" {
+			continue
+		}
+		if strings.ContainsAny(identifier, "\r\n") ||
+			utf8.RuneCountInString(strings.TrimSpace(identifier)) >
+				maxExperienceIDRunes {
+			return errors.New(
+				"Mission Pack experience source identifier is invalid",
+			)
+		}
+	}
+	return nil
 }
 
 func validIntent(value Intent) bool {
@@ -1041,6 +1232,9 @@ func buildChecklist(pack Pack) []ChecklistItem {
 }
 
 func packStatus(pack Pack) string {
+	if len(pack.Experiences) > 0 {
+		return "ready"
+	}
 	if len(pack.KnownTraps) == 0 &&
 		len(pack.OperatingRules) == 0 &&
 		len(pack.Verification) == 0 {
@@ -1171,6 +1365,9 @@ func guidanceHasIssue(value GuidanceItem, issueID string) bool {
 }
 
 func renderMarkdown(pack Pack) string {
+	if len(pack.Experiences) > 0 {
+		return renderExperienceMarkdown(pack)
+	}
 	if pack.Status == "empty" {
 		return "Belay found no useful guidance for this session.\n"
 	}
@@ -1225,6 +1422,34 @@ func renderMarkdown(pack Pack) string {
 			builder.WriteString(markdownText(item.Text))
 			builder.WriteByte('\n')
 		}
+	}
+	return builder.String()
+}
+
+func renderExperienceMarkdown(pack Pack) string {
+	var builder strings.Builder
+	builder.WriteString("# Mission Pack: ")
+	builder.WriteString(markdownText(pack.Project.Label))
+	builder.WriteString("\n\n## Project guidance\n\n")
+	for _, item := range pack.Experiences {
+		builder.WriteString("- ")
+		builder.WriteString(markdownText(item.Guidance))
+		builder.WriteString("\n  Verify: ")
+		builder.WriteString(markdownText(item.Verifier.Summary))
+		builder.WriteByte('\n')
+	}
+
+	builder.WriteString("\n## Completion\n\n")
+	seen := make(map[string]bool, len(pack.Experiences))
+	for _, item := range pack.Experiences {
+		summary := item.Verifier.Summary
+		if seen[summary] {
+			continue
+		}
+		seen[summary] = true
+		builder.WriteString("- ")
+		builder.WriteString(markdownText(summary))
+		builder.WriteByte('\n')
 	}
 	return builder.String()
 }
@@ -1289,6 +1514,21 @@ func derivePackID(input BuildInput, pack Pack) string {
 	}
 	for _, item := range pack.Context.Facts {
 		values = append(values, item.ID)
+	}
+	if len(pack.Experiences) > 0 {
+		values = append(
+			values,
+			"experience_generation",
+			fmt.Sprintf("%d", pack.ExperienceGeneration),
+		)
+		for _, item := range pack.Experiences {
+			values = append(
+				values,
+				"experience",
+				item.ExperienceID,
+				fmt.Sprintf("%d", item.Version),
+			)
+		}
 	}
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return "mpk_" + strings.ToLower(packIDEncoding.EncodeToString(sum[:]))
@@ -1496,6 +1736,11 @@ func ensureNonNil(pack *Pack) {
 	}
 	if pack.Warnings == nil {
 		pack.Warnings = make([]Warning, 0)
+	}
+	for index := range pack.Experiences {
+		if pack.Experiences[index].Sources == nil {
+			pack.Experiences[index].Sources = make([]SourceRef, 0)
+		}
 	}
 	for index := range pack.KnownTraps {
 		if pack.KnownTraps[index].Sources == nil {

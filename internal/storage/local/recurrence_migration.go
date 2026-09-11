@@ -92,7 +92,10 @@ func (s *Store) resumeFixRecurrenceMigration(ctx context.Context) error {
 	now := formatProjectionTime(s.nowUTC())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.New("begin fix monitoring readiness initialization")
+		if isSQLiteBusy(err) {
+			return ErrMaintenanceBusy
+		}
+		return errors.New("initialize local database")
 	}
 	defer tx.Rollback()
 	if err := withMutationTx(ctx, tx, mutationRecurrenceWorker, func() error {
@@ -104,10 +107,16 @@ func (s *Store) resumeFixRecurrenceMigration(ctx context.Context) error {
 		)
 		return err
 	}); err != nil {
-		return errors.New("initialize fix monitoring readiness")
+		if isSQLiteBusy(err) {
+			return ErrMaintenanceBusy
+		}
+		return errors.New("initialize local database")
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("commit fix monitoring readiness initialization")
+		if isSQLiteBusy(err) {
+			return ErrMaintenanceBusy
+		}
+		return errors.New("initialize local database")
 	}
 	return nil
 }

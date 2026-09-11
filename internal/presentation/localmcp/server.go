@@ -18,15 +18,18 @@ import (
 
 const (
 	serverName    = "belay-local"
-	serverVersion = "1.6.0"
+	serverVersion = "1.7.0"
 )
 
 type Server struct {
-	read         *readmodel.Service
-	fix          CostIssueFixService
-	missionPacks MissionPackService
-	mcp          *mcp.Server
-	strict       *strictToolAdapter
+	read                  *readmodel.Service
+	fix                   CostIssueFixService
+	missionPacks          MissionPackService
+	missionPackAcceptance MissionPackAcceptanceService
+	missionPackStatus     MissionPackStatusService
+	experienceLearning    ExperienceLearningService
+	mcp                   *mcp.Server
+	strict                *strictToolAdapter
 }
 
 type CostIssueFixService interface {
@@ -180,6 +183,21 @@ func (s *Server) registerTools() error {
 	}
 	if s.missionPacks != nil {
 		if err := s.registerMissionPackTool(); err != nil {
+			return err
+		}
+	}
+	if s.missionPackAcceptance != nil {
+		if err := s.registerMissionPackAcceptanceTool(); err != nil {
+			return err
+		}
+	}
+	if s.missionPackStatus != nil {
+		if err := s.registerMissionPackStatusTool(); err != nil {
+			return err
+		}
+	}
+	if s.experienceLearning != nil {
+		if err := s.registerExperienceLearningTools(); err != nil {
 			return err
 		}
 	}

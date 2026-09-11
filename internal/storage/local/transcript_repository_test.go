@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -322,6 +324,46 @@ func TestAppendTranscriptBatchReindexesLateHistoricalAndSubagentTurns(t *testing
 	}
 }
 
+func TestReindexTranscriptSessionUsesMaterializedSetBasedPlan(t *testing.T) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	rows, err := store.db.QueryContext(
+		ctx,
+		"EXPLAIN QUERY PLAN "+reindexTranscriptSessionSQL,
+		"ses_transcript_plan",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	planText := strings.ToUpper(plan.String())
+	if strings.Contains(planText, "CORRELATED") {
+		t.Fatalf("reindex plan contains a per-row correlated lookup:\n%s", plan.String())
+	}
+	for _, required := range []string{
+		"MATERIALIZE RANKED",
+		"SCAN RANKED",
+		"USING INTEGER PRIMARY KEY",
+	} {
+		if !strings.Contains(planText, required) {
+			t.Fatalf("reindex plan lacks %q:\n%s", required, plan.String())
+		}
+	}
+}
+
 func TestTranscriptSessionCostRequiresEveryBillableTurnPriced(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -607,6 +649,72 @@ func TestQueryTranscriptSessionsIsBoundedFilteredAndDeterministicallyRecent(
 	}
 	if len(filtered) != 1 || filtered[0].SessionKey != "ses_query_older" {
 		t.Fatalf("filtered transcript sessions = %+v", filtered)
+	}
+}
+
+func TestListTranscriptProjectIdentitiesIsDistinctStableFilteredAndBounded(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	projects := make([]string, 0, 34)
+	for index := 29; index >= 0; index-- {
+		projects = append(projects, fmt.Sprintf("project-%02d", index))
+	}
+	projects = append(projects, "project-01", " project-01 ")
+	for index, projectIdentity := range projects {
+		sessionKey := fmt.Sprintf("ses_project_identity_%d", index)
+		session := transcriptTestSession(sessionKey, transcript.CoverageComplete)
+		session.ProjectIdentity = projectIdentity
+		session.GitRemoteURL = projectIdentity
+		turn := transcriptTestTurn(
+			"turn-"+sessionKey,
+			"source-"+sessionKey,
+			sessionKey,
+			0,
+			base.Add(time.Duration(index)*time.Minute),
+			transcript.RoleSystem,
+			transcript.Payload{JSONLByteOffset: int64(index)},
+		)
+		if _, err := store.AppendTranscriptBatch(
+			ctx,
+			session,
+			[]transcript.Turn{turn},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limited, err := store.ListTranscriptProjectIdentities(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(limited, ","), "project-00,project-01"; got != want {
+		t.Fatalf("limited project identities = %q, want %q", got, want)
+	}
+	defaulted, err := store.ListTranscriptProjectIdentities(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaulted) != defaultTranscriptProjectLimit ||
+		defaulted[0] != "project-00" ||
+		defaulted[len(defaulted)-1] != "project-24" {
+		t.Fatalf("default project identities = %#v", defaulted)
+	}
+	all, err := store.ListTranscriptProjectIdentities(ctx, maxTranscriptProjectLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 30 ||
+		all[0] != "project-00" ||
+		all[len(all)-1] != "project-29" {
+		t.Fatalf("all project identities = %#v", all)
+	}
+	if _, err := store.ListTranscriptProjectIdentities(
+		ctx,
+		maxTranscriptProjectLimit+1,
+	); err == nil {
+		t.Fatal("project identity lookup accepted limit above 101")
 	}
 }
 
