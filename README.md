@@ -1,11 +1,12 @@
 # Belay Engine
 
 Belay Local is private, endpoint-first observability for an individual developer
-using AI coding agents. It reconstructs minimized local activity into one
-timeline and exposes the same evidence through a loopback browser and local
-stdio MCP. The browser and MCP may also record narrowly scoped, fixed-schema
-fix proposals and application records; Belay does not execute a command or
-write the proposed change to a project.
+using AI coding agents. It combines minimized canonical activity with
+secret-scrubbed transcript content in an encrypted on-device store, then
+exposes bounded evidence through a loopback browser and local stdio MCP. Its
+governed workflows can record narrowly scoped fixes, Mission Pack acceptance,
+and experience-learning decisions; Belay does not execute a command or write a
+proposed change to a project.
 
 This repository contains the Apache-2.0-licensed Belay edge. Belay Teams is a
 separate product and is not included in this Local alpha.
@@ -367,11 +368,12 @@ that a fix failed; no match is not proof that a fix worked. Recurrence
 monitoring reports only post-attempt evidence observed after the recorded
 attempt baseline.
 Recurrence monitoring remains available through authenticated Local
-HTTP/browser routes only. Thirteen MCP tools are read-only. `propose_fix`
-stores a bounded unified-diff proposal for an allowlisted harness configuration
-file but never applies it; `record_fix_applied` records the resulting file hash
-after explicit user approval and external application. Neither tool executes a
-command or writes a project file.
+HTTP/browser routes only. MCP mutations are bounded to explicit user-governed
+records and lifecycle decisions. `propose_fix` stores a bounded unified-diff
+proposal for an allowlisted harness configuration file but never applies it;
+other governed tools can record an approved application, Mission Pack
+acceptance, or experience-learning decision. No MCP tool executes a command or
+writes a project file.
 
 Exact Codex and Claude Code configuration examples are in
 [`docs/launch/developer-preview.md`](docs/launch/developer-preview.md).
