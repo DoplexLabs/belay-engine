@@ -114,6 +114,59 @@ func TestRunRejectsUntrustedCapsuleJSONAndMixedModes(t *testing.T) {
 	}
 }
 
+func TestRunSelectionValueModeRequiresStrictExclusiveInput(t *testing.T) {
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "selection.json")
+	if err := os.WriteFile(
+		inputPath,
+		[]byte(`{"schema_version":"belay.selection-value-input.v1","unexpected":true}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing input",
+			args: []string{"--materialize-selection-value"},
+			want: "--selection-input is required",
+		},
+		{
+			name: "input without mode",
+			args: []string{"--selection-input", inputPath},
+			want: "requires --materialize-selection-value",
+		},
+		{
+			name: "mixed mode",
+			args: []string{
+				"--materialize-selection-value",
+				"--selection-input", inputPath,
+				"--comparative",
+			},
+			want: "cannot be combined",
+		},
+		{
+			name: "unknown input field",
+			args: []string{
+				"--materialize-selection-value",
+				"--selection-input", inputPath,
+				"--root", filepath.Join(directory, "run"),
+			},
+			want: "unknown field",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := run(test.args, &bytes.Buffer{}, &bytes.Buffer{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("run() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func validDraftCapsule() evalrun.PrivateEvalCapsule {
 	return evalrun.PrivateEvalCapsule{
 		SchemaVersion: evalrun.PrivateEvalCapsuleSchemaVersion,

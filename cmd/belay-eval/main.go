@@ -35,10 +35,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var comparative bool
 	var privateEvalCapsule bool
 	var completePrivateEvalCapsule bool
+	var materializeSelectionValue bool
 	var capsuleDatabase string
 	var capsuleProposal string
 	var capsuleDraft string
 	var capsuleReplay string
+	var selectionInput string
 	var realClaude bool
 	var realCodex bool
 	var codexExecutable string
@@ -66,6 +68,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		false,
 		"complete a draft private eval capsule from engineering JSON inputs",
 	)
+	flags.BoolVar(
+		&materializeSelectionValue,
+		"materialize-selection-value",
+		false,
+		"build and materialize a selection-value evaluation from strict JSON",
+	)
 	flags.StringVar(
 		&capsuleDatabase,
 		"capsule-db",
@@ -89,6 +97,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"capsule-replay",
 		"",
 		"path to a private eval replay contract JSON file",
+	)
+	flags.StringVar(
+		&selectionInput,
+		"selection-input",
+		"",
+		"path to a selection-value input JSON file",
 	)
 	flags.BoolVar(
 		&realClaude,
@@ -128,7 +142,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if completePrivateEvalCapsule {
-		if privateEvalCapsule || comparative || realClaude || realCodex {
+		if privateEvalCapsule || materializeSelectionValue ||
+			comparative || realClaude || realCodex {
 			return errors.New(
 				"private eval capsule completion cannot be combined with other evaluation modes",
 			)
@@ -145,6 +160,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 			"--capsule-draft and --capsule-replay require --complete-private-eval-capsule",
 		)
 	}
+	if materializeSelectionValue {
+		if privateEvalCapsule || completePrivateEvalCapsule ||
+			comparative || realClaude || realCodex {
+			return errors.New(
+				"selection value materialization cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(selectionInput) == "" {
+			return errors.New(
+				"--selection-input is required with --materialize-selection-value",
+			)
+		}
+	} else if strings.TrimSpace(selectionInput) != "" {
+		return errors.New(
+			"--selection-input requires --materialize-selection-value",
+		)
+	}
 
 	if root == "" && !privateEvalCapsule && !completePrivateEvalCapsule {
 		value, err := os.MkdirTemp("", "belay-c5-cross-harness-")
@@ -154,7 +186,25 @@ func run(args []string, stdout, stderr io.Writer) error {
 		root = value
 	}
 	var result any
-	if completePrivateEvalCapsule {
+	if materializeSelectionValue {
+		var input evalrun.SelectionValueInput
+		if err := decodeStrictJSONFile(
+			selectionInput,
+			"selection value input",
+			&input,
+		); err != nil {
+			return err
+		}
+		value, err := evalrun.PrepareSelectionValueEvaluation(
+			context.Background(),
+			root,
+			input,
+		)
+		if err != nil {
+			return err
+		}
+		result = value
+	} else if completePrivateEvalCapsule {
 		value, err := completeCapsuleFromFiles(capsuleDraft, capsuleReplay)
 		if err != nil {
 			return err
