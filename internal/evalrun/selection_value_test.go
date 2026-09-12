@@ -7,6 +7,7 @@ import (
 
 	"github.com/DoplexLabs/belay-engine/internal/experience"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/trajectory"
 )
 
 func TestBuildSelectionValuePlanBindsDistinctTransferTargets(t *testing.T) {
@@ -157,6 +158,25 @@ func validSelectionValueInputs(
 		ProjectIdentity:    project,
 		CandidateFamily:    experience.CandidateSuccessfulProcedure,
 		TreatmentCandidate: sourceProposal,
+		SourceSessions:     []string{"ses_selection_source"},
+		Evidence: []experience.EvidenceRef{{
+			Kind:       experience.EvidenceTranscriptTurn,
+			SessionKey: "ses_selection_source",
+			TurnIndex:  selectionInt64Pointer(4),
+			Excerpt:    "The strict loader implementation passed verification.",
+		}},
+		Outcomes: []trajectory.Outcome{{
+			ProjectIdentity: project,
+			SessionKey:      "ses_selection_source",
+			OccurredAt:      time.Date(2026, 9, 12, 14, 0, 0, 0, time.UTC),
+			Kind:            trajectory.OutcomeVerificationPass,
+			Result:          trajectory.ResultSucceeded,
+			SourceRefs: []trajectory.NodeRef{{
+				Kind:       trajectory.NodeTranscriptTurn,
+				SessionKey: "ses_selection_source",
+				TurnIndex:  selectionInt64Pointer(4),
+			}},
+		}},
 		Provenance: CapsuleProvenance{
 			InstructionAuthority: string(experience.AuthorityNone),
 		},
@@ -227,6 +247,10 @@ func validSelectionValueInputs(
 		"reject unknown fields",
 		"trailing JSON values",
 	}
+}
+
+func selectionInt64Pointer(value int64) *int64 {
+	return &value
 }
 
 func selectionValueProposal(

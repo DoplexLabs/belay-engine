@@ -175,8 +175,59 @@ func validateSelectionValueSource(source PrivateEvalCapsule) error {
 	}
 	if strings.TrimSpace(source.CapsuleID) == "" ||
 		strings.TrimSpace(source.CandidateID) == "" ||
-		strings.TrimSpace(source.ProjectIdentity) == "" {
+		strings.TrimSpace(source.ProjectIdentity) == "" ||
+		len(source.SourceSessions) == 0 ||
+		len(source.Evidence) == 0 ||
+		len(source.Outcomes) == 0 {
 		return errors.New("selection value source identity is incomplete")
+	}
+	sessionSet := make(map[string]bool, len(source.SourceSessions))
+	for _, sessionKey := range source.SourceSessions {
+		sessionKey = strings.TrimSpace(sessionKey)
+		if sessionKey == "" || sessionSet[sessionKey] {
+			return errors.New(
+				"selection value source sessions are invalid or duplicated",
+			)
+		}
+		sessionSet[sessionKey] = true
+	}
+	evidenceSession := false
+	for _, ref := range source.Evidence {
+		if err := ref.Validate(); err != nil {
+			return fmt.Errorf(
+				"validate selection value source evidence: %w",
+				err,
+			)
+		}
+		if sessionSet[ref.SessionKey] {
+			evidenceSession = true
+		}
+	}
+	if !evidenceSession {
+		return errors.New(
+			"selection value source evidence is not bound to a source session",
+		)
+	}
+	verifiedOutcome := false
+	for _, outcome := range source.Outcomes {
+		if outcome.ProjectIdentity != source.ProjectIdentity ||
+			!sessionSet[outcome.SessionKey] ||
+			outcome.OccurredAt.IsZero() ||
+			len(outcome.SourceRefs) == 0 {
+			return errors.New(
+				"selection value source outcome does not match its project and sessions",
+			)
+		}
+		if outcome.Result == "succeeded" &&
+			(outcome.Kind == "verification_pass" ||
+				outcome.Kind == "commit") {
+			verifiedOutcome = true
+		}
+	}
+	if !verifiedOutcome {
+		return errors.New(
+			"selection value source requires a successful verification or commit outcome",
+		)
 	}
 	if source.TreatmentCandidate.Scope.ProjectIdentity !=
 		source.ProjectIdentity {
