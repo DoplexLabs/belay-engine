@@ -38,6 +38,7 @@ type PrivateEvalCapsule struct {
 	Outcomes           []trajectory.Outcome          `json:"outcomes"`
 	Provenance         CapsuleProvenance             `json:"provenance"`
 	Evaluation         CapsuleEvaluationContract     `json:"evaluation"`
+	Replay             *CapsuleReplayContract        `json:"replay,omitempty"`
 	CreatedAt          time.Time                     `json:"created_at"`
 }
 
@@ -273,6 +274,7 @@ func privateEvalCapsuleID(value PrivateEvalCapsule) string {
 		SemanticInputHash   string
 		EvidenceGeneration  string
 		ProposedContentHash string
+		ReplayHash          string
 	}{
 		SchemaVersion:       value.SchemaVersion,
 		CandidateID:         value.CandidateID,
@@ -281,6 +283,11 @@ func privateEvalCapsuleID(value PrivateEvalCapsule) string {
 		SemanticInputHash:   value.Provenance.SemanticInputHash,
 		EvidenceGeneration:  value.Provenance.EvidenceGeneration,
 		ProposedContentHash: value.Provenance.ProposedContentHash,
+	}
+	if value.Replay != nil {
+		replay, _ := json.Marshal(value.Replay)
+		sum := sha256.Sum256(replay)
+		material.ReplayHash = hex.EncodeToString(sum[:])
 	}
 	encoded, _ := json.Marshal(material)
 	sum := sha256.Sum256(encoded)
