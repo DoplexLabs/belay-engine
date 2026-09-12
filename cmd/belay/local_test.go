@@ -164,6 +164,51 @@ func TestPrepareRuntimePreservesExplicitPinForSourceBuild(t *testing.T) {
 		runtime.config.NumbatVersionMarker != "source-marker" {
 		t.Fatalf("explicit config = %+v", runtime.config)
 	}
+	if runtime.config.NumbatBinary == binary ||
+		!strings.HasPrefix(runtime.config.NumbatBinary, runtime.paths.BundledBin+"-") {
+		t.Fatalf("materialized binary = %q", runtime.config.NumbatBinary)
+	}
+}
+
+func TestPrepareRuntimeMaterializesUnverifiedDevelopmentBinary(t *testing.T) {
+	home := t.TempDir()
+	source := filepath.Join(t.TempDir(), "numbat")
+	writeVersionedNumbat(t, source, "numbat development-marker")
+	setCompiledNumbatTestState(
+		t,
+		"",
+		"",
+		filepath.Join(t.TempDir(), "bin", "belay"),
+	)
+
+	runtime, err := prepareRuntime(
+		context.Background(),
+		testRuntimeFlags(home, source, "", "", true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.NumbatBinary == source ||
+		!strings.HasPrefix(runtime.config.NumbatBinary, runtime.paths.BundledBin+"-") {
+		t.Fatalf("development binary = %q", runtime.config.NumbatBinary)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := prepareRuntime(
+		context.Background(),
+		testRuntimeFlags(home, "", "", "", true),
+	)
+	if err != nil {
+		t.Fatalf("prepareRuntime() after source removal: %v", err)
+	}
+	if reloaded.config.NumbatBinary != runtime.config.NumbatBinary {
+		t.Fatalf(
+			"reloaded development binary = %q, want %q",
+			reloaded.config.NumbatBinary,
+			runtime.config.NumbatBinary,
+		)
+	}
 }
 
 func TestQuickstartAndLocalLaunchModes(t *testing.T) {

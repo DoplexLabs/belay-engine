@@ -13,13 +13,14 @@ usage() {
   cat <<'EOF'
 usage: scripts/build-developer-preview.sh [options]
 
-Build unsigned Belay Local Developer Alpha archives without publishing them.
+Build Belay Local Developer Alpha archives without publishing them.
 
 Options:
   --arch arm64|amd64|all  Target macOS architecture (default: native)
   --version VERSION       Artifact version label (default: 0.0.1-alpha.1)
   --output-dir PATH       Output directory (default: ./dist)
   --numbat-source PATH    Use an existing pristine Numbat checkout
+  --codesign-identity ID  Sign both binaries with an Apple Developer ID
   -h, --help              Show this help
 
 The build fails if the Belay tree is dirty unless BELAY_ALLOW_DIRTY=1 is set.
@@ -42,6 +43,7 @@ target_arch="native"
 preview_version="${BELAY_PREVIEW_VERSION:-${DEFAULT_VERSION}}"
 output_dir="${repository_root}/dist"
 numbat_source=""
+codesign_identity=""
 
 while (($# > 0)); do
   case "$1" in
@@ -65,6 +67,11 @@ while (($# > 0)); do
       numbat_source="$2"
       shift 2
       ;;
+    --codesign-identity)
+      (($# >= 2)) || die "--codesign-identity requires a value"
+      codesign_identity="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -84,6 +91,9 @@ for required in \
   shasum sort uname; do
   require_command "${required}"
 done
+if [[ -n "${codesign_identity}" ]]; then
+  require_command codesign
+fi
 
 git -C "${repository_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "Belay source must be a Git checkout"
@@ -176,6 +186,18 @@ for architecture in "${architectures[@]}"; do
       -o "${package_root}/bin/numbat" \
       ./cmd/numbat
 
+  signed="false"
+  if [[ -n "${codesign_identity}" ]]; then
+    codesign \
+      --force \
+      --options runtime \
+      --timestamp \
+      --sign "${codesign_identity}" \
+      "${package_root}/bin/numbat"
+    codesign --verify --strict --verbose=2 "${package_root}/bin/numbat"
+    signed="true"
+  fi
+
   numbat_binary_sha256="$(
     shasum -a 256 "${package_root}/bin/numbat" | awk '{print $1}'
   )"
@@ -190,9 +212,19 @@ for architecture in "${architectures[@]}"; do
     go -C "${repository_root}" build \
       -buildvcs=false \
       -trimpath \
-      -ldflags="-s -w -X main.bundledNumbatSHA256=${numbat_binary_sha256} -X main.bundledNumbatVersionMarker=${NUMBAT_VERSION_MARKER}" \
+      -ldflags="-s -w -X main.buildVersion=${preview_version} -X main.buildCommit=${belay_commit} -X main.bundledNumbatSHA256=${numbat_binary_sha256} -X main.bundledNumbatVersionMarker=${NUMBAT_VERSION_MARKER}" \
       -o "${package_root}/bin/belay" \
       ./cmd/belay
+
+  if [[ -n "${codesign_identity}" ]]; then
+    codesign \
+      --force \
+      --options runtime \
+      --timestamp \
+      --sign "${codesign_identity}" \
+      "${package_root}/bin/belay"
+    codesign --verify --strict --verbose=2 "${package_root}/bin/belay"
+  fi
 
   install -m 0644 "${repository_root}/LICENSE" "${package_root}/LICENSE"
   install -m 0644 "${repository_root}/licenses/numbat/LICENSE" "${package_root}/licenses/numbat/LICENSE"
@@ -218,7 +250,7 @@ numbat_commit=${NUMBAT_COMMIT}
 numbat_binary_sha256=${numbat_binary_sha256}
 numbat_version_marker=${NUMBAT_VERSION_MARKER}
 source_date_epoch=${source_date_epoch}
-signed=false
+signed=${signed}
 notarized=false
 EOF
 

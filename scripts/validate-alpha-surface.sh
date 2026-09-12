@@ -37,7 +37,11 @@ for path in \
   docs/implementation/briefs/14-p0-one-command-onboarding.md \
   docs/launch/developer-preview.md \
   docs/launch/clean-machine-alpha-qa.md \
-  docs/launch/local-v0-requirements.md; do
+  docs/launch/local-v0-requirements.md \
+  scripts/install.sh \
+  scripts/notarize-release.sh \
+  scripts/render-homebrew-formula.sh \
+  .github/workflows/signed-alpha-release.yml; do
   require_file "${repository_root}/${path}"
 done
 
@@ -59,6 +63,10 @@ for path in \
 done
 
 require_text "${repository_root}/README.md" "Apple Silicon"
+require_text "${repository_root}/README.md" \
+  "brew install doplexlabs/tap/belay"
+require_text "${repository_root}/README.md" \
+  "curl -fsSL https://getbelay.vercel.app/install | bash"
 require_text "${repository_root}/docs/launch/developer-preview.md" "Apple Silicon"
 require_text "${repository_root}/docs/launch/developer-preview.md" "unsigned"
 require_text "${repository_root}/docs/launch/developer-preview.md" "Codex"
@@ -153,6 +161,24 @@ require_text "${repository_root}/scripts/build-developer-preview.sh" \
   "main.bundledNumbatSHA256"
 require_text "${repository_root}/scripts/build-developer-preview.sh" \
   "main.bundledNumbatVersionMarker"
+require_text "${repository_root}/scripts/build-developer-preview.sh" \
+  "main.buildVersion"
+require_text "${repository_root}/scripts/install.sh" \
+  'metadata_value "${build_info}" signed'
+require_text "${repository_root}/scripts/install.sh" \
+  'metadata_value "${build_info}" notarized'
+require_text "${repository_root}/scripts/notarize-release.sh" \
+  'xcrun notarytool submit'
+require_text "${repository_root}/scripts/install.sh" \
+  'readonly REPOSITORY="DoplexLabs/homebrew-tap"'
+require_text "${repository_root}/scripts/render-homebrew-formula.sh" \
+  'DoplexLabs/homebrew-tap/releases/download'
+require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
+  'scripts/notarize-release.sh'
+require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
+  'gh release create'
+require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
+  'DoplexLabs/homebrew-tap'
 require_text "${repository_root}/scripts/smoke-developer-preview.sh" \
   '"${belay}" agents'
 require_text "${repository_root}/.github/workflows/developer-preview.yml" \

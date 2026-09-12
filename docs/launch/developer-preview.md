@@ -5,10 +5,13 @@ Prepared version: `0.0.1-alpha.1`
 This is an individual-developer alpha for private, accountless observation of
 local Codex and Claude Code activity. It is Local-only. Belay Teams is not included.
 
+Local source-built validation artifacts are unsigned and unnotarized. The
+external installer accepts only a Developer ID-signed and Apple-notarized
+release produced by the gated release workflow.
+
 The alpha is:
 
 - Apple Silicon macOS only (`darwin/arm64`)
-- unsigned and unnotarized
 - validated only for Codex and Claude Code
 - distributed only after a separate human authorization
 - not a production release, installer, or supported update channel
@@ -130,6 +133,22 @@ Control-clicking the specific binary in Finder and choosing **Open** is another
 per-binary path. Do not disable Gatekeeper or any system-wide protection.
 
 ## Install-to-first-insight path
+
+For a published signed alpha:
+
+```bash
+brew install doplexlabs/tap/belay
+belay quickstart
+```
+
+The public tap downloads the release from `DoplexLabs/homebrew-tap`, while the
+private engine repository remains inaccessible. The short fallback installer
+is `curl -fsSL https://getbelay.vercel.app/install | bash`. It verifies the
+release checksum and embedded package checksums, rejects dirty, unsigned, or
+unnotarized builds, and installs a stable `belay` command under the current
+user. Re-running it upgrades the installation.
+
+For a local unsigned validation artifact, use the manual extraction path below.
 
 Extract the package and keep both binaries together:
 
