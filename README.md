@@ -138,6 +138,24 @@ The proof must show a bound Codex receipt, `verifier_state: satisfied`, cited
 command/result turns, and `post_pause_experience_count: 0`. The original
 Claude proposal and Codex JSON events remain beside the result for audit.
 
+The C6 engineering pilot runs all five required delivery baselines with a fixed
+model and deterministic exact-command scorer. It preserves failed and neutral
+results:
+
+```bash
+GOCACHE=/tmp/belay-engine-go-cache go run ./cmd/belay-eval \
+  --comparative \
+  --repetitions 3 \
+  --model openai.gpt-5.6-sol \
+  --root /tmp/belay-c6-eval \
+  --output /tmp/belay-c6-eval/result.json
+```
+
+This pilot combines the production-path C5 verifier proof with paired
+behavioral runs. Its compiled baseline uses approved Mission Pack text plus the
+experiment's exact command/exit-code scorer; it does not claim that the
+comparative runner itself is another product runtime.
+
 For focused iteration, run the package closest to the change:
 
 ```bash

@@ -17,11 +17,20 @@ import (
 func main() {
 	var root string
 	var output string
+	var comparative bool
 	var realClaude bool
 	var realCodex bool
 	var codexExecutable string
+	var model string
+	var repetitions int
 	flag.StringVar(&root, "root", "", "directory for disposable evaluation state")
 	flag.StringVar(&output, "output", "", "optional JSON artifact path")
+	flag.BoolVar(
+		&comparative,
+		"comparative",
+		false,
+		"run the five-baseline C6 comparative pilot",
+	)
 	flag.BoolVar(
 		&realClaude,
 		"real-claude",
@@ -40,6 +49,18 @@ func main() {
 		"codex",
 		"Codex executable name or path",
 	)
+	flag.StringVar(
+		&model,
+		"model",
+		"openai.gpt-5.6-sol",
+		"fixed Codex model for comparative evaluation",
+	)
+	flag.IntVar(
+		&repetitions,
+		"repetitions",
+		1,
+		"paired comparative repetitions (1-5)",
+	)
 	flag.Parse()
 
 	if root == "" {
@@ -49,17 +70,35 @@ func main() {
 		}
 		root = value
 	}
-	result, err := evalrun.RunCrossHarnessProof(
-		context.Background(),
-		root,
-		evalrun.CrossHarnessOptions{
-			RealClaude:      realClaude,
-			RealCodex:       realCodex,
-			CodexExecutable: codexExecutable,
-		},
-	)
-	if err != nil {
-		fatal(err)
+	var result any
+	if comparative {
+		value, err := evalrun.RunComparativePilot(
+			context.Background(),
+			root,
+			evalrun.ComparativeOptions{
+				CodexExecutable: codexExecutable,
+				Model:           model,
+				Repetitions:     repetitions,
+			},
+		)
+		if err != nil {
+			fatal(err)
+		}
+		result = value
+	} else {
+		value, err := evalrun.RunCrossHarnessProof(
+			context.Background(),
+			root,
+			evalrun.CrossHarnessOptions{
+				RealClaude:      realClaude,
+				RealCodex:       realCodex,
+				CodexExecutable: codexExecutable,
+			},
+		)
+		if err != nil {
+			fatal(err)
+		}
+		result = value
 	}
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {

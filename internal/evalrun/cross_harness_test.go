@@ -45,3 +45,29 @@ func TestCodexEventsTranscriptRetainsExactSuccessfulCommandEvidence(
 		t.Fatalf("command evidence = %+v/%+v", turns[1], turns[2])
 	}
 }
+
+func TestComparativeSummaryPreservesNeutralCompiledResult(t *testing.T) {
+	cost := 0.1
+	runs := []ComparativeRun{
+		{
+			Baseline:               BaselineRetrievalOnly,
+			Repetition:             1,
+			TaskSuccess:            true,
+			VerificationCompliance: true,
+			CostUSD:                &cost,
+		},
+		{
+			Baseline:               BaselineCompiledBelay,
+			Repetition:             1,
+			TaskSuccess:            true,
+			VerificationCompliance: true,
+			CostUSD:                &cost,
+		},
+	}
+	got := summarizeComparativeRuns(runs)
+	if got.CompiledVsRetrieval != "neutral" ||
+		got.Decision != "do_not_advance_runtime_gate" ||
+		len(got.ByBaseline) != 2 {
+		t.Fatalf("summary = %+v", got)
+	}
+}
