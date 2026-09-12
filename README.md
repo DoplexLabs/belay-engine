@@ -156,6 +156,23 @@ behavioral runs. Its compiled baseline uses approved Mission Pack text plus the
 experiment's exact command/exit-code scorer; it does not claim that the
 comparative runner itself is another product runtime.
 
+The C9 exporter binds a semantic proposal to its cited evidence, outcomes,
+required baselines, metrics, and explicit readiness gaps. It is
+non-authoritative and must read only a disposable SQLite backup:
+
+```bash
+GOCACHE=/tmp/belay-engine-go-cache go run ./cmd/belay-eval \
+  --private-eval-capsule \
+  --capsule-db /tmp/belay-eval-copy/belay.sqlite \
+  --capsule-proposal exs_example \
+  --output /tmp/belay-eval-copy/capsule.json
+```
+
+Never point this mode at a live Belay database. A draft capsule is not
+executable until the source repository revision, task setup, and deterministic
+task outcome have been reconstructed. Exporting it grants no instruction
+authority.
+
 For focused iteration, run the package closest to the change:
 
 ```bash

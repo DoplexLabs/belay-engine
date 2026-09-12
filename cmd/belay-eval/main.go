@@ -18,6 +18,9 @@ func main() {
 	var root string
 	var output string
 	var comparative bool
+	var privateEvalCapsule bool
+	var capsuleDatabase string
+	var capsuleProposal string
 	var realClaude bool
 	var realCodex bool
 	var codexExecutable string
@@ -30,6 +33,24 @@ func main() {
 		"comparative",
 		false,
 		"run the five-baseline C6 comparative pilot",
+	)
+	flag.BoolVar(
+		&privateEvalCapsule,
+		"private-eval-capsule",
+		false,
+		"export an evidence-bound private eval capsule from a disposable store copy",
+	)
+	flag.StringVar(
+		&capsuleDatabase,
+		"capsule-db",
+		"",
+		"path to a disposable Belay SQLite copy",
+	)
+	flag.StringVar(
+		&capsuleProposal,
+		"capsule-proposal",
+		"",
+		"current semantic proposal ID to bind into the capsule",
 	)
 	flag.BoolVar(
 		&realClaude,
@@ -63,7 +84,7 @@ func main() {
 	)
 	flag.Parse()
 
-	if root == "" {
+	if root == "" && !privateEvalCapsule {
 		value, err := os.MkdirTemp("", "belay-c5-cross-harness-")
 		if err != nil {
 			fatal(err)
@@ -71,7 +92,22 @@ func main() {
 		root = value
 	}
 	var result any
-	if comparative {
+	if privateEvalCapsule {
+		if comparative || realClaude || realCodex {
+			fatal(fmt.Errorf(
+				"private eval capsule export cannot be combined with harness evaluation modes",
+			))
+		}
+		value, err := evalrun.LoadPrivateEvalCapsule(
+			context.Background(),
+			capsuleDatabase,
+			capsuleProposal,
+		)
+		if err != nil {
+			fatal(err)
+		}
+		result = value
+	} else if comparative {
 		value, err := evalrun.RunComparativePilot(
 			context.Background(),
 			root,
