@@ -68,6 +68,28 @@ var pricesV2 = map[string]modelPrice{
 	},
 }
 
+// PricingUsage is the public, bounded input for evaluating one harness usage
+// record against Belay's versioned in-repo price table.
+type PricingUsage struct {
+	InputTokens       *int64
+	OutputTokens      *int64
+	CacheReadTokens   *int64
+	CacheWriteTokens  *int64
+	InputIncludesRead bool
+}
+
+// EstimateCostUSD returns nil when the model is not present in the versioned
+// table. It never guesses a price.
+func EstimateCostUSD(model string, value PricingUsage) *float64 {
+	return calculateCost(model, usage{
+		InputTokens:       value.InputTokens,
+		OutputTokens:      value.OutputTokens,
+		CacheReadTokens:   value.CacheReadTokens,
+		CacheWriteTokens:  value.CacheWriteTokens,
+		InputIncludesRead: value.InputIncludesRead,
+	})
+}
+
 func calculateCost(model string, value usage) *float64 {
 	price, ok := pricesV2[model]
 	if !ok {
