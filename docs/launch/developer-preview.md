@@ -137,13 +137,16 @@ per-binary path. Do not disable Gatekeeper or any system-wide protection.
 For a published signed alpha:
 
 ```bash
-curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash
+brew install doplexlabs/tap/belay
 belay quickstart
 ```
 
-The first command verifies the release checksum and embedded package checksums,
-rejects dirty, unsigned, or unnotarized builds, and installs a stable `belay`
-command under the current user. Re-running it upgrades the installation.
+The public tap downloads the release from `DoplexLabs/homebrew-tap`, while the
+private engine repository remains inaccessible. The short fallback installer
+is `curl -fsSL https://getbelay.vercel.app/install | bash`. It verifies the
+release checksum and embedded package checksums, rejects dirty, unsigned, or
+unnotarized builds, and installs a stable `belay` command under the current
+user. Re-running it upgrades the installation.
 
 For a local unsigned validation artifact, use the manual extraction path below.
 

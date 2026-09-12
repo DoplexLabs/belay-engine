@@ -231,14 +231,27 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 		}
 	}
 	belayExecutable, _ := currentExecutablePath()
+	packagedExecutable := belayExecutable
 	if resolvedExecutable, resolveErr := filepath.EvalSymlinks(belayExecutable); resolveErr == nil {
-		belayExecutable = resolvedExecutable
+		packagedExecutable = resolvedExecutable
+	}
+	if advertisedExecutable := os.Getenv("BELAY_EXECUTABLE_PATH"); advertisedExecutable != "" {
+		advertisedExecutable, err = filepath.Abs(advertisedExecutable)
+		if err != nil {
+			return preparedRuntime{}, errors.New("BELAY_EXECUTABLE_PATH is invalid")
+		}
+		resolvedAdvertised, resolveErr := filepath.EvalSymlinks(advertisedExecutable)
+		if resolveErr != nil ||
+			filepath.Clean(resolvedAdvertised) != filepath.Clean(packagedExecutable) {
+			return preparedRuntime{}, errors.New("BELAY_EXECUTABLE_PATH does not resolve to the running Belay binary")
+		}
+		belayExecutable = advertisedExecutable
 	}
 	binary, err := localapp.ResolveNumbatBinaryForExecutable(
 		paths,
 		config,
 		*options.numbatBinary,
-		belayExecutable,
+		packagedExecutable,
 	)
 	if err != nil {
 		return preparedRuntime{}, err
@@ -253,7 +266,7 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 			if !available {
 				return preparedRuntime{}, errors.New("Numbat is not pinned; provide --numbat-sha256 and --numbat-version-marker, or use --allow-unverified-numbat for development")
 			}
-			if !isPackagedSiblingNumbat(belayExecutable, binary) {
+			if !isPackagedSiblingNumbat(packagedExecutable, binary) {
 				return preparedRuntime{}, errors.New("the compiled Numbat pin may bootstrap only the packaged sibling bin/numbat executable")
 			}
 			verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

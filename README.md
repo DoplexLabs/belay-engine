@@ -23,23 +23,25 @@ verification, packaged smoke testing, and installer validation all pass.
 After the signed alpha release is published, installation is:
 
 ```bash
-curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash
+brew install doplexlabs/tap/belay
 belay quickstart
 ```
 
-To install and begin onboarding in one command:
+To install and begin onboarding in one command without Homebrew:
 
 ```bash
-curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash -s -- --quickstart
+curl -fsSL https://getbelay.vercel.app/install | bash -s -- --quickstart
 ```
 
-The installer accepts only the expected Apple Silicon archive, verifies both
-external and internal checksums, and rejects dirty, unsigned, or unnotarized
-builds. Re-running it upgrades the stable installation. Uninstall preserves
-encrypted local history:
+The public Homebrew tap and short installer endpoint resolve only to the
+versioned signed release in `DoplexLabs/homebrew-tap`; private engine source is
+never exposed. The installer accepts only the expected Apple Silicon archive,
+verifies both external and internal checksums, and rejects dirty, unsigned, or
+unnotarized builds. Re-running it upgrades the stable installation. Uninstall
+preserves encrypted local history:
 
 ```bash
-curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v0.0.1-alpha.1/install.sh | bash -s -- --uninstall
+curl -fsSL https://getbelay.vercel.app/install | bash -s -- --uninstall
 ```
 
 Alpha scope:

@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 readonly DEFAULT_VERSION="0.0.1-alpha.1"
-readonly REPOSITORY="DoplexLabs/belay-engine"
+readonly REPOSITORY="DoplexLabs/homebrew-tap"
 
 die() {
   printf 'belay-install: %s\n' "$*" >&2

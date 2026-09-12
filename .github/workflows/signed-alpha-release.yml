@@ -44,6 +44,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           test -n "${APPLE_CERTIFICATE_BASE64}"
           test -n "${APPLE_CERTIFICATE_PASSWORD}"
@@ -51,6 +52,7 @@ jobs:
           test -n "${APPLE_ID}"
           test -n "${APPLE_TEAM_ID}"
           test -n "${APPLE_APP_SPECIFIC_PASSWORD}"
+          test -n "${PUBLIC_RELEASE_TOKEN}"
 
       - name: Import Apple Developer ID
         env:
@@ -138,7 +140,7 @@ jobs:
       - name: Publish GitHub prerelease
         if: ${{ inputs.publish }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           test "$(git rev-parse "v${ALPHA_VERSION}^{commit}")" = "$(git rev-parse HEAD)"
           cat > "${RUNNER_TEMP}/release-notes.md" <<EOF
@@ -147,20 +149,42 @@ jobs:
           Install:
 
           \`\`\`bash
-          curl -fsSL https://github.com/DoplexLabs/belay-engine/releases/download/v${ALPHA_VERSION}/install.sh | bash
+          brew install doplexlabs/tap/belay
           belay quickstart
           \`\`\`
+
+          Fallback: \`curl -fsSL https://getbelay.vercel.app/install | bash\`
 
           Belay runs locally, uploads nothing, and requires no account.
           EOF
           gh release create "v${ALPHA_VERSION}" \
+            --repo DoplexLabs/homebrew-tap \
             --prerelease \
-            --verify-tag \
+            --target main \
             --title "Belay Local ${ALPHA_VERSION}" \
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz" \
             "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz.sha256" \
             "scripts/install.sh"
+
+      - name: Update public Homebrew formula
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          TAP_ROOT="${RUNNER_TEMP}/homebrew-tap"
+          ARCHIVE="dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz"
+          ARCHIVE_SHA256="$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')"
+          gh repo clone DoplexLabs/homebrew-tap "${TAP_ROOT}"
+          scripts/render-homebrew-formula.sh \
+            --version "${ALPHA_VERSION}" \
+            --sha256 "${ARCHIVE_SHA256}" \
+            --output "${TAP_ROOT}/Formula/belay.rb"
+          git -C "${TAP_ROOT}" config user.name "DoplexLabs Release Bot"
+          git -C "${TAP_ROOT}" config user.email "release-bot@doplexlabs.com"
+          git -C "${TAP_ROOT}" add Formula/belay.rb
+          git -C "${TAP_ROOT}" commit -m "belay ${ALPHA_VERSION}"
+          git -C "${TAP_ROOT}" push origin main
 
       - name: Upload verified release candidate
         uses: actions/upload-artifact@v4
