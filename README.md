@@ -119,6 +119,25 @@ node --check internal/presentation/localhttp/assets/app.js
 git diff --check
 ```
 
+### Isolated cross-harness value proof
+
+`cmd/belay-eval` is an engineering-only runner, not an end-user Belay command.
+It uses a disposable encrypted store and never reads the developer's Belay
+store. The full C5 proof invokes Claude with no session persistence and Codex
+with `--ephemeral`, then records exact local artifacts:
+
+```bash
+GOCACHE=/tmp/belay-engine-go-cache go run ./cmd/belay-eval \
+  --real-claude \
+  --real-codex \
+  --root /tmp/belay-c5-proof \
+  --output /tmp/belay-c5-proof/result.json
+```
+
+The proof must show a bound Codex receipt, `verifier_state: satisfied`, cited
+command/result turns, and `post_pause_experience_count: 0`. The original
+Claude proposal and Codex JSON events remain beside the result for audit.
+
 For focused iteration, run the package closest to the change:
 
 ```bash
