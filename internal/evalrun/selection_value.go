@@ -190,6 +190,11 @@ func validateSelectionValueSource(source PrivateEvalCapsule) error {
 	if err := source.Replay.Validate(); err != nil {
 		return fmt.Errorf("validate selection value source replay: %w", err)
 	}
+	if source.Replay.Source.Repository != source.ProjectIdentity {
+		return errors.New(
+			"selection value source replay repository does not match its project",
+		)
+	}
 	return nil
 }
 
@@ -306,6 +311,11 @@ func (value SelectionValuePlan) validateTargets() error {
 				err,
 			)
 		}
+		if target.Replay.Source.Repository != value.ProjectIdentity {
+			return errors.New(
+				"selection value target replay repository does not match the plan project",
+			)
+		}
 		replayHash, err := stableSelectionValueHash(target.Replay)
 		if err != nil {
 			return err
@@ -324,6 +334,20 @@ func (value SelectionValuePlan) validateTargets() error {
 				"validate selection value target %s request: %w",
 				targetID,
 				err,
+			)
+		}
+		if strings.Join(
+			strings.Fields(target.SelectionRequest.TaskHint),
+			" ",
+		) != strings.Join(
+			strings.Fields(target.Replay.Task.Prompt),
+			" ",
+		) || !sameSelectionValueStrings(
+			target.SelectionRequest.RepositoryPaths,
+			target.Replay.Task.AllowedMutationPaths,
+		) {
+			return errors.New(
+				"selection value target must give the production selector the exact task and mutation paths",
 			)
 		}
 		if len(target.RelevantCandidateIDs) == 0 ||

@@ -88,6 +88,8 @@ func TestBuildSelectionValuePlanRejectsWeakSelectionClaims(t *testing.T) {
 			name: "prompt leaks source procedure",
 			mutate: func(_ *PrivateEvalCapsule, _ *[]SelectionValueCandidate, targets *[]SelectionValueTarget, forbidden *[]string) {
 				(*targets)[0].Replay.Task.Prompt += " " + (*forbidden)[0]
+				(*targets)[0].SelectionRequest.TaskHint =
+					(*targets)[0].Replay.Task.Prompt
 			},
 			want: "leaks the source procedure",
 		},
