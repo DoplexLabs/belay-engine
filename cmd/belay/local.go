@@ -213,10 +213,6 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 		return preparedRuntime{}, err
 	}
 	changed := false
-	if *options.numbatBinary != "" {
-		config.NumbatBinary = *options.numbatBinary
-		changed = true
-	}
 	if *options.numbatSHA256 != "" {
 		config.NumbatSHA256 = *options.numbatSHA256
 		changed = true
@@ -224,11 +220,6 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 	if *options.versionMarker != "" {
 		config.NumbatVersionMarker = *options.versionMarker
 		changed = true
-	}
-	if changed {
-		if err := localapp.SaveConfig(paths.Config, config); err != nil {
-			return preparedRuntime{}, err
-		}
 	}
 	belayExecutable, _ := currentExecutablePath()
 	packagedExecutable := belayExecutable
@@ -283,10 +274,13 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 			config.NumbatBinary = materialized
 			config.NumbatSHA256 = pin.SHA256
 			config.NumbatVersionMarker = pin.VersionMarker
-			if err := localapp.SaveConfig(paths.Config, config); err != nil {
+			changed = true
+			binary = materialized
+		} else {
+			binary, err = localapp.MaterializeUnverifiedNumbat(paths, binary)
+			if err != nil {
 				return preparedRuntime{}, err
 			}
-			binary = materialized
 		}
 	case config.NumbatSHA256 == "" || config.NumbatVersionMarker == "":
 		return preparedRuntime{}, errors.New("Numbat pin is incomplete; configure both SHA-256 and version marker")
@@ -298,6 +292,15 @@ func prepareRuntime(ctx context.Context, options localRuntimeFlags) (preparedRun
 		})
 		cancel()
 		if err != nil {
+			return preparedRuntime{}, err
+		}
+	}
+	if config.NumbatBinary != binary {
+		config.NumbatBinary = binary
+		changed = true
+	}
+	if changed {
+		if err := localapp.SaveConfig(paths.Config, config); err != nil {
 			return preparedRuntime{}, err
 		}
 	}

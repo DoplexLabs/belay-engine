@@ -168,32 +168,76 @@ func MaterializePinnedNumbat(
 	if pin.SHA256 == "" || pin.VersionMarker == "" {
 		return "", errors.New("Numbat pin is incomplete")
 	}
-	file, _, _, err := openRegularNoFollow(source)
+	body, checksum, err := readNumbatSource(source)
 	if err != nil {
-		return "", errors.New("open pinned Numbat source")
-	}
-	body, err := io.ReadAll(io.LimitReader(file, 256<<20))
-	closeErr := file.Close()
-	if err != nil || closeErr != nil {
 		return "", errors.New("read pinned Numbat source")
 	}
-	sum := sha256.Sum256(body)
-	if got := fmt.Sprintf("%x", sum[:]); got != pin.SHA256 {
+	if checksum != pin.SHA256 {
 		return "", errors.New("Numbat checksum mismatch")
 	}
+	destination, err := materializeNumbatBody(paths, body, checksum)
+	if err != nil {
+		return "", err
+	}
+	if err := numbat.VerifyBinary(ctx, destination, pin); err != nil {
+		return "", err
+	}
+	return destination, nil
+}
+
+// MaterializeUnverifiedNumbat gives development-only Numbat binaries a durable,
+// private path before their location is persisted or written into harness hooks.
+// It does not turn the binary into a verified release artifact.
+func MaterializeUnverifiedNumbat(paths Paths, source string) (string, error) {
+	body, checksum, err := readNumbatSource(source)
+	if err != nil {
+		return "", errors.New("read development Numbat source")
+	}
+	return materializeNumbatBody(paths, body, checksum)
+}
+
+func readNumbatSource(source string) ([]byte, string, error) {
+	const maximumBinaryBytes = 256 << 20
+
+	file, _, size, err := openRegularNoFollow(source)
+	if err != nil {
+		return nil, "", err
+	}
+	if size < 0 || size > maximumBinaryBytes {
+		file.Close()
+		return nil, "", errors.New("Numbat binary exceeds size limit")
+	}
+	body, err := io.ReadAll(io.LimitReader(file, maximumBinaryBytes+1))
+	closeErr := file.Close()
+	if err != nil || closeErr != nil || len(body) > maximumBinaryBytes {
+		return nil, "", errors.New("read Numbat binary")
+	}
+	sum := sha256.Sum256(body)
+	return body, fmt.Sprintf("%x", sum[:]), nil
+}
+
+func materializeNumbatBody(
+	paths Paths,
+	body []byte,
+	checksum string,
+) (string, error) {
 	if err := ensurePrivateDirectory(filepath.Dir(paths.BundledBin)); err != nil {
 		return "", err
 	}
-	destination := paths.BundledBin + "-" + pin.SHA256[:16]
+	destination := paths.BundledBin + "-" + checksum[:16]
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o500)
 	if errors.Is(err, os.ErrExist) {
-		if err := numbat.VerifyBinary(ctx, destination, pin); err != nil {
-			return "", errors.New("cached pinned Numbat binary failed verification")
+		_, existingChecksum, readErr := readNumbatSource(destination)
+		if readErr != nil || existingChecksum != checksum {
+			return "", errors.New("cached Numbat binary failed integrity check")
+		}
+		if err := os.Chmod(destination, 0o500); err != nil {
+			return "", errors.New("restrict cached Numbat binary")
 		}
 		return destination, nil
 	}
 	if err != nil {
-		return "", errors.New("create private pinned Numbat binary")
+		return "", errors.New("create private Numbat binary")
 	}
 	cleanup := true
 	defer func() {
@@ -203,21 +247,18 @@ func MaterializePinnedNumbat(
 	}()
 	if _, err := output.Write(body); err != nil {
 		output.Close()
-		return "", errors.New("write private pinned Numbat binary")
+		return "", errors.New("write private Numbat binary")
 	}
 	if err := output.Sync(); err != nil {
 		output.Close()
-		return "", errors.New("sync private pinned Numbat binary")
+		return "", errors.New("sync private Numbat binary")
 	}
 	if err := output.Chmod(0o500); err != nil {
 		output.Close()
-		return "", errors.New("restrict private pinned Numbat binary")
+		return "", errors.New("restrict private Numbat binary")
 	}
 	if err := output.Close(); err != nil {
-		return "", errors.New("close private pinned Numbat binary")
-	}
-	if err := numbat.VerifyBinary(ctx, destination, pin); err != nil {
-		return "", err
+		return "", errors.New("close private Numbat binary")
 	}
 	cleanup = false
 	return destination, nil
