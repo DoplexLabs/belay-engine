@@ -762,6 +762,8 @@ func (value *compiler) evidenceRef(
 			Kind:       experience.EvidenceTranscriptTurn,
 			SessionKey: turn.SessionKey,
 			TurnIndex:  &turnIndex,
+			TurnRole:   experience.EvidenceTurnRole(turn.Role),
+			ToolName:   turn.ToolName,
 			OccurredAt: &occurredAt,
 			Excerpt:    turnExcerpt(turn),
 		}, true

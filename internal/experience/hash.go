@@ -312,6 +312,10 @@ func normalizedEvidenceRefs(values []EvidenceRef) []EvidenceRef {
 	result := append([]EvidenceRef(nil), values...)
 	for index := range result {
 		result[index].SessionKey = strings.TrimSpace(result[index].SessionKey)
+		result[index].TurnRole = EvidenceTurnRole(
+			strings.TrimSpace(string(result[index].TurnRole)),
+		)
+		result[index].ToolName = strings.TrimSpace(result[index].ToolName)
 		result[index].EventID = strings.TrimSpace(result[index].EventID)
 		result[index].OutcomeID = strings.TrimSpace(result[index].OutcomeID)
 		result[index].Path = strings.TrimSpace(result[index].Path)

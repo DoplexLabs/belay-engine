@@ -23,7 +23,7 @@ const (
 	ExperiencePromptVersion               = experience.SemanticProposalPromptVersion
 	maxExperienceSemanticCandidates       = 16
 	maxExperienceSemanticCandidateQuery   = 500
-	maxExperienceSemanticExcerpts         = 5
+	maxExperienceSemanticExcerpts         = 8
 	maxExperienceSemanticOutcomeIDs       = 16
 	maxExperienceSemanticObservationBytes = 1024
 	maxExperienceSemanticFeedbackBytes    = 1536
@@ -101,6 +101,8 @@ type experienceSemanticPromptExcerpt struct {
 	Kind       experience.EvidenceSourceKind `json:"kind"`
 	SessionKey string                        `json:"session_key,omitempty"`
 	TurnIndex  *int64                        `json:"turn_index,omitempty"`
+	TurnRole   experience.EvidenceTurnRole   `json:"turn_role,omitempty"`
+	ToolName   string                        `json:"tool_name,omitempty"`
 	EventID    string                        `json:"event_id,omitempty"`
 	OutcomeID  string                        `json:"outcome_id,omitempty"`
 	OccurredAt *time.Time                    `json:"occurred_at,omitempty"`
@@ -377,7 +379,7 @@ func prepareExperienceSemanticPrompt(
 				"experience semantic candidates must share one project",
 			)
 		}
-		excerpts := boundedExperienceSemanticExcerpts(candidate.Evidence.Refs)
+		excerpts := boundedExperienceSemanticExcerpts(candidate)
 		payload.Candidates = append(
 			payload.Candidates,
 			experienceSemanticPromptCandidate{
@@ -507,6 +509,85 @@ func experienceSemanticInputHash(
 }
 
 func boundedExperienceSemanticExcerpts(
+	candidate experience.Candidate,
+) []experienceSemanticPromptExcerpt {
+	refs := candidate.Evidence.Refs
+	roleAware := false
+	for _, ref := range refs {
+		if ref.Kind == experience.EvidenceTranscriptTurn &&
+			ref.TurnRole.Valid() {
+			roleAware = true
+			break
+		}
+	}
+	if !roleAware {
+		return lexicallyBoundedExperienceSemanticExcerpts(refs)
+	}
+
+	values := excerptEvidenceRefsChronological(refs)
+	selected := make([]experience.EvidenceRef, 0, maxExperienceSemanticExcerpts)
+	seen := make(map[string]bool)
+	appendRef := func(ref experience.EvidenceRef) {
+		if len(selected) >= maxExperienceSemanticExcerpts ||
+			strings.TrimSpace(ref.Excerpt) == "" {
+			return
+		}
+		key := experienceSemanticEvidenceRefKey(ref)
+		if !seen[key] {
+			seen[key] = true
+			selected = append(selected, ref)
+		}
+	}
+
+	userRefs := evidenceRefsWithRole(values, experience.EvidenceTurnUser)
+	if len(userRefs) > 0 {
+		appendRef(userRefs[0])
+	}
+
+	mutations := make([]experience.EvidenceRef, 0, 2)
+	for _, ref := range values {
+		if ref.TurnRole == experience.EvidenceTurnToolCall &&
+			isMutationEvidenceRef(ref) {
+			mutations = append(mutations, ref)
+		}
+	}
+	if len(mutations) > 0 {
+		appendRef(mutations[0])
+	}
+	if len(mutations) > 1 {
+		appendRef(mutations[len(mutations)-1])
+	}
+
+	if len(userRefs) > 1 {
+		start := len(userRefs) - 2
+		for _, ref := range userRefs[start:] {
+			appendRef(ref)
+		}
+	}
+
+	anchorCall, anchorFound := anchorVerifierEvidenceRef(candidate, values)
+	if anchorFound {
+		appendRef(anchorCall)
+		if result, ok := verifierResultEvidenceRef(anchorCall, values); ok {
+			appendRef(result)
+		}
+	}
+
+	assistantRefs := evidenceRefsWithRole(
+		values,
+		experience.EvidenceTurnAssistant,
+	)
+	if len(assistantRefs) > 0 {
+		appendRef(assistantRefs[len(assistantRefs)-1])
+	}
+
+	for _, ref := range values {
+		appendRef(ref)
+	}
+	return experienceSemanticPromptExcerpts(selected)
+}
+
+func lexicallyBoundedExperienceSemanticExcerpts(
 	refs []experience.EvidenceRef,
 ) []experienceSemanticPromptExcerpt {
 	values := append([]experience.EvidenceRef(nil), refs...)
@@ -515,29 +596,129 @@ func boundedExperienceSemanticExcerpts(
 		right, _ := json.Marshal(values[j])
 		return string(left) < string(right)
 	})
-	result := make([]experienceSemanticPromptExcerpt, 0, maxExperienceSemanticExcerpts)
+	selected := make([]experience.EvidenceRef, 0, maxExperienceSemanticExcerpts)
 	for _, ref := range values {
-		if len(result) == maxExperienceSemanticExcerpts {
+		if len(selected) == maxExperienceSemanticExcerpts {
 			break
 		}
-		text := strings.TrimSpace(ref.Excerpt)
-		if text == "" {
-			continue
+		if strings.TrimSpace(ref.Excerpt) != "" {
+			selected = append(selected, ref)
 		}
+	}
+	return experienceSemanticPromptExcerpts(selected)
+}
+
+func experienceSemanticPromptExcerpts(
+	refs []experience.EvidenceRef,
+) []experienceSemanticPromptExcerpt {
+	result := make([]experienceSemanticPromptExcerpt, 0, len(refs))
+	for _, ref := range refs {
 		result = append(result, experienceSemanticPromptExcerpt{
 			Kind:       ref.Kind,
 			SessionKey: ref.SessionKey,
 			TurnIndex:  cloneInt64Pointer(ref.TurnIndex),
+			TurnRole:   ref.TurnRole,
+			ToolName:   ref.ToolName,
 			EventID:    ref.EventID,
 			OutcomeID:  ref.OutcomeID,
 			OccurredAt: cloneTimePointer(ref.OccurredAt),
 			Text: clipSemanticText(
-				text,
+				strings.TrimSpace(ref.Excerpt),
 				maxExperienceSemanticExcerptBytes,
 			),
 		})
 	}
 	return result
+}
+
+func excerptEvidenceRefsChronological(
+	refs []experience.EvidenceRef,
+) []experience.EvidenceRef {
+	result := make([]experience.EvidenceRef, 0, len(refs))
+	for _, ref := range refs {
+		if strings.TrimSpace(ref.Excerpt) != "" {
+			result = append(result, ref)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SessionKey != result[j].SessionKey {
+			return result[i].SessionKey < result[j].SessionKey
+		}
+		switch {
+		case result[i].TurnIndex != nil && result[j].TurnIndex != nil &&
+			*result[i].TurnIndex != *result[j].TurnIndex:
+			return *result[i].TurnIndex < *result[j].TurnIndex
+		case result[i].TurnIndex != nil && result[j].TurnIndex == nil:
+			return true
+		case result[i].TurnIndex == nil && result[j].TurnIndex != nil:
+			return false
+		}
+		return experienceSemanticEvidenceRefKey(result[i]) <
+			experienceSemanticEvidenceRefKey(result[j])
+	})
+	return result
+}
+
+func evidenceRefsWithRole(
+	refs []experience.EvidenceRef,
+	role experience.EvidenceTurnRole,
+) []experience.EvidenceRef {
+	result := make([]experience.EvidenceRef, 0)
+	for _, ref := range refs {
+		if ref.TurnRole == role {
+			result = append(result, ref)
+		}
+	}
+	return result
+}
+
+func isMutationEvidenceRef(ref experience.EvidenceRef) bool {
+	toolName := strings.ToLower(strings.TrimSpace(ref.ToolName))
+	return strings.Contains(toolName, "edit") ||
+		strings.Contains(toolName, "write") ||
+		strings.Contains(toolName, "patch")
+}
+
+func anchorVerifierEvidenceRef(
+	candidate experience.Candidate,
+	refs []experience.EvidenceRef,
+) (experience.EvidenceRef, bool) {
+	command := candidate.Proposal.Verifier.Command
+	if command == nil {
+		return experience.EvidenceRef{}, false
+	}
+	want := strings.TrimSpace(command.Command)
+	for index := len(refs) - 1; index >= 0; index-- {
+		ref := refs[index]
+		if ref.TurnRole == experience.EvidenceTurnToolCall &&
+			strings.TrimSpace(ref.Excerpt) == want {
+			return ref, true
+		}
+	}
+	return experience.EvidenceRef{}, false
+}
+
+func verifierResultEvidenceRef(
+	call experience.EvidenceRef,
+	refs []experience.EvidenceRef,
+) (experience.EvidenceRef, bool) {
+	if call.TurnIndex == nil {
+		return experience.EvidenceRef{}, false
+	}
+	for _, ref := range refs {
+		if ref.TurnRole == experience.EvidenceTurnToolResult &&
+			ref.SessionKey == call.SessionKey &&
+			ref.TurnIndex != nil &&
+			*ref.TurnIndex > *call.TurnIndex {
+			return ref, true
+		}
+	}
+	return experience.EvidenceRef{}, false
+}
+
+func experienceSemanticEvidenceRefKey(ref experience.EvidenceRef) string {
+	encoded, _ := json.Marshal(ref)
+	return string(encoded)
 }
 
 func sanitizeExperienceSemanticPromptExcerpts(

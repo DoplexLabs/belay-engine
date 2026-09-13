@@ -512,6 +512,18 @@ func (value EvidenceRef) Validate() error {
 		if value.TurnIndex == nil || *value.TurnIndex < 0 {
 			return errors.New("transcript evidence requires a non-negative turn index")
 		}
+		if value.TurnRole != "" && !value.TurnRole.Valid() {
+			return errors.New("transcript evidence turn role is invalid")
+		}
+		if value.ToolName != "" {
+			if value.TurnRole != EvidenceTurnToolCall &&
+				value.TurnRole != EvidenceTurnToolResult {
+				return errors.New("evidence tool name requires a tool turn role")
+			}
+			if err := validateText("evidence tool name", value.ToolName, 256, false); err != nil {
+				return err
+			}
+		}
 		if value.EventID != "" || value.OutcomeID != "" || value.Path != "" || value.SHA256 != "" || value.RecordedBy != "" {
 			return errors.New("transcript evidence contains fields for another source kind")
 		}
@@ -519,14 +531,14 @@ func (value EvidenceRef) Validate() error {
 		if err := validateIdentifier("evidence event ID", value.EventID); err != nil {
 			return err
 		}
-		if value.SessionKey != "" || value.TurnIndex != nil || value.OutcomeID != "" || value.Path != "" || value.SHA256 != "" || value.RecordedBy != "" {
+		if value.SessionKey != "" || value.TurnIndex != nil || value.TurnRole != "" || value.ToolName != "" || value.OutcomeID != "" || value.Path != "" || value.SHA256 != "" || value.RecordedBy != "" {
 			return errors.New("canonical event evidence contains fields for another source kind")
 		}
 	case EvidenceOutcomeObservation:
 		if err := validateIdentifier("evidence outcome ID", value.OutcomeID); err != nil {
 			return err
 		}
-		if value.SessionKey != "" || value.TurnIndex != nil || value.EventID != "" || value.Path != "" || value.SHA256 != "" || value.RecordedBy != "" {
+		if value.SessionKey != "" || value.TurnIndex != nil || value.TurnRole != "" || value.ToolName != "" || value.EventID != "" || value.Path != "" || value.SHA256 != "" || value.RecordedBy != "" {
 			return errors.New("outcome evidence contains fields for another source kind")
 		}
 	case EvidenceWorkspaceHash:
@@ -536,14 +548,14 @@ func (value EvidenceRef) Validate() error {
 		if !validSHA256(value.SHA256) {
 			return errors.New("workspace evidence requires a sha256 digest")
 		}
-		if value.SessionKey != "" || value.TurnIndex != nil || value.EventID != "" || value.OutcomeID != "" || value.RecordedBy != "" {
+		if value.SessionKey != "" || value.TurnIndex != nil || value.TurnRole != "" || value.ToolName != "" || value.EventID != "" || value.OutcomeID != "" || value.RecordedBy != "" {
 			return errors.New("workspace evidence contains fields for another source kind")
 		}
 	case EvidenceUserRecorded:
 		if err := validateIdentifier("user-recorded evidence actor", value.RecordedBy); err != nil {
 			return err
 		}
-		if value.SessionKey != "" || value.TurnIndex != nil || value.EventID != "" || value.OutcomeID != "" || value.Path != "" || value.SHA256 != "" {
+		if value.SessionKey != "" || value.TurnIndex != nil || value.TurnRole != "" || value.ToolName != "" || value.EventID != "" || value.OutcomeID != "" || value.Path != "" || value.SHA256 != "" {
 			return errors.New("user-recorded evidence contains fields for another source kind")
 		}
 	}

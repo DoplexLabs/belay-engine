@@ -39,6 +39,31 @@ func (value CandidateFamily) Valid() bool {
 	}
 }
 
+type EvidenceTurnRole string
+
+const (
+	EvidenceTurnUser              EvidenceTurnRole = "user"
+	EvidenceTurnAssistant         EvidenceTurnRole = "assistant"
+	EvidenceTurnToolCall          EvidenceTurnRole = "tool_call"
+	EvidenceTurnToolResult        EvidenceTurnRole = "tool_result"
+	EvidenceTurnSystem            EvidenceTurnRole = "system"
+	EvidenceTurnCompactionSummary EvidenceTurnRole = "compaction_summary"
+)
+
+func (value EvidenceTurnRole) Valid() bool {
+	switch value {
+	case EvidenceTurnUser,
+		EvidenceTurnAssistant,
+		EvidenceTurnToolCall,
+		EvidenceTurnToolResult,
+		EvidenceTurnSystem,
+		EvidenceTurnCompactionSummary:
+		return true
+	default:
+		return false
+	}
+}
+
 type LifecycleState string
 
 const (

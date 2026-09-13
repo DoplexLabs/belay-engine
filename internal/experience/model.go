@@ -154,6 +154,8 @@ type EvidenceRef struct {
 	Kind       EvidenceSourceKind `json:"kind"`
 	SessionKey string             `json:"session_key,omitempty"`
 	TurnIndex  *int64             `json:"turn_index,omitempty"`
+	TurnRole   EvidenceTurnRole   `json:"turn_role,omitempty"`
+	ToolName   string             `json:"tool_name,omitempty"`
 	EventID    string             `json:"event_id,omitempty"`
 	OutcomeID  string             `json:"outcome_id,omitempty"`
 	Path       string             `json:"path,omitempty"`

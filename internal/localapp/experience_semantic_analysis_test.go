@@ -199,6 +199,78 @@ func TestPrepareExperienceSemanticPromptIsBoundedAndCandidateOnly(
 	}
 }
 
+func TestBoundedExperienceSemanticExcerptsPrioritizesEvidenceRoles(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("role-aware")
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	ref := func(
+		index int64,
+		role experience.EvidenceTurnRole,
+		toolName string,
+		text string,
+	) experience.EvidenceRef {
+		occurredAt := base.Add(time.Duration(index) * time.Second)
+		return experience.EvidenceRef{
+			Kind:       experience.EvidenceTranscriptTurn,
+			SessionKey: "ses_role_aware",
+			TurnIndex:  &index,
+			TurnRole:   role,
+			ToolName:   toolName,
+			OccurredAt: &occurredAt,
+			Excerpt:    text,
+		}
+	}
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	candidate.Proposal.Verifier = experience.Verifier{
+		Kind: experience.VerifierCommandSucceeded,
+		Command: &experience.CommandVerifierSpec{
+			Command:          "go test ./...",
+			CommandClass:     "test",
+			ScrubbingVersion: "belay.redaction.v1",
+		},
+	}
+	candidate.Evidence.Refs = []experience.EvidenceRef{
+		ref(8, experience.EvidenceTurnAssistant, "", "intermediate noise"),
+		ref(11, experience.EvidenceTurnToolResult, "Bash", "ok"),
+		ref(3, experience.EvidenceTurnToolCall, "Write", `{"file_path":"b.go"}`),
+		ref(0, experience.EvidenceTurnUser, "", "Implement the bounded change."),
+		ref(12, experience.EvidenceTurnAssistant, "", "Implemented and verified."),
+		ref(2, experience.EvidenceTurnUser, "", "Keep retries idempotent."),
+		ref(10, experience.EvidenceTurnToolCall, "Bash", "go test ./..."),
+		ref(1, experience.EvidenceTurnToolCall, "Edit", `{"file_path":"a.go"}`),
+		ref(4, experience.EvidenceTurnUser, "", "Except when the request is read-only."),
+		ref(9, experience.EvidenceTurnSystem, "", "system noise"),
+	}
+
+	got := boundedExperienceSemanticExcerpts(candidate)
+	if len(got) != maxExperienceSemanticExcerpts {
+		t.Fatalf(
+			"role-aware excerpts = %d, want %d: %+v",
+			len(got),
+			maxExperienceSemanticExcerpts,
+			got,
+		)
+	}
+	wantTurns := map[int64]bool{
+		0:  true,
+		1:  true,
+		2:  true,
+		3:  true,
+		4:  true,
+		10: true,
+		11: true,
+		12: true,
+	}
+	for _, excerpt := range got {
+		if excerpt.TurnIndex == nil || !wantTurns[*excerpt.TurnIndex] {
+			t.Fatalf("unexpected role-aware excerpt: %+v", excerpt)
+		}
+		delete(wantTurns, *excerpt.TurnIndex)
+	}
+	if len(wantTurns) != 0 {
+		t.Fatalf("role-aware excerpts omitted turns: %+v", wantTurns)
+	}
+}
+
 func TestExperienceSemanticInputHashCoversCompleteModelInput(t *testing.T) {
 	prompt := []byte("prompt")
 	schema := []byte(`{"type":"object"}`)
