@@ -929,11 +929,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV3WithV4Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV3WithV5Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV4 {
-		t.Fatalf("experience prompt version = %q, want v4", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV5 {
+		t.Fatalf("experience prompt version = %q, want v5", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -967,9 +967,9 @@ func TestAnalyzeExperienceCandidatesReanalyzesV3WithV4Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV4 ||
+			experience.SemanticProposalPromptVersionV5 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV4 {
+			experience.SemanticProposalPromptVersionV5 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,

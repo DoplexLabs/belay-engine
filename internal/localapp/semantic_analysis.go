@@ -90,19 +90,20 @@ type semanticRawHarnessResult struct {
 }
 
 type SemanticAnalysisReport struct {
-	Projects                     int `json:"projects"`
-	Skipped                      int `json:"skipped"`
-	Clusters                     int `json:"clusters"`
-	Fixes                        int `json:"fixes"`
-	ExperienceProjectsConsidered int `json:"experience_projects_considered"`
-	ExperienceProjectsCompiled   int `json:"experience_projects_compiled"`
-	ExperienceProjectsAnalyzed   int `json:"experience_projects_analyzed"`
-	ExperienceProjectFailures    int `json:"experience_project_failures"`
-	ExperienceCandidatesInserted int `json:"experience_candidates_inserted"`
-	ExperienceCandidatesReplayed int `json:"experience_candidates_replayed"`
-	ExperienceProposals          int `json:"experience_proposals"`
-	ExperienceRejections         int `json:"experience_rejections"`
-	ExperienceDefers             int `json:"experience_defers"`
+	Projects                     int      `json:"projects"`
+	Skipped                      int      `json:"skipped"`
+	Clusters                     int      `json:"clusters"`
+	Fixes                        int      `json:"fixes"`
+	ExperienceProjectsConsidered int      `json:"experience_projects_considered"`
+	ExperienceProjectsCompiled   int      `json:"experience_projects_compiled"`
+	ExperienceProjectsAnalyzed   int      `json:"experience_projects_analyzed"`
+	ExperienceProjectFailures    int      `json:"experience_project_failures"`
+	ExperienceFailureDetails     []string `json:"experience_failure_details,omitempty"`
+	ExperienceCandidatesInserted int      `json:"experience_candidates_inserted"`
+	ExperienceCandidatesReplayed int      `json:"experience_candidates_replayed"`
+	ExperienceProposals          int      `json:"experience_proposals"`
+	ExperienceRejections         int      `json:"experience_rejections"`
+	ExperienceDefers             int      `json:"experience_defers"`
 }
 
 func (report *SemanticAnalysisReport) AddExperience(
@@ -116,6 +117,10 @@ func (report *SemanticAnalysisReport) AddExperience(
 	report.ExperienceProjectsCompiled += experienceReport.ProjectsCompiled
 	report.ExperienceProjectsAnalyzed += experienceReport.ProjectsAnalyzed
 	report.ExperienceProjectFailures += experienceReport.ProjectFailures
+	report.ExperienceFailureDetails = append(
+		report.ExperienceFailureDetails,
+		experienceReport.FailureDetails...,
+	)
 	report.ExperienceCandidatesInserted +=
 		experienceReport.CandidatesInserted
 	report.ExperienceCandidatesReplayed +=

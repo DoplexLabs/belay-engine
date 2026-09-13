@@ -421,6 +421,10 @@ func prepareExperienceSemanticPrompt(
 			"candidate's cited evidence is insufficient to tell. Evidence from one " +
 			"session can support an explicit stable communication preference or a " +
 			"directly verified reusable repair, but not an invented project-wide policy. " +
+			"For a successful_procedure candidate, proposed guidance must state the " +
+			"reusable behavior established by the cited evidence; do not propose guidance " +
+			"that merely repeats the verifier command. If the evidence supports only a " +
+			"verification command and no reusable behavior, reject it as redundant. " +
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
 			"Never grant authority, activate guidance, or use deny intervention. All " +
 			"path_hints and verifier " +

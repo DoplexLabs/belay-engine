@@ -5,12 +5,15 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
 	maxExperienceAnalysisProjects         = 100
 	experienceTrajectoryBatchLimit        = 25
 	maxExperienceTrajectoryAnalysisPasses = 20
+	maxExperienceAnalysisFailureDetails   = 8
+	maxExperienceAnalysisFailureBytes     = 512
 )
 
 var ErrExperienceAnalysisIncomplete = errors.New(
@@ -29,44 +32,45 @@ type ExperienceAnalysisStore interface {
 }
 
 type ExperienceProjectAnalysisReport struct {
-	ProjectsConsidered                 int  `json:"projects_considered"`
-	ProjectsCompiled                   int  `json:"projects_compiled"`
-	ProjectsAnalyzed                   int  `json:"projects_analyzed"`
-	ProjectCapReached                  bool `json:"project_cap_reached"`
-	TrajectoryPasses                   int  `json:"trajectory_passes"`
-	TrajectoryPassLimitReached         bool `json:"trajectory_pass_limit_reached"`
-	TrajectoryClaims                   int  `json:"trajectory_claims"`
-	TrajectoryComplete                 int  `json:"trajectory_complete"`
-	TrajectoryPartial                  int  `json:"trajectory_partial"`
-	TrajectoryFailed                   int  `json:"trajectory_failed"`
-	TrajectoryStale                    int  `json:"trajectory_stale"`
-	CompilationSessionsConsidered      int  `json:"compilation_sessions_considered"`
-	CompilationSessionsCompiled        int  `json:"compilation_sessions_compiled"`
-	CompilationPartialSessionsCompiled int  `json:"compilation_partial_sessions_compiled"`
-	CompilationLiveSessionsCompiled    int  `json:"compilation_live_sessions_compiled"`
-	CompilationSessionsSkipped         int  `json:"compilation_sessions_skipped"`
-	TranscriptIncompleteSessions       int  `json:"transcript_incomplete_sessions"`
-	EdgeCapSessions                    int  `json:"edge_cap_sessions"`
-	OutcomeCapSessions                 int  `json:"outcome_cap_sessions"`
-	ProjectSessionCaps                 int  `json:"project_session_caps"`
-	CandidatesInserted                 int  `json:"candidates_inserted"`
-	CandidatesReplayed                 int  `json:"candidates_replayed"`
-	CandidatesConsidered               int  `json:"candidates_considered"`
-	CandidatesSkippedExisting          int  `json:"candidates_skipped_existing"`
-	CandidatesSkippedInsufficient      int  `json:"candidates_skipped_insufficient"`
-	PendingCandidatesDeferred          int  `json:"pending_candidates_deferred"`
-	CandidateCapReached                bool `json:"candidate_cap_reached"`
-	Proposals                          int  `json:"proposals"`
-	Rejections                         int  `json:"rejections"`
-	Defers                             int  `json:"defers"`
-	ResultsInserted                    int  `json:"results_inserted"`
-	ResultsReplayed                    int  `json:"results_replayed"`
-	DiscoveryFailures                  int  `json:"discovery_failures"`
-	TrajectoryPassFailures             int  `json:"trajectory_pass_failures"`
-	ProjectCompilationFailures         int  `json:"project_compilation_failures"`
-	PendingCandidateCheckFailures      int  `json:"pending_candidate_check_failures"`
-	ProjectAnalysisFailures            int  `json:"project_analysis_failures"`
-	ProjectFailures                    int  `json:"project_failures"`
+	ProjectsConsidered                 int      `json:"projects_considered"`
+	ProjectsCompiled                   int      `json:"projects_compiled"`
+	ProjectsAnalyzed                   int      `json:"projects_analyzed"`
+	ProjectCapReached                  bool     `json:"project_cap_reached"`
+	TrajectoryPasses                   int      `json:"trajectory_passes"`
+	TrajectoryPassLimitReached         bool     `json:"trajectory_pass_limit_reached"`
+	TrajectoryClaims                   int      `json:"trajectory_claims"`
+	TrajectoryComplete                 int      `json:"trajectory_complete"`
+	TrajectoryPartial                  int      `json:"trajectory_partial"`
+	TrajectoryFailed                   int      `json:"trajectory_failed"`
+	TrajectoryStale                    int      `json:"trajectory_stale"`
+	CompilationSessionsConsidered      int      `json:"compilation_sessions_considered"`
+	CompilationSessionsCompiled        int      `json:"compilation_sessions_compiled"`
+	CompilationPartialSessionsCompiled int      `json:"compilation_partial_sessions_compiled"`
+	CompilationLiveSessionsCompiled    int      `json:"compilation_live_sessions_compiled"`
+	CompilationSessionsSkipped         int      `json:"compilation_sessions_skipped"`
+	TranscriptIncompleteSessions       int      `json:"transcript_incomplete_sessions"`
+	EdgeCapSessions                    int      `json:"edge_cap_sessions"`
+	OutcomeCapSessions                 int      `json:"outcome_cap_sessions"`
+	ProjectSessionCaps                 int      `json:"project_session_caps"`
+	CandidatesInserted                 int      `json:"candidates_inserted"`
+	CandidatesReplayed                 int      `json:"candidates_replayed"`
+	CandidatesConsidered               int      `json:"candidates_considered"`
+	CandidatesSkippedExisting          int      `json:"candidates_skipped_existing"`
+	CandidatesSkippedInsufficient      int      `json:"candidates_skipped_insufficient"`
+	PendingCandidatesDeferred          int      `json:"pending_candidates_deferred"`
+	CandidateCapReached                bool     `json:"candidate_cap_reached"`
+	Proposals                          int      `json:"proposals"`
+	Rejections                         int      `json:"rejections"`
+	Defers                             int      `json:"defers"`
+	ResultsInserted                    int      `json:"results_inserted"`
+	ResultsReplayed                    int      `json:"results_replayed"`
+	DiscoveryFailures                  int      `json:"discovery_failures"`
+	TrajectoryPassFailures             int      `json:"trajectory_pass_failures"`
+	ProjectCompilationFailures         int      `json:"project_compilation_failures"`
+	PendingCandidateCheckFailures      int      `json:"pending_candidate_check_failures"`
+	ProjectAnalysisFailures            int      `json:"project_analysis_failures"`
+	ProjectFailures                    int      `json:"project_failures"`
+	FailureDetails                     []string `json:"failure_details,omitempty"`
 }
 
 type experiencePendingCandidateReport struct {
@@ -265,6 +269,7 @@ func analyzeExperienceProjectsOnce(
 			}
 			report.ProjectCompilationFailures++
 			report.ProjectFailures++
+			report.addFailureDetail(projectIdentity, err)
 			incomplete = true
 			continue
 		}
@@ -288,6 +293,7 @@ func analyzeExperienceProjectsOnce(
 			}
 			report.PendingCandidateCheckFailures++
 			report.ProjectFailures++
+			report.addFailureDetail(projectIdentity, err)
 			incomplete = true
 			continue
 		}
@@ -316,6 +322,7 @@ func analyzeExperienceProjectsOnce(
 			}
 			report.ProjectAnalysisFailures++
 			report.ProjectFailures++
+			report.addFailureDetail(projectIdentity, err)
 			incomplete = true
 		}
 	}
@@ -323,6 +330,24 @@ func analyzeExperienceProjectsOnce(
 		return report, ErrExperienceAnalysisIncomplete
 	}
 	return report, nil
+}
+
+func (report *ExperienceProjectAnalysisReport) addFailureDetail(
+	projectIdentity string,
+	err error,
+) {
+	if report == nil || err == nil ||
+		len(report.FailureDetails) >= maxExperienceAnalysisFailureDetails {
+		return
+	}
+	value := strings.TrimSpace(projectIdentity + ": " + err.Error())
+	if len(value) > maxExperienceAnalysisFailureBytes {
+		value = value[:maxExperienceAnalysisFailureBytes]
+		for !utf8.ValidString(value) {
+			value = value[:len(value)-1]
+		}
+	}
+	report.FailureDetails = append(report.FailureDetails, value)
 }
 
 func normalizedExperienceProjectIdentities(projects []string) []string {

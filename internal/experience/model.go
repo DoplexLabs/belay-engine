@@ -10,7 +10,8 @@ const (
 	SemanticProposalPromptVersionV2 = "belay.experience-prompt.v2"
 	SemanticProposalPromptVersionV3 = "belay.experience-prompt.v3"
 	SemanticProposalPromptVersionV4 = "belay.experience-prompt.v4"
-	SemanticProposalPromptVersion   = SemanticProposalPromptVersionV4
+	SemanticProposalPromptVersionV5 = "belay.experience-prompt.v5"
+	SemanticProposalPromptVersion   = SemanticProposalPromptVersionV5
 	ExperienceSchemaVersion         = "belay.experience.v1"
 	ApplicationSchemaVersion        = "belay.experience-application.v1"
 	EvaluationSchemaVersion         = "belay.experience-evaluation.v1"
