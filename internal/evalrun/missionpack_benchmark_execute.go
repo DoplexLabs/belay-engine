@@ -73,6 +73,7 @@ type MissionPackBenchmarkUsage struct {
 	CacheReadTokens  int64    `json:"cache_read_tokens"`
 	CacheWriteTokens int64    `json:"cache_write_tokens"`
 	TotalTokens      int64    `json:"total_tokens"`
+	TokenOperations  int64    `json:"token_operations"`
 	CostUSD          *float64 `json:"cost_usd"`
 	CostSource       string   `json:"cost_source"`
 }
@@ -250,7 +251,7 @@ func ExecuteMissionPackBenchmarkRun(
 		)
 	}
 	wallCapHit := timedOut
-	tokenCapHit := usage.TotalTokens > manifest.MaxTokenOperations
+	tokenCapHit := usage.TokenOperations > manifest.MaxTokenOperations
 	spendCapHit := usage.CostUSD != nil &&
 		*usage.CostUSD > manifest.MaxBudgetUSD
 	underCaps := !wallCapHit &&
@@ -829,6 +830,11 @@ func observeMissionPackBenchmarkUsage(
 		}
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage.TokenOperations = usage.TotalTokens
+	if harness == MissionPackHarnessClaude {
+		usage.TokenOperations +=
+			usage.CacheReadTokens + usage.CacheWriteTokens
+	}
 	if directCost != nil {
 		usage.CostUSD = directCost
 		usage.CostSource = "harness_reported"

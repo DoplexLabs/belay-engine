@@ -223,6 +223,7 @@ func TestObserveMissionPackBenchmarkClaudeUsagePrefersHarnessCost(t *testing.T) 
 		usage.OutputTokens != 20 ||
 		usage.CacheReadTokens != 40 ||
 		usage.CacheWriteTokens != 10 ||
+		usage.TokenOperations != 170 ||
 		usage.CostUSD == nil ||
 		*usage.CostUSD != cost ||
 		usage.CostSource != "harness_reported" {
