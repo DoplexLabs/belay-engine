@@ -59,7 +59,7 @@ class Belay < Formula
   url "https://github.com/DoplexLabs/belay-engine/releases/download/v${version}/belay-local-developer-alpha-v${version}-darwin-arm64.tar.gz"
   version "${version}"
   sha256 "${sha256}"
-  license "Apache-2.0"
+  license "MIT"
 
   depends_on arch: :arm64
   depends_on :macos

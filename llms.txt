@@ -1,7 +1,7 @@
 # Belay Local Developer Alpha
 
 Version: 0.0.1-alpha.4
-License: Apache-2.0
+License: MIT
 Platform: Apple Silicon macOS only
 Validated harnesses: Codex, Claude Code
 Teams included: no
