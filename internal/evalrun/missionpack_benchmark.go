@@ -51,6 +51,8 @@ type MissionPackBenchmarkSchedule struct {
 type MissionPackBenchmarkScheduleEntry struct {
 	Sequence int                         `json:"sequence"`
 	Block    int                         `json:"block"`
+	Phase    string                      `json:"phase"`
+	TaskID   string                      `json:"task_id"`
 	Harness  MissionPackBenchmarkHarness `json:"harness"`
 	Arm      MissionPackBenchmarkArm     `json:"arm"`
 	RunID    string                      `json:"run_id"`
@@ -110,6 +112,8 @@ func BuildMissionPackBenchmarkSchedule(
 					MissionPackBenchmarkScheduleEntry{
 						Sequence: sequence,
 						Block:    block,
+						Phase:    plan.Phase,
+						TaskID:   plan.TaskID,
 						Harness:  harness,
 						Arm:      arm,
 						RunID: fmt.Sprintf(

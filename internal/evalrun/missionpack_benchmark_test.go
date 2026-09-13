@@ -29,6 +29,9 @@ func TestBuildMissionPackBenchmarkScheduleIsBalancedAndDeterministic(
 		if entry.Sequence != index+1 {
 			t.Fatalf("entry %d sequence = %d", index, entry.Sequence)
 		}
+		if entry.Phase != plan.Phase || entry.TaskID != plan.TaskID {
+			t.Fatalf("entry protocol identity = %+v", entry)
+		}
 		key := string(entry.Harness) + "/" + string(entry.Arm)
 		counts[key]++
 		if runIDs[entry.RunID] {

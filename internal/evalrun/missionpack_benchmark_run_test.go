@@ -141,6 +141,8 @@ func benchmarkRunSchedule(
 		Entries: []MissionPackBenchmarkScheduleEntry{{
 			Sequence: 1,
 			Block:    1,
+			Phase:    "pilot",
+			TaskID:   "task_a",
 			Harness:  harness,
 			Arm:      arm,
 			RunID:    "belay-mp-v1-task_a-pilot-b001-" + string(harness) + "-test",

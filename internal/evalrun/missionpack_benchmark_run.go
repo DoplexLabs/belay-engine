@@ -87,7 +87,10 @@ func PrepareMissionPackBenchmarkRun(
 	if err != nil {
 		return MissionPackBenchmarkRunManifest{}, err
 	}
-	taskRoot := filepath.Join(benchmarkRoot, "task")
+	taskRoot := filepath.Join(
+		benchmarkRoot,
+		benchmarkTaskDirectory(entry.TaskID),
+	)
 	if _, err := existingDirectory(taskRoot, "benchmark task root"); err != nil {
 		return MissionPackBenchmarkRunManifest{}, err
 	}
@@ -114,7 +117,11 @@ func PrepareMissionPackBenchmarkRun(
 		return MissionPackBenchmarkRunManifest{}, err
 	}
 
-	promptPath := filepath.Join(benchmarkRoot, "config", "task-a-prompt.txt")
+	promptPath := filepath.Join(
+		benchmarkRoot,
+		"config",
+		strings.ReplaceAll(entry.TaskID, "_", "-")+"-prompt.txt",
+	)
 	promptBody, err := os.ReadFile(promptPath)
 	if err != nil {
 		return MissionPackBenchmarkRunManifest{}, fmt.Errorf(
@@ -237,12 +244,30 @@ func ValidateMissionPackBenchmarkSchedule(
 		return errors.New("mission-pack benchmark schedule is empty")
 	}
 	seen := make(map[string]bool, len(schedule.Entries))
+	phase := ""
+	taskID := ""
 	for index, entry := range schedule.Entries {
 		if entry.Sequence != index+1 {
 			return errors.New("mission-pack benchmark schedule sequence is invalid")
 		}
 		if entry.Block < 1 || entry.RunID == "" {
 			return errors.New("mission-pack benchmark schedule entry is invalid")
+		}
+		switch entry.Phase {
+		case "pilot", "phase_a", "phase_b", "phase_c":
+		default:
+			return errors.New("mission-pack benchmark schedule phase is invalid")
+		}
+		if entry.TaskID != "task_a" && entry.TaskID != "task_b" {
+			return errors.New("mission-pack benchmark schedule task is invalid")
+		}
+		if index == 0 {
+			phase = entry.Phase
+			taskID = entry.TaskID
+		} else if entry.Phase != phase || entry.TaskID != taskID {
+			return errors.New(
+				"mission-pack benchmark schedule mixes phases or tasks",
+			)
 		}
 		if seen[entry.RunID] {
 			return errors.New("mission-pack benchmark schedule run IDs are not unique")
@@ -263,6 +288,13 @@ func ValidateMissionPackBenchmarkSchedule(
 		}
 	}
 	return nil
+}
+
+func benchmarkTaskDirectory(taskID string) string {
+	if taskID == "task_b" {
+		return "task-b"
+	}
+	return "task"
 }
 
 func benchmarkScheduleEntry(

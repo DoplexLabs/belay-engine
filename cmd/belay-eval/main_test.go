@@ -255,6 +255,8 @@ func TestRunPreparesMissionPackBenchmarkRunWithoutHarnessInvocation(
 		Entries: []evalrun.MissionPackBenchmarkScheduleEntry{{
 			Sequence: 1,
 			Block:    1,
+			Phase:    "pilot",
+			TaskID:   "task_a",
 			Harness:  evalrun.MissionPackHarnessCodex,
 			Arm:      evalrun.MissionPackArmNoContext,
 			RunID:    "belay-mp-v1-task_a-pilot-b001-codex-n",

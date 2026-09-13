@@ -198,6 +198,7 @@ func ExecuteMissionPackBenchmarkRun(
 		filepath.Join(manifest.BenchmarkRoot, "scripts", "score-workspace.sh"),
 		manifest.WorkspacePath,
 		scorePath,
+		manifest.Entry.TaskID,
 	)
 	scoreCommand.Dir = manifest.BenchmarkRoot
 	scoreOutput, scoreErr := scoreCommand.CombinedOutput()
