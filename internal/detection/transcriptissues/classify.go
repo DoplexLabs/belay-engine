@@ -87,6 +87,19 @@ func commandFromToolInput(raw json.RawMessage) string {
 }
 
 func classifyCommand(raw string, config issueintel.ProjectConfig) string {
+	for _, candidate := range verificationCommandCandidates(raw) {
+		class := classifyCommandCandidate(candidate, config)
+		if class != commandClassOther {
+			return class
+		}
+	}
+	return commandClassOther
+}
+
+func classifyCommandCandidate(
+	raw string,
+	config issueintel.ProjectConfig,
+) string {
 	normalized := strings.ToLower(spacePattern.ReplaceAllString(strings.TrimSpace(raw), " "))
 	for _, configured := range config.VerificationCommands {
 		configured = strings.ToLower(spacePattern.ReplaceAllString(strings.TrimSpace(configured), " "))
@@ -146,6 +159,68 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 		}
 	}
 	return verificationClassFromExecutable(executable)
+}
+
+func verificationCommandCandidates(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	result := []string{raw}
+	current := raw
+	for range 4 {
+		left, right, ok := splitTopLevelAndAnd(current)
+		if !ok || !workingDirectoryWrapper(left) {
+			break
+		}
+		result = append(result, right)
+		current = right
+	}
+	return result
+}
+
+func splitTopLevelAndAnd(raw string) (string, string, bool) {
+	var quote byte
+	escaped := false
+	for index := 0; index+1 < len(raw); index++ {
+		character := raw[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if character == '\\' && quote == '"' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			quote = character
+		case '&':
+			if raw[index+1] != '&' {
+				continue
+			}
+			left := strings.TrimSpace(raw[:index])
+			right := strings.TrimSpace(raw[index+2:])
+			return left, right, left != "" && right != ""
+		}
+	}
+	return "", "", false
+}
+
+func workingDirectoryWrapper(raw string) bool {
+	tokens, ok := firstLogicalCommandTokens(raw)
+	if !ok || len(tokens) != 2 {
+		return false
+	}
+	return strings.EqualFold(filepath.Base(tokens[0]), "cd")
 }
 
 func packageScript(fields []string) string {
@@ -259,20 +334,25 @@ func RetainedVerificationCommand(
 	turn transcript.Turn,
 	config issueintel.ProjectConfig,
 ) (class, raw string, ok bool) {
-	class, _, raw, ok = commandInfo(turn, config)
-	if !ok {
+	raw = strings.TrimSpace(turn.Payload.RawCommand)
+	if raw == "" && turn.Role == transcript.RoleToolCall {
+		raw = commandFromToolInput(turn.Payload.ToolInput)
+	}
+	if raw == "" {
 		return "", "", false
 	}
-	switch class {
-	case commandClassTest,
-		commandClassBuild,
-		commandClassTypecheck,
-		commandClassLint,
-		commandClassFormat:
-		return class, raw, true
-	default:
-		return "", "", false
+	for _, candidate := range verificationCommandCandidates(raw) {
+		class = classifyCommandCandidate(candidate, config)
+		switch class {
+		case commandClassTest,
+			commandClassBuild,
+			commandClassTypecheck,
+			commandClassLint,
+			commandClassFormat:
+			return class, candidate, true
+		}
 	}
+	return "", "", false
 }
 
 // ExtractEditedFiles returns normalized file paths explicitly present in a

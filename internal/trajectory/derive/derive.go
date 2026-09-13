@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version                        = "belay.trajectory-derive.v6"
+	Version                        = "belay.trajectory-derive.v7"
 	MaxDiagnostics                 = 512
 	verificationMutationTurnWindow = 100
 	repairCommandTurnWindow        = 20
