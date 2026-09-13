@@ -257,6 +257,58 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	if len(ordinary.Candidates) != 0 {
 		t.Fatalf("ordinary command success produced %+v", ordinary.Candidates)
 	}
+
+	verifyAgain := candidateTurn("ses_success", 6, transcript.RoleToolCall)
+	verifyAgain.Payload.ToolCallID = "verify_2"
+	verifyAgain.Payload.RawCommand = "go test ./internal/..."
+	resultAgain := candidateTurn("ses_success", 7, transcript.RoleToolResult)
+	resultAgain.Payload.ToolCallID = "verify_2"
+	resultAgain.Payload.ToolIsError = &notError
+	resultAgain.Payload.ToolResult = "ok"
+	verifyAgainRef := candidateTurnRef(verifyAgain)
+	resultAgainRef := candidateTurnRef(resultAgain)
+	passAgain := candidateOutcome(
+		testProject,
+		"ses_success",
+		trajectory.OutcomeVerificationPass,
+		trajectory.ResultSucceeded,
+		resultAgain.OccurredAt,
+		[]trajectory.NodeRef{verifyAgainRef, resultAgainRef},
+	)
+	verifiesAgain := candidateEdge(
+		testProject,
+		"ses_success",
+		verifyAgainRef,
+		trajectory.RelationVerifies,
+		eventRef,
+		verifyAgain.OccurredAt,
+		[]trajectory.NodeRef{verifyAgainRef, editRef, eventRef},
+	)
+	grouped, err := Compile(Input{
+		ProjectIdentity: testProject,
+		Turns: []transcript.Turn{
+			edit,
+			verify,
+			result,
+			verifyAgain,
+			resultAgain,
+		},
+		Edges:    []trajectory.Edge{verifies, verifiesAgain},
+		Outcomes: []trajectory.Outcome{pass, passAgain},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grouped.Candidates) != 1 {
+		t.Fatalf("shared mutation produced %+v", grouped.Candidates)
+	}
+	groupedCandidate := grouped.Candidates[0]
+	if len(groupedCandidate.OutcomeRefs) != 2 ||
+		groupedCandidate.Proposal.Verifier.Command == nil ||
+		groupedCandidate.Proposal.Verifier.Command.Command !=
+			"go test ./internal/..." {
+		t.Fatalf("grouped candidate = %+v", groupedCandidate)
+	}
 }
 
 func TestCompileFailedApproachRequiresExplicitFailureAndRepair(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	ExtractorVersion         = "belay.experience-candidate.det.v3"
+	ExtractorVersion         = "belay.experience-candidate.det.v4"
 	maxCandidateEvidenceRefs = 32
 	maxCandidateOutcomeRefs  = 16
 	maxCandidateExcerptBytes = 16 * 1024
@@ -199,6 +199,7 @@ func (value *compiler) compileCorrections() error {
 }
 
 func (value *compiler) compileSuccessfulProcedures() error {
+	records := make([]successfulProcedureRecord, 0)
 	for _, outcome := range value.outcomes {
 		if !qualifyingOutcome(
 			outcome,
@@ -223,43 +224,78 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		if len(verifies) == 0 {
 			continue
 		}
-		sourceRefs := []trajectory.NodeRef{callRef, resultRef}
+		evidenceRefs := []trajectory.NodeRef{callRef, resultRef}
+		mutationRefs := make([]trajectory.NodeRef, 0)
 		generatedAt := maxTime(outcome.OccurredAt, call.OccurredAt, result.OccurredAt)
 		for _, edge := range verifies {
-			sourceRefs = append(sourceRefs, edge.SourceRefs...)
+			evidenceRefs = append(evidenceRefs, edge.SourceRefs...)
 			generatedAt = maxTime(generatedAt, edge.OccurredAt)
+			for _, ref := range edge.SourceRefs {
+				turn, ok := value.turn(ref)
+				if ok && turn.Role == transcript.RoleToolCall &&
+					len(transcriptissues.ExtractEditedFiles(turn)) > 0 {
+					mutationRefs = append(mutationRefs, ref)
+				}
+			}
 		}
+		records = append(records, successfulProcedureRecord{
+			SessionKey:        outcome.SessionKey,
+			OutcomeID:         outcome.OutcomeID,
+			VerifierCallRef:   callRef,
+			VerifierResultRef: resultRef,
+			VerifierTurn:      call.TurnIndex,
+			CommandClass:      commandClass,
+			RawCommand:        rawCommand,
+			MutationRefs:      mutationRefs,
+			EvidenceRefs:      evidenceRefs,
+			GeneratedAt:       generatedAt,
+		})
+	}
+
+	for _, episode := range buildEvidenceEpisodes(records) {
+		sourceRefs := append(
+			[]trajectory.NodeRef(nil),
+			episode.EvidenceRefs...,
+		)
 		sourceRefs = append(
 			sourceRefs,
 			value.successfulProcedureContextRefs(
-				outcome.SessionKey,
+				episode.SessionKey,
 				sourceRefs,
 			)...,
 		)
-		evidence, ok := value.evidenceSet(sourceRefs, []trajectory.Outcome{outcome})
+		outcomes := value.outcomesByID(episode.OutcomeIDs)
+		if len(outcomes) != len(episode.OutcomeIDs) {
+			continue
+		}
+		evidence, ok := value.evidenceSet(sourceRefs, outcomes)
 		if !ok {
 			continue
+		}
+		observedBehavior := "The cited verification command succeeded after the cited file mutations."
+		if len(episode.Supporting) > 0 {
+			observedBehavior = "The cited verification commands succeeded after the same cited file mutations."
 		}
 		candidate, err := newCandidate(
 			experience.CandidateSuccessfulProcedure,
 			value.projectIdentity,
-			"The cited verification command succeeded after the cited file mutations.",
+			observedBehavior,
 			"",
 			evidence,
-			[]string{outcome.OutcomeID},
+			episode.OutcomeIDs,
 			pendingProposal(
 				experience.ExperienceProcedure,
 				value.projectIdentity,
 				experience.Verifier{
 					Kind: experience.VerifierCommandSucceeded,
 					Command: &experience.CommandVerifierSpec{
-						Command:          rawCommand,
-						CommandClass:     commandClass,
+						Command:          episode.Anchor.RawCommand,
+						CommandClass:     episode.Anchor.CommandClass,
 						ScrubbingVersion: commandScrubbingVersion,
 					},
 				},
 			),
-			generatedAt,
+			episode.GeneratedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("compile successful-procedure candidate: %w", err)
@@ -267,6 +303,23 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		value.candidates[candidate.CandidateID] = candidate
 	}
 	return nil
+}
+
+func (value *compiler) outcomesByID(ids []string) []trajectory.Outcome {
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	result := make([]trajectory.Outcome, 0, len(ids))
+	for _, outcome := range value.outcomes {
+		if wanted[outcome.OutcomeID] {
+			result = append(result, outcome)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].OutcomeID < result[j].OutcomeID
+	})
+	return result
 }
 
 func (value *compiler) compileFailedApproaches() error {
