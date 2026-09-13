@@ -186,6 +186,29 @@ func TestExportedTrajectoryClassifiersReuseDetectorSemantics(t *testing.T) {
 	}
 }
 
+func TestStructuredToolResultsRequireExplicitFailureFields(t *testing.T) {
+	patchResult := transcript.Turn{
+		Role: transcript.RoleToolResult,
+		Payload: transcript.Payload{
+			ToolResult: `{"file":{"patch":"return errors.New(\"not failed\")"}}`,
+		},
+	}
+	if turnFailed(patchResult) {
+		t.Fatal("structured patch output was misclassified as a failure")
+	}
+	errorResult := transcript.Turn{
+		Role: transcript.RoleToolResult,
+		Payload: transcript.Payload{
+			ToolResult: `{"error":"permission denied for /tmp/run-123"}`,
+		},
+	}
+	signature := normalizedErrorSignature(errorResult)
+	if !turnFailed(errorResult) ||
+		signature != "permission denied for <tmp>" {
+		t.Fatalf("structured failure/signature = %t/%q", turnFailed(errorResult), signature)
+	}
+}
+
 func TestCommandRepairFamilyIsConservativeAndUnwrapsEnvironment(t *testing.T) {
 	tests := []struct {
 		command string

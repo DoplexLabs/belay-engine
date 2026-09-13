@@ -3689,6 +3689,10 @@ h1 {
   min-height: 44px;
 }
 
+.modal-actions .agent-copy-codex {
+  margin-right: auto;
+}
+
 .report-evidence-layer {
   padding: 0;
   place-items: stretch end;
@@ -3975,7 +3979,7 @@ h1 {
 }
 
 .mission-pack-actions .primary-button {
-  margin-right: auto;
+  margin-right: 0;
 }
 
 @keyframes spin {

@@ -127,9 +127,10 @@ func (s *Service) GetReport(ctx context.Context) (Report, error) {
 			CostLowerBound:     usage.Totals.CostLowerBound,
 			TokenLowerBound:    usage.Totals.TokensLowerBound,
 			Notes: []string{
-				"Token and dollar totals include only sessions with retained usage data; unknown model prices are never estimated.",
-				"Issue costs can overlap when the same turns support more than one detector.",
-				"Waste percentage is omitted when total spend is incomplete or overlapping attributed costs exceed it.",
+				"Token operations include input, output, cache reads, and cache writes from retained usage data.",
+				"Dollars are direct-API list-price equivalents, not a billing statement; unknown model prices are never estimated.",
+				"Each turn is counted once per issue, and once across detectors in the total attributed-spend percentage.",
+				"Issue minutes estimate active elapsed time and exclude pauses longer than 30 minutes; session span retains the harness session's full first-to-last timestamp range.",
 				"Fix recurrence and before/after cost verification are deferred.",
 			},
 		},

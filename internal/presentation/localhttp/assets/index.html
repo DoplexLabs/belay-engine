@@ -151,11 +151,11 @@
                       <dd id="brief-session-count">—</dd>
                     </div>
                     <div>
-                      <dt>Hours</dt>
+                      <dt>Session span</dt>
                       <dd id="brief-agent-count">—</dd>
                     </div>
                     <div>
-                      <dt>Tokens</dt>
+                      <dt>Token operations</dt>
                       <dd id="brief-outcome-count">—</dd>
                     </div>
                     <div>
@@ -1317,8 +1317,8 @@
       >
         <header class="modal-header">
           <div>
-            <p class="eyebrow">Next session</p>
-            <h2 id="mission-pack-dialog-title">Mission Pack</h2>
+            <p class="eyebrow">For your next session</p>
+            <h2 id="mission-pack-dialog-title">Agent guidance</h2>
           </div>
           <button
             class="modal-close"
@@ -1331,7 +1331,8 @@
         </header>
         <div class="modal-scroll mission-pack-scroll">
           <p id="mission-pack-dialog-description">
-            Preview only. Your agent must ask before using this guidance.
+            Review what Belay recommends carrying forward. Nothing applies
+            until you approve it in your agent session.
           </p>
           <div
             class="mission-pack-loading"
@@ -1340,7 +1341,7 @@
             aria-live="polite"
           >
             <span class="spinner" aria-hidden="true"></span>
-            <p>Preparing from local evidence…</p>
+            <p>Preparing guidance from local evidence…</p>
           </div>
           <div
             class="mission-pack-error"
@@ -1368,11 +1369,19 @@
         <footer class="modal-actions mission-pack-actions">
           <button
             class="primary-button"
-            id="mission-pack-copy"
+            id="mission-pack-copy-claude"
             type="button"
             disabled
           >
-            Copy Belay start commands
+            Copy for Claude Code
+          </button>
+          <button
+            class="secondary-button agent-copy-codex"
+            id="mission-pack-copy-codex"
+            type="button"
+            disabled
+          >
+            Copy for Codex
           </button>
           <button
             class="secondary-button"
@@ -1422,7 +1431,8 @@
         </header>
         <div class="modal-scroll report-evidence-scroll">
           <p id="report-evidence-dialog-description">
-            Full local transcript excerpts and the complete suggested fix.
+            The transcript excerpts behind this pattern and the fix to carry
+            into your next agent session.
           </p>
           <section
             class="report-evidence-section"
@@ -1442,10 +1452,17 @@
         <footer class="modal-actions">
           <button
             class="primary-button"
-            id="report-evidence-fix-command"
+            id="report-evidence-copy-claude"
             type="button"
           >
-            Copy fix commands
+            Copy for Claude Code
+          </button>
+          <button
+            class="secondary-button agent-copy-codex"
+            id="report-evidence-copy-codex"
+            type="button"
+          >
+            Copy for Codex
           </button>
           <button
             class="secondary-button"

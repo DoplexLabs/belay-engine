@@ -529,7 +529,7 @@ func TestImportTranscriptsFinalizesPendingCodexUsageOnInactivity(t *testing.T) {
 		store.calls[1].session.Coverage != belaytranscript.CoverageComplete ||
 		len(store.calls[1].turns) != 1 ||
 		store.calls[1].turns[0].InputTokens == nil ||
-		*store.calls[1].turns[0].InputTokens != 100 {
+		*store.calls[1].turns[0].InputTokens != 75 {
 		t.Fatalf("finalized Codex import = %+v", store.calls)
 	}
 }

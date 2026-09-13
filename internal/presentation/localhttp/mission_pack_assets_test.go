@@ -14,10 +14,13 @@ func TestMissionPackBrowserContract(t *testing.T) {
 		`id="mission-pack-dialog"`,
 		`id="mission-pack-loading"`,
 		`id="mission-pack-content"`,
-		`id="mission-pack-copy"`,
+		`id="mission-pack-copy-claude"`,
+		`id="mission-pack-copy-codex"`,
 		`id="mission-pack-show-evidence"`,
-		`id="report-evidence-fix-command"`,
-		`Copy fix commands`,
+		`id="report-evidence-copy-claude"`,
+		`id="report-evidence-copy-codex"`,
+		`Copy for Claude Code`,
+		`Copy for Codex`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("Mission Pack browser shell is missing %q", required)
@@ -31,9 +34,10 @@ func TestMissionPackBrowserContract(t *testing.T) {
 		`missionPackCacheByID.set(pack.pack_id, pack);`,
 		`missionPackCacheByID.clear();`,
 		`state.missionPackRequestController.abort();`,
-		"`/belay start --issue ${issueID}`",
-		"`$belay start --issue ${issueID}`",
-		"Claude Code: /belay ${issueID}\\nCodex: $belay ${issueID}",
+		"`/belay start --issue ${selector}`",
+		"`$belay start --issue ${selector}`",
+		`agentIssueCommand("claude", issueID)`,
+		`agentIssueCommand("codex", issueID)`,
 		`openReportEvidenceDrawer(issue);`,
 		`state.activeModal === "mission-pack"`,
 		`document.createTextNode`,
@@ -70,13 +74,14 @@ func TestMissionPackDrawerShowsOnlyActionableUserMetadata(t *testing.T) {
 
 	for _, required := range []string{
 		`const isEmpty = readText(pack.status).toLowerCase() === "empty";`,
-		`elements.missionPackCopy.disabled = isEmpty;`,
+		`elements.missionPackCopyClaude.disabled = isEmpty;`,
+		`elements.missionPackCopyCodex.disabled = isEmpty;`,
 		`"Belay found no useful guidance for this session."`,
 		`if (pack.known_traps.length)`,
 		`if (pack.operating_rules.length)`,
 		`if (pack.verification.length)`,
 		`if (pack.completion_checklist.length)`,
-		`Target: ${readText(value.target_file)}`,
+		`Target: ${compactDisplayPath(value.target_file)}`,
 	} {
 		if !strings.Contains(renderer, required) {
 			t.Errorf("Mission Pack drawer polish is missing %q", required)

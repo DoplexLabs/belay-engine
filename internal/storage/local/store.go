@@ -1676,6 +1676,8 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if version == 9 {
 			err = withMutationTx(ctx, tx, mutationProjectionRebuild, apply)
+		} else if version == 25 {
+			err = withMutationTx(ctx, tx, mutationTranscriptIngestion, apply)
 		} else {
 			err = apply()
 		}

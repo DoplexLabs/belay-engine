@@ -110,6 +110,7 @@ type CorrectionCandidate struct {
 type Analysis struct {
 	Issues               []Issue               `json:"issues"`
 	CorrectionCandidates []CorrectionCandidate `json:"correction_candidates"`
+	AttributedCost       Cost                  `json:"attributed_cost"`
 }
 
 type Query struct {

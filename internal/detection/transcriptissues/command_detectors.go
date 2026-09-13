@@ -94,9 +94,13 @@ func retryLoopObservations(
 	result := make([]observation, 0, len(attempts))
 	for index, attempt := range attempts {
 		valueCost := issueintel.Cost{}
+		var valueSpans []costSpan
 		valueExcerpts := []issueintel.Excerpt{excerptFromTurn(attempt.result)}
 		if index == 0 {
 			valueCost = cost
+			valueSpans = []costSpan{
+				windowSpan(session, first.resultIndex, last.resultIndex),
+			}
 			valueExcerpts = excerpts
 		}
 		result = append(result, observation{
@@ -104,6 +108,7 @@ func retryLoopObservations(
 			fingerprint: fingerprint,
 			subject:     commandSubject(first.normalized),
 			cost:        valueCost,
+			costSpans:   valueSpans,
 			session:     sessionRef(session),
 			firstSeen:   first.result.OccurredAt,
 			lastSeen:    last.result.OccurredAt,
@@ -161,7 +166,26 @@ func detectRecurringErrors(
 			attempts := value.attempts[signature]
 			first := attempts[0]
 			last := attempts[len(attempts)-1]
-			cost := windowCost(value.session.turns, first.callIndex, last.resultIndex)
+			cost := issueintel.Cost{}
+			spans := make([]costSpan, 0, len(attempts))
+			for _, attempt := range attempts {
+				cost = mergeCost(
+					cost,
+					windowCost(
+						value.session.turns,
+						attempt.callIndex,
+						attempt.resultIndex,
+					),
+				)
+				spans = append(
+					spans,
+					windowSpan(
+						value.session,
+						attempt.callIndex,
+						attempt.resultIndex,
+					),
+				)
+			}
 			excerpts := make([]issueintel.Excerpt, 0, maxExcerpts)
 			for _, attempt := range attempts {
 				if len(excerpts) == maxExcerpts {
@@ -171,11 +195,13 @@ func detectRecurringErrors(
 			}
 			for index, attempt := range attempts {
 				valueCost := issueintel.Cost{}
+				var valueSpans []costSpan
 				valueExcerpts := []issueintel.Excerpt{
 					excerptFromTurn(attempt.result),
 				}
 				if index == 0 {
 					valueCost = cost
+					valueSpans = spans
 					valueExcerpts = excerpts
 				}
 				result = append(result, observation{
@@ -183,6 +209,7 @@ func detectRecurringErrors(
 					fingerprint: project.project.Identity + "\x00" + signature,
 					subject:     "`" + signature + "`",
 					cost:        valueCost,
+					costSpans:   valueSpans,
 					session:     sessionRef(value.session),
 					firstSeen:   first.result.OccurredAt,
 					lastSeen:    last.result.OccurredAt,
@@ -278,6 +305,13 @@ func detectPermissionChurn(
 					value.callIndex,
 					value.userIndex,
 				),
+				costSpans: []costSpan{
+					windowSpan(
+						value.session,
+						value.callIndex,
+						value.userIndex,
+					),
+				},
 				session:    sessionRef(value.session),
 				firstSeen:  first,
 				lastSeen:   last,
@@ -338,9 +372,28 @@ func detectFileThrash(
 			}
 			for index, edit := range edits {
 				valueCost := issueintel.Cost{}
+				var valueSpans []costSpan
 				valueExcerpts := []issueintel.Excerpt{excerptFromTurn(edit.turn)}
 				if index == 0 {
 					valueCost = cost
+					valueSpans = make([]costSpan, 0, len(edits))
+					for _, selected := range edits {
+						billable := associatedBillableIndex(
+							session.turns,
+							selected.index,
+						)
+						if billable < 0 {
+							billable = selected.index
+						}
+						valueSpans = append(
+							valueSpans,
+							windowSpan(
+								session,
+								billable,
+								billable,
+							),
+						)
+					}
 					valueExcerpts = excerpts
 				}
 				result = append(result, observation{
@@ -348,6 +401,7 @@ func detectFileThrash(
 					fingerprint: file,
 					subject:     "`" + file + "`",
 					cost:        valueCost,
+					costSpans:   valueSpans,
 					session:     sessionRef(session),
 					firstSeen:   edits[0].turn.OccurredAt,
 					lastSeen:    edits[len(edits)-1].turn.OccurredAt,
@@ -406,9 +460,23 @@ func matchingToolResult(
 	for index := callIndex + 1; index < len(turns) && index-callIndex <= 8; index++ {
 		turn := turns[index]
 		if turn.Role == transcript.RoleToolResult {
-			if callID == "" ||
-				turn.Payload.ToolCallID == "" ||
-				turn.Payload.ToolCallID == callID {
+			resultID := strings.TrimSpace(turn.Payload.ToolCallID)
+			callTool := strings.TrimSpace(call.ToolName)
+			resultTool := strings.TrimSpace(turn.ToolName)
+			if callID != "" && resultID != "" {
+				if resultID == callID {
+					return index, turn, true
+				}
+				continue
+			}
+			if callTool != "" && resultTool != "" &&
+				!strings.EqualFold(callTool, resultTool) {
+				continue
+			}
+			if callID == "" && resultID != "" {
+				continue
+			}
+			if callID == "" || resultID == "" {
 				return index, turn, true
 			}
 		}
@@ -477,11 +545,6 @@ func selectedTurnCost(edits []fileEdit) issueintel.Cost {
 		} else if turnTokens(edit.turn) > 0 {
 			result.LowerBound = true
 		}
-	}
-	if len(edits) > 1 {
-		result.WastedMinutes = edits[len(edits)-1].turn.OccurredAt.
-			Sub(edits[0].turn.OccurredAt).
-			Minutes()
 	}
 	if known {
 		result.WastedUSD = &usd

@@ -8,16 +8,18 @@ import (
 )
 
 const (
-	Version         = "belay.transcript-issues.v1"
+	Version         = "belay.transcript-issues.v2"
 	maxProjectTurns = 500_000
 	maxExcerpts     = 5
+	maxActiveGap    = 30 * time.Minute
 )
 
 type preparedProject struct {
-	project  issueintel.Project
-	config   issueintel.ProjectConfig
-	sessions []preparedSession
-	now      time.Time
+	project       issueintel.Project
+	scopeIdentity string
+	config        issueintel.ProjectConfig
+	sessions      []preparedSession
+	now           time.Time
 }
 
 type preparedSession struct {
@@ -30,6 +32,8 @@ type observation struct {
 	fingerprint string
 	subject     string
 	cost        issueintel.Cost
+	costSpans   []costSpan
+	timeSpans   []costSpan
 	session     issueintel.SessionRef
 	firstSeen   time.Time
 	lastSeen    time.Time
@@ -38,11 +42,19 @@ type observation struct {
 	fix         issueintel.SuggestedFix
 }
 
+type costSpan struct {
+	session issueintel.SessionRef
+	start   int
+	end     int
+}
+
 type observationGroup struct {
 	detectorID  string
 	fingerprint string
 	subject     string
 	cost        issueintel.Cost
+	costSpans   []costSpan
+	timeSpans   []costSpan
 	sessions    map[string]issueintel.SessionRef
 	firstSeen   time.Time
 	lastSeen    time.Time

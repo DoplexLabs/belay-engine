@@ -23,6 +23,7 @@ func TestMigration015CostIssueSchemaConstraintsIndexesAndBackfill(t *testing.T) 
 		"transcript_project_analysis_state",
 		"cost_issues",
 		"correction_candidates",
+		"project_issue_cost_totals",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, `
@@ -52,8 +53,8 @@ func TestMigration015CostIssueSchemaConstraintsIndexesAndBackfill(t *testing.T) 
 	var migrations int
 	if err := store.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM schema_migrations",
-	).Scan(&migrations); err != nil || migrations != 24 {
-		t.Fatalf("migration count/error = %d/%v, want 24", migrations, err)
+	).Scan(&migrations); err != nil || migrations != 25 {
+		t.Fatalf("migration count/error = %d/%v, want 25", migrations, err)
 	}
 
 	tx, err := store.db.BeginTx(ctx, nil)

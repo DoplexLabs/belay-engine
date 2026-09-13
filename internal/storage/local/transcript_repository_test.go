@@ -154,7 +154,8 @@ func TestAppendTranscriptBatchReplayEncryptionNullsAggregatesAndOrdering(
 		gotSession.TotalOutputTokens == nil ||
 		*gotSession.TotalOutputTokens != outputTokens ||
 		gotSession.TotalTokens == nil ||
-		*gotSession.TotalTokens != inputTokens+outputTokens ||
+		*gotSession.TotalTokens != inputTokens+outputTokens+
+			cacheReadTokens+cacheWriteTokens ||
 		gotSession.TotalCacheReadTokens == nil ||
 		*gotSession.TotalCacheReadTokens != cacheReadTokens ||
 		gotSession.TotalCacheWriteTokens == nil ||

@@ -57,6 +57,9 @@ func (s *Store) ReplaceProjectIssueAnalysis(
 	if expectedGeneration < 1 {
 		return errors.New("invalid expected transcript generation")
 	}
+	if err := validateAttributedCost(analysis.AttributedCost); err != nil {
+		return err
+	}
 
 	type encryptedIssue struct {
 		issue   issueintel.Issue
@@ -170,6 +173,13 @@ func (s *Store) ReplaceProjectIssueAnalysis(
 		); err != nil {
 			return errors.New("replace project correction candidates")
 		}
+		if _, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM project_issue_cost_totals WHERE project_identity = ?",
+			project.Identity,
+		); err != nil {
+			return errors.New("replace project issue cost total")
+		}
 		for _, value := range issues {
 			issue := value.issue
 			known := issue.Cost.WastedUSD != nil
@@ -218,6 +228,29 @@ func (s *Store) ReplaceProjectIssueAnalysis(
 			); err != nil {
 				return fmt.Errorf("persist correction candidate: %w", err)
 			}
+		}
+		attributed := analysis.AttributedCost
+		attributedKnown := attributed.WastedUSD != nil ||
+			!attributed.LowerBound
+		attributedUSD := attributed.WastedUSD
+		if attributedKnown && attributedUSD == nil {
+			zero := 0.0
+			attributedUSD = &zero
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO project_issue_cost_totals (
+				project_identity, attributed_minutes, attributed_tokens,
+				attributed_usd, attributed_usd_known, lower_bound, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			project.Identity,
+			attributed.WastedMinutes,
+			attributed.WastedTokens,
+			nullableFloat64(attributedUSD),
+			boolInt(attributedKnown),
+			boolInt(attributed.LowerBound),
+			now,
+		); err != nil {
+			return fmt.Errorf("persist project issue cost total: %w", err)
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE transcript_project_analysis_state
@@ -739,6 +772,17 @@ func validateCostIssue(project issueintel.Project, issue issueintel.Issue) error
 		issue.LastSeen.IsZero() ||
 		issue.LastSeen.Before(issue.FirstSeen) {
 		return errors.New("invalid cost issue")
+	}
+	return nil
+}
+
+func validateAttributedCost(cost issueintel.Cost) error {
+	if cost.WastedMinutes < 0 ||
+		math.IsNaN(cost.WastedMinutes) ||
+		math.IsInf(cost.WastedMinutes, 0) ||
+		cost.WastedTokens < 0 ||
+		!validNullableCost(cost.WastedUSD) {
+		return errors.New("invalid attributed issue cost")
 	}
 	return nil
 }
