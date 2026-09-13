@@ -145,6 +145,8 @@ func TestCompileCorrectionRequiresRealMarkerAndExactEdges(t *testing.T) {
 }
 
 func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t *testing.T) {
+	priorUser := candidateTurn("ses_success", 0, transcript.RoleUser)
+	priorUser.Payload.Text = "Make the migration retry-safe."
 	edit := candidateTurn("ses_success", 1, transcript.RoleToolCall)
 	edit.ToolName = "Edit"
 	edit.Payload.ToolCallID = "edit_1"
@@ -157,6 +159,16 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	notError := false
 	result.Payload.ToolIsError = &notError
 	result.Payload.ToolResult = "ok"
+	followingUser := candidateTurn("ses_success", 4, transcript.RoleUser)
+	followingUser.Payload.Text =
+		"No partial migrations. Keep the schema change atomic."
+	followingAssistant := candidateTurn(
+		"ses_success",
+		5,
+		transcript.RoleAssistant,
+	)
+	followingAssistant.Payload.Text =
+		"The reusable convention is one rollback-safe migration transaction."
 	editRef := candidateTurnRef(edit)
 	verifyRef := candidateTurnRef(verify)
 	resultRef := candidateTurnRef(result)
@@ -184,9 +196,16 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 
 	got, err := Compile(Input{
 		ProjectIdentity: testProject,
-		Turns:           []transcript.Turn{edit, verify, result},
-		Edges:           []trajectory.Edge{verifies},
-		Outcomes:        []trajectory.Outcome{pass},
+		Turns: []transcript.Turn{
+			priorUser,
+			edit,
+			verify,
+			result,
+			followingUser,
+			followingAssistant,
+		},
+		Edges:    []trajectory.Edge{verifies},
+		Outcomes: []trajectory.Outcome{pass},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +214,21 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 		got.Candidates[0].Family != experience.CandidateSuccessfulProcedure ||
 		got.Candidates[0].Proposal.Verifier.Kind != experience.VerifierCommandSucceeded {
 		t.Fatalf("successful procedure candidates = %+v", got.Candidates)
+	}
+	contextIndexes := map[int64]bool{}
+	for _, ref := range got.Candidates[0].Evidence.Refs {
+		if ref.TurnIndex != nil {
+			contextIndexes[*ref.TurnIndex] = true
+		}
+	}
+	for _, want := range []int64{0, 4, 5} {
+		if !contextIndexes[want] {
+			t.Fatalf(
+				"successful procedure evidence lacks context turn %d: %+v",
+				want,
+				got.Candidates[0].Evidence.Refs,
+			)
+		}
 	}
 
 	withoutMutationEdge, err := Compile(Input{
