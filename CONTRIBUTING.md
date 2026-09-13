@@ -48,7 +48,7 @@ make verify-release-surface
 On an Apple Silicon Mac, a local non-publishing package check is:
 
 ```bash
-make alpha-readiness ALPHA_VERSION=0.0.1-alpha.1
+make alpha-readiness ALPHA_VERSION=0.0.1-alpha.4
 ```
 
 The packaging command requires a clean checkout by default. A dirty artifact

@@ -6,11 +6,16 @@ on:
       version:
         description: Developer Alpha version label
         required: true
-        default: 0.0.1-alpha.1
+        default: 0.0.1-alpha.4
         type: string
+      publish:
+        description: Publish the verified archive as an unsigned prerelease
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ALPHA_VERSION: ${{ inputs.version }}
@@ -36,6 +41,7 @@ jobs:
 
       - name: Validate scripts
         run: |
+          grep -F "readonly DEFAULT_VERSION=\"${ALPHA_VERSION}\"" scripts/install.sh
           bash -n scripts/build-developer-preview.sh
           bash -n scripts/smoke-developer-preview.sh
           bash -n scripts/alpha-readiness.sh
@@ -69,6 +75,35 @@ jobs:
         run: |
           scripts/smoke-developer-preview.sh \
             "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz"
+
+      - name: Publish unsigned GitHub prerelease
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "${RUNNER_TEMP}/release-notes.md" <<EOF
+          Belay Local ${ALPHA_VERSION} for Apple Silicon macOS.
+
+          This external alpha is unsigned and unnotarized. It is intended for
+          informed testers who explicitly accept that limitation.
+
+          Install:
+
+          \`\`\`bash
+          curl -fsSL https://getbelay.vercel.app/install | bash
+          \`\`\`
+
+          Belay runs locally, uploads nothing, and requires no account.
+          EOF
+          gh release create "v${ALPHA_VERSION}" \
+            --repo DoplexLabs/belay-engine \
+            --prerelease \
+            --target "${GITHUB_SHA}" \
+            --title "Belay Local ${ALPHA_VERSION}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
+            "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz" \
+            "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz.sha256" \
+            "scripts/install.sh"
 
       - name: Upload short-lived workflow artifact
         uses: actions/upload-artifact@v7
