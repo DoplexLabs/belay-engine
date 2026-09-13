@@ -238,12 +238,6 @@ func ExecuteMissionPackBenchmarkRun(
 	); reason != "" {
 		exclusionReasons = append(exclusionReasons, reason)
 	}
-	if len(contamination) != 0 {
-		exclusionReasons = append(
-			exclusionReasons,
-			"runtime_network_command_attempt",
-		)
-	}
 	if usage.CostUSD == nil {
 		exclusionReasons = append(
 			exclusionReasons,
@@ -288,7 +282,7 @@ func ExecuteMissionPackBenchmarkRun(
 		WorkspaceStatusPath: statusPath,
 		ScorePath:           scorePath,
 		HiddenSuitePassed:   accepted,
-		AcceptedCompletion:  accepted && underCaps,
+		AcceptedCompletion:  accepted && underCaps && len(contamination) == 0,
 		UnderCaps:           underCaps,
 		WallCapHit:          wallCapHit,
 		TokenCapHit:         tokenCapHit,
