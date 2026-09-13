@@ -234,11 +234,12 @@ func TestRunPreparesMissionPackBenchmarkRunWithoutHarnessInvocation(
 	directory := t.TempDir()
 	benchmarkRoot := filepath.Join(directory, "benchmark")
 	for name, body := range map[string]string{
-		"config/task-a-prompt.txt": "Frozen task prompt.\n",
-		"task/settings.gradle.kts": "rootProject.name = \"fixture\"\n",
-		"task/src/Contract.kt":     "interface Contract\n",
-		"arms/static/AGENTS.md":    "static\n",
-		"arms/static/CLAUDE.md":    "static\n",
+		"config/task-a-prompt.txt":     "Frozen task prompt.\n",
+		"config/codex-benchmark.rules": "frozen codex benchmark rule\n",
+		"task/settings.gradle.kts":     "rootProject.name = \"fixture\"\n",
+		"task/src/Contract.kt":         "interface Contract\n",
+		"arms/static/AGENTS.md":        "static\n",
+		"arms/static/CLAUDE.md":        "static\n",
 	} {
 		path := filepath.Join(benchmarkRoot, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -43,7 +43,7 @@ func TestPrepareMissionPackBenchmarkRunIsolatesNoContextRun(t *testing.T) {
 		manifest.Environment["HOME"] != manifest.HarnessHomePath {
 		t.Fatalf("environment = %+v", manifest.Environment)
 	}
-	if !slices.Contains(manifest.Command.Arguments, "--ignore-rules") ||
+	if slices.Contains(manifest.Command.Arguments, "--ignore-rules") ||
 		!slices.Contains(manifest.Command.Arguments, "--ephemeral") ||
 		!slices.Contains(manifest.Command.Arguments, "--approve-for-me") ||
 		!argumentPairPresent(
@@ -54,6 +54,18 @@ func TestPrepareMissionPackBenchmarkRunIsolatesNoContextRun(t *testing.T) {
 		slices.Contains(manifest.Command.Arguments, "--ignore-user-config") ||
 		slices.Contains(manifest.Command.Arguments, "--sandbox") {
 		t.Fatalf("arguments = %q", manifest.Command.Arguments)
+	}
+	policyBody, err := os.ReadFile(manifest.ExecutionPolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(policyBody) != "frozen codex benchmark rule\n" ||
+		manifest.ExecutionPolicySHA256 == "" {
+		t.Fatalf(
+			"execution policy = %q, %q",
+			policyBody,
+			manifest.ExecutionPolicySHA256,
+		)
 	}
 	if _, err := os.Stat(filepath.Join(manifest.WorkspacePath, ".git")); err != nil {
 		t.Fatal(err)
@@ -132,11 +144,12 @@ func benchmarkFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	files := map[string]string{
-		"config/task-a-prompt.txt": "Frozen task prompt.\n",
-		"task/settings.gradle.kts": "rootProject.name = \"fixture\"\n",
-		"task/src/Contract.kt":     "interface Contract\n",
-		"arms/static/AGENTS.md":    "frozen static guidance\n",
-		"arms/static/CLAUDE.md":    "frozen static guidance\n",
+		"config/task-a-prompt.txt":     "Frozen task prompt.\n",
+		"config/codex-benchmark.rules": "frozen codex benchmark rule\n",
+		"task/settings.gradle.kts":     "rootProject.name = \"fixture\"\n",
+		"task/src/Contract.kt":         "interface Contract\n",
+		"arms/static/AGENTS.md":        "frozen static guidance\n",
+		"arms/static/CLAUDE.md":        "frozen static guidance\n",
 	}
 	for name, body := range files {
 		path := filepath.Join(root, name)

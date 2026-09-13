@@ -550,6 +550,33 @@ func validateExecutableBenchmarkManifest(
 	if _, err := existingDirectory(manifest.WorkspacePath, "benchmark workspace"); err != nil {
 		return err
 	}
+	switch manifest.Entry.Harness {
+	case MissionPackHarnessCodex:
+		if !pathWithin(manifest.HarnessHomePath, manifest.ExecutionPolicyPath) {
+			return errors.New(
+				"benchmark execution policy escapes the harness home",
+			)
+		}
+		digest, err := sha256Path(manifest.ExecutionPolicyPath)
+		if err != nil {
+			return fmt.Errorf(
+				"hash benchmark execution policy: %w",
+				err,
+			)
+		}
+		if digest != manifest.ExecutionPolicySHA256 {
+			return errors.New(
+				"benchmark execution policy hash is invalid",
+			)
+		}
+	case MissionPackHarnessClaude:
+		if manifest.ExecutionPolicyPath != "" ||
+			manifest.ExecutionPolicySHA256 != "" {
+			return errors.New(
+				"Claude benchmark execution policy is invalid",
+			)
+		}
+	}
 	return nil
 }
 

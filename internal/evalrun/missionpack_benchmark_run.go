@@ -47,6 +47,8 @@ type MissionPackBenchmarkRunManifest struct {
 	RawEventsPath            string                            `json:"raw_events_path"`
 	StderrPath               string                            `json:"stderr_path"`
 	PromptSHA256             string                            `json:"prompt_sha256"`
+	ExecutionPolicyPath      string                            `json:"execution_policy_path,omitempty"`
+	ExecutionPolicySHA256    string                            `json:"execution_policy_sha256,omitempty"`
 	InstructionChannel       string                            `json:"instruction_channel"`
 	MaxBudgetUSD             float64                           `json:"max_budget_usd"`
 	MaxTokenOperations       int64                             `json:"max_token_operations"`
@@ -158,6 +160,15 @@ func PrepareMissionPackBenchmarkRun(
 			)
 		}
 	}
+	executionPolicyPath, executionPolicySHA256, err :=
+		installBenchmarkExecutionPolicy(
+			benchmarkRoot,
+			harnessHome,
+			entry.Harness,
+		)
+	if err != nil {
+		return MissionPackBenchmarkRunManifest{}, err
+	}
 
 	cacheReady := false
 	if strings.TrimSpace(options.GradleCacheTemplate) != "" {
@@ -204,26 +215,28 @@ func PrepareMissionPackBenchmarkRun(
 	rawEvents := filepath.Join(rawRoot, string(entry.Harness)+"-events.jsonl")
 	stderr := filepath.Join(rawRoot, string(entry.Harness)+"-stderr.log")
 	return MissionPackBenchmarkRunManifest{
-		SchemaVersion:        MissionPackBenchmarkRunManifestSchemaVersion,
-		PreparedAt:           time.Now().UTC(),
-		Entry:                entry,
-		BenchmarkRoot:        benchmarkRoot,
-		RunRoot:              runRoot,
-		WorkspacePath:        workspace,
-		HarnessHomePath:      harnessHome,
-		BelayHomePath:        belayHome,
-		GradleHomePath:       gradleHome,
-		RawEventsPath:        rawEvents,
-		StderrPath:           stderr,
-		PromptSHA256:         hex.EncodeToString(promptDigest[:]),
-		InstructionChannel:   instructionChannel,
-		MaxBudgetUSD:         options.MaxBudgetUSD,
-		MaxTokenOperations:   options.MaxTokenOperations,
-		WallTimeoutSeconds:   options.WallTimeoutSeconds,
-		DependencyCacheReady: cacheReady,
-		Launchable:           len(blockers) == 0,
-		Blockers:             blockers,
-		Environment:          environment,
+		SchemaVersion:         MissionPackBenchmarkRunManifestSchemaVersion,
+		PreparedAt:            time.Now().UTC(),
+		Entry:                 entry,
+		BenchmarkRoot:         benchmarkRoot,
+		RunRoot:               runRoot,
+		WorkspacePath:         workspace,
+		HarnessHomePath:       harnessHome,
+		BelayHomePath:         belayHome,
+		GradleHomePath:        gradleHome,
+		RawEventsPath:         rawEvents,
+		StderrPath:            stderr,
+		PromptSHA256:          hex.EncodeToString(promptDigest[:]),
+		ExecutionPolicyPath:   executionPolicyPath,
+		ExecutionPolicySHA256: executionPolicySHA256,
+		InstructionChannel:    instructionChannel,
+		MaxBudgetUSD:          options.MaxBudgetUSD,
+		MaxTokenOperations:    options.MaxTokenOperations,
+		WallTimeoutSeconds:    options.WallTimeoutSeconds,
+		DependencyCacheReady:  cacheReady,
+		Launchable:            len(blockers) == 0,
+		Blockers:              blockers,
+		Environment:           environment,
 		InheritedEnvironmentKeys: benchmarkInheritedEnvironmentKeys(
 			os.Environ(),
 		),
@@ -585,7 +598,6 @@ func benchmarkHarnessCommand(
 			"--json",
 			"--ephemeral",
 			"--approve-for-me",
-			"--ignore-rules",
 			"--add-dir", gradleHome,
 			"--model", model,
 			"--cd", workspace,
@@ -599,4 +611,47 @@ func benchmarkHarnessCommand(
 	default:
 		panic("validated benchmark harness was not handled")
 	}
+}
+
+func installBenchmarkExecutionPolicy(
+	benchmarkRoot string,
+	harnessHome string,
+	harness MissionPackBenchmarkHarness,
+) (string, string, error) {
+	if harness != MissionPackHarnessCodex {
+		return "", "", nil
+	}
+	source := filepath.Join(
+		benchmarkRoot,
+		"config",
+		"codex-benchmark.rules",
+	)
+	body, err := os.ReadFile(source)
+	if err != nil {
+		return "", "", fmt.Errorf(
+			"read frozen Codex execution policy: %w",
+			err,
+		)
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return "", "", errors.New(
+			"frozen Codex execution policy is empty",
+		)
+	}
+	rulesRoot := filepath.Join(harnessHome, "rules")
+	if err := os.MkdirAll(rulesRoot, 0o700); err != nil {
+		return "", "", fmt.Errorf(
+			"create Codex execution policy directory: %w",
+			err,
+		)
+	}
+	destination := filepath.Join(rulesRoot, "benchmark.rules")
+	if err := os.WriteFile(destination, body, 0o600); err != nil {
+		return "", "", fmt.Errorf(
+			"write Codex execution policy: %w",
+			err,
+		)
+	}
+	digest := sha256.Sum256(body)
+	return destination, hex.EncodeToString(digest[:]), nil
 }
