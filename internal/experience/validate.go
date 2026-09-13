@@ -168,7 +168,8 @@ func (value SemanticProposalProvenance) Validate() error {
 		SemanticProposalPromptVersionV6,
 		SemanticProposalPromptVersionV7,
 		SemanticProposalPromptVersionV8,
-		SemanticProposalPromptVersionV9:
+		SemanticProposalPromptVersionV9,
+		SemanticProposalPromptVersionV10:
 	default:
 		return errors.New("semantic proposal prompt version is unsupported")
 	}

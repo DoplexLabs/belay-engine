@@ -824,11 +824,17 @@ func TestAnalyzeExperienceCandidatesStoresExactlyOneResultPerBranch(
 		proposed.ProjectIdentity,
 		SemanticHarnessClaude,
 		func(
-			context.Context,
-			SemanticHarness,
-			[]byte,
-			[]byte,
+			_ context.Context,
+			_ SemanticHarness,
+			prompt []byte,
+			_ []byte,
 		) (ExperienceSemanticHarnessResult, error) {
+			if !bytes.Contains(
+				prompt,
+				[]byte("necessary exact command or path"),
+			) {
+				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+			}
 			return ExperienceSemanticHarnessResult{
 				Output: output,
 				Model:  "claude-test",
@@ -868,11 +874,17 @@ func TestAnalyzeExperienceCandidatesReportsDispositionReplays(t *testing.T) {
 		candidate.ProjectIdentity,
 		SemanticHarnessClaude,
 		func(
-			context.Context,
-			SemanticHarness,
-			[]byte,
-			[]byte,
+			_ context.Context,
+			_ SemanticHarness,
+			prompt []byte,
+			_ []byte,
 		) (ExperienceSemanticHarnessResult, error) {
+			if !bytes.Contains(
+				prompt,
+				[]byte("necessary exact command or path"),
+			) {
+				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+			}
 			return ExperienceSemanticHarnessResult{
 				Output: experienceSemanticValidOutput(candidate),
 				Model:  "claude-test",
@@ -938,11 +950,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV8WithV9Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV9 {
-		t.Fatalf("experience prompt version = %q, want v9", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV10 {
+		t.Fatalf("experience prompt version = %q, want v10", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -951,7 +963,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV8WithV9Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV8,
+				experience.SemanticProposalPromptVersionV9,
 			): true,
 		},
 	}
@@ -976,9 +988,9 @@ func TestAnalyzeExperienceCandidatesReanalyzesV8WithV9Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV9 ||
+			experience.SemanticProposalPromptVersionV10 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV9 {
+			experience.SemanticProposalPromptVersionV10 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,

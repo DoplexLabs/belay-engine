@@ -446,6 +446,12 @@ func prepareExperienceSemanticPrompt(
 			"reusable behavior established by the cited evidence; do not propose guidance " +
 			"that merely repeats the verifier command. If the evidence supports only a " +
 			"verification command and no reusable behavior, reject it as redundant. " +
+			"When cited evidence directly supports an exact command, relative path, " +
+			"filename, or explicit exception that is necessary to apply or verify the " +
+			"reusable behavior, preserve that exact detail in guidance, verifier " +
+			"parameters, path_hints, or exceptions as appropriate. Never replace a " +
+			"necessary exact command or path with a generic phrase such as run the " +
+			"repository checks. " +
 			"Preserve every explicit qualification or exception that materially limits " +
 			"the reusable behavior; never broaden a rule by dropping its exception. " +
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
