@@ -572,6 +572,9 @@ func TestExperienceSemanticOutputSchemaMatchesDomainStructure(t *testing.T) {
 				{
 					CandidateID:     candidate.CandidateID,
 					ProjectIdentity: candidate.ProjectIdentity,
+					Excerpts: boundedExperienceSemanticExcerpts(
+						candidate,
+					),
 				},
 			},
 		},
@@ -736,6 +739,9 @@ func TestExperienceSemanticOutputSchemaAllowsEmptyCorrectionParameters(
 				{
 					CandidateID:     candidate.CandidateID,
 					ProjectIdentity: candidate.ProjectIdentity,
+					Excerpts: boundedExperienceSemanticExcerpts(
+						candidate,
+					),
 				},
 			},
 		},
@@ -770,6 +776,41 @@ func TestExperienceSemanticOutputSchemaAllowsEmptyCorrectionParameters(
 			"schema rejected user_correction_absent parameters {}: %v",
 			err,
 		)
+	}
+}
+
+func TestCompileExperienceSemanticResultsDefersUnknownEvidenceSupport(
+	t *testing.T,
+) {
+	candidate := experienceSemanticTestCandidate("unknown-support")
+	output, err := decodeExperienceSemanticOutput(
+		experienceSemanticValidOutput(candidate),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output[0].Proposal.GuidanceSupportRefs = []string{"evr_unknown"}
+	results, counts, err := compileExperienceSemanticResults(
+		[]experience.Candidate{candidate},
+		output,
+		SemanticHarnessClaude,
+		"claude-test",
+		sha256Prefixed([]byte("input")),
+		sha256Prefixed([]byte("output")),
+		time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 ||
+		results[0].Proposal != nil ||
+		results[0].Decision.Disposition !=
+			experience.SemanticDispositionDefer ||
+		results[0].Decision.ReasonCode !=
+			experience.SemanticReasonInsufficientContext ||
+		counts.Deferred != 1 ||
+		counts.Proposed != 0 {
+		t.Fatalf("unsupported proposal did not fail soft: %+v / %+v", results, counts)
 	}
 }
 
@@ -905,7 +946,7 @@ func TestAnalyzeExperienceCandidatesStoresExactlyOneResultPerBranch(
 				prompt,
 				[]byte("necessary exact command or path"),
 			) {
-				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+				t.Fatalf("v11 exact-detail instruction missing: %s", prompt)
 			}
 			return ExperienceSemanticHarnessResult{
 				Output: output,
@@ -955,7 +996,7 @@ func TestAnalyzeExperienceCandidatesReportsDispositionReplays(t *testing.T) {
 				prompt,
 				[]byte("necessary exact command or path"),
 			) {
-				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+				t.Fatalf("v11 exact-detail instruction missing: %s", prompt)
 			}
 			return ExperienceSemanticHarnessResult{
 				Output: experienceSemanticValidOutput(candidate),
@@ -1022,11 +1063,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV10WithV11Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV10 {
-		t.Fatalf("experience prompt version = %q, want v10", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV11 {
+		t.Fatalf("experience prompt version = %q, want v11", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -1035,7 +1076,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV9,
+				experience.SemanticProposalPromptVersionV10,
 			): true,
 		},
 	}
@@ -1060,9 +1101,9 @@ func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV10 ||
+			experience.SemanticProposalPromptVersionV11 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV10 {
+			experience.SemanticProposalPromptVersionV11 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,
@@ -1431,6 +1472,14 @@ func experienceSemanticValidOutputs(
 ) []byte {
 	values := make([]any, 0, len(candidates))
 	for _, candidate := range candidates {
+		excerpts := boundedExperienceSemanticExcerpts(candidate)
+		if len(excerpts) == 0 {
+			panic("semantic test candidate has no evidence excerpts")
+		}
+		guidanceSupport := []any{excerpts[0].EvidenceRefID}
+		verifierSupport := []any{
+			excerpts[len(excerpts)-1].EvidenceRefID,
+		}
 		values = append(values, map[string]any{
 			"candidate_id":    candidate.CandidateID,
 			"disposition":     "propose",
@@ -1448,8 +1497,11 @@ func experienceSemanticValidOutputs(
 				"models":               []any{},
 				"semantic_description": "Tasks that modify generated code.",
 			},
-			"exceptions":            []any{},
-			"intervention_strength": "advise",
+			"exceptions":             []any{},
+			"guidance_support_refs":  guidanceSupport,
+			"exception_support_refs": []any{},
+			"verifier_support_refs":  verifierSupport,
+			"intervention_strength":  "advise",
 			"verifier": map[string]any{
 				"kind":                  "path_pattern_not_modified",
 				"coverage_requirements": []any{"workspace_state_captured"},

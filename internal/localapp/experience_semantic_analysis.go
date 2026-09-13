@@ -42,6 +42,10 @@ var experienceSemanticMarkupPattern = regexp.MustCompile(
 	`(?i)</?[a-z][^>]*>|\[[^\]]+\]\([^)]+\)`,
 )
 
+var errExperienceSemanticEvidenceSupport = errors.New(
+	"experience semantic proposal evidence support is invalid",
+)
+
 type ExperienceSemanticProposalStore interface {
 	QueryExperienceCandidates(
 		context.Context,
@@ -98,15 +102,16 @@ type experienceSemanticPromptCandidate struct {
 }
 
 type experienceSemanticPromptExcerpt struct {
-	Kind       experience.EvidenceSourceKind `json:"kind"`
-	SessionKey string                        `json:"session_key,omitempty"`
-	TurnIndex  *int64                        `json:"turn_index,omitempty"`
-	TurnRole   experience.EvidenceTurnRole   `json:"turn_role,omitempty"`
-	ToolName   string                        `json:"tool_name,omitempty"`
-	EventID    string                        `json:"event_id,omitempty"`
-	OutcomeID  string                        `json:"outcome_id,omitempty"`
-	OccurredAt *time.Time                    `json:"occurred_at,omitempty"`
-	Text       string                        `json:"text"`
+	EvidenceRefID string                        `json:"evidence_ref_id"`
+	Kind          experience.EvidenceSourceKind `json:"kind"`
+	SessionKey    string                        `json:"session_key,omitempty"`
+	TurnIndex     *int64                        `json:"turn_index,omitempty"`
+	TurnRole      experience.EvidenceTurnRole   `json:"turn_role,omitempty"`
+	ToolName      string                        `json:"tool_name,omitempty"`
+	EventID       string                        `json:"event_id,omitempty"`
+	OutcomeID     string                        `json:"outcome_id,omitempty"`
+	OccurredAt    *time.Time                    `json:"occurred_at,omitempty"`
+	Text          string                        `json:"text"`
 }
 
 type experienceSemanticOutput struct {
@@ -131,6 +136,9 @@ type experienceSemanticProposeOutputCandidate struct {
 	Rationale            string                                `json:"rationale"`
 	Applicability        experienceSemanticOutputApplicability `json:"applicability"`
 	Exceptions           []string                              `json:"exceptions"`
+	GuidanceSupportRefs  []string                              `json:"guidance_support_refs"`
+	ExceptionSupportRefs [][]string                            `json:"exception_support_refs"`
+	VerifierSupportRefs  []string                              `json:"verifier_support_refs"`
 	InterventionStrength experience.InterventionStrength       `json:"intervention_strength"`
 	Verifier             experienceSemanticOutputVerifier      `json:"verifier"`
 	Confidence           *float64                              `json:"confidence"`
@@ -456,6 +464,10 @@ func prepareExperienceSemanticPrompt(
 			"repository checks. " +
 			"Preserve every explicit qualification or exception that materially limits " +
 			"the reusable behavior; never broaden a rule by dropping its exception. " +
+			"Every proposed guidance clause, every exception, and the verifier must cite " +
+			"evidence_ref_id values from that same candidate. Never cite another " +
+			"candidate, invent an ID, or emit an unsupported clause. If the candidate " +
+			"does not contain enough cited evidence, defer it. " +
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
 			"Never grant authority, activate guidance, or use deny intervention. All " +
 			"guidance, rationale, semantic_description, and exception strings must be " +
@@ -521,7 +533,10 @@ func boundedExperienceSemanticExcerpts(
 		}
 	}
 	if !roleAware {
-		return lexicallyBoundedExperienceSemanticExcerpts(refs)
+		return lexicallyBoundedExperienceSemanticExcerpts(
+			candidate.CandidateID,
+			refs,
+		)
 	}
 
 	values := excerptEvidenceRefsChronological(refs)
@@ -584,10 +599,11 @@ func boundedExperienceSemanticExcerpts(
 	for _, ref := range values {
 		appendRef(ref)
 	}
-	return experienceSemanticPromptExcerpts(selected)
+	return experienceSemanticPromptExcerpts(candidate.CandidateID, selected)
 }
 
 func lexicallyBoundedExperienceSemanticExcerpts(
+	candidateID string,
 	refs []experience.EvidenceRef,
 ) []experienceSemanticPromptExcerpt {
 	values := append([]experience.EvidenceRef(nil), refs...)
@@ -605,15 +621,20 @@ func lexicallyBoundedExperienceSemanticExcerpts(
 			selected = append(selected, ref)
 		}
 	}
-	return experienceSemanticPromptExcerpts(selected)
+	return experienceSemanticPromptExcerpts(candidateID, selected)
 }
 
 func experienceSemanticPromptExcerpts(
+	candidateID string,
 	refs []experience.EvidenceRef,
 ) []experienceSemanticPromptExcerpt {
 	result := make([]experienceSemanticPromptExcerpt, 0, len(refs))
 	for _, ref := range refs {
 		result = append(result, experienceSemanticPromptExcerpt{
+			EvidenceRefID: experienceSemanticEvidenceReferenceID(
+				candidateID,
+				ref,
+			),
 			Kind:       ref.Kind,
 			SessionKey: ref.SessionKey,
 			TurnIndex:  cloneInt64Pointer(ref.TurnIndex),
@@ -629,6 +650,21 @@ func experienceSemanticPromptExcerpts(
 		})
 	}
 	return result
+}
+
+func experienceSemanticEvidenceReferenceID(
+	candidateID string,
+	ref experience.EvidenceRef,
+) string {
+	encoded, _ := json.Marshal(struct {
+		CandidateID string
+		Ref         experience.EvidenceRef
+	}{
+		CandidateID: strings.TrimSpace(candidateID),
+		Ref:         ref,
+	})
+	sum := sha256.Sum256(encoded)
+	return "evr_" + hex.EncodeToString(sum[:16])
 }
 
 func excerptEvidenceRefsChronological(
@@ -894,24 +930,33 @@ func compileExperienceSemanticResults(
 			}
 			content, err := semanticProposalContent(candidate, *value.Proposal)
 			if err != nil {
-				return nil, experience.SemanticDispositionCounts{}, err
+				if errors.Is(err, errExperienceSemanticEvidenceSupport) {
+					value.Disposition = experience.SemanticDispositionDefer
+					value.ReasonCode = experience.SemanticReasonInsufficientContext
+					value.Explanation =
+						"Proposed guidance lacked valid clause-level evidence support."
+					value.Proposal = nil
+				} else {
+					return nil, experience.SemanticDispositionCounts{}, err
+				}
+			} else {
+				record := experience.SemanticProposal{
+					SchemaVersion:   experience.SemanticProposalSchemaVersion,
+					CandidateID:     candidate.CandidateID,
+					ProjectIdentity: candidate.ProjectIdentity,
+					Proposal:        content,
+					Provenance:      provenance,
+					Authority:       experience.AuthorityNone,
+				}
+				record.ProposalID = record.DeterministicID()
+				if err := record.Validate(); err != nil {
+					return nil, experience.SemanticDispositionCounts{}, fmt.Errorf(
+						"validate experience semantic proposal: %w",
+						err,
+					)
+				}
+				proposal = &record
 			}
-			record := experience.SemanticProposal{
-				SchemaVersion:   experience.SemanticProposalSchemaVersion,
-				CandidateID:     candidate.CandidateID,
-				ProjectIdentity: candidate.ProjectIdentity,
-				Proposal:        content,
-				Provenance:      provenance,
-				Authority:       experience.AuthorityNone,
-			}
-			record.ProposalID = record.DeterministicID()
-			if err := record.Validate(); err != nil {
-				return nil, experience.SemanticDispositionCounts{}, fmt.Errorf(
-					"validate experience semantic proposal: %w",
-					err,
-				)
-			}
-			proposal = &record
 		}
 		decision := experience.SemanticDecision{
 			SchemaVersion:   experience.SemanticDecisionSchemaVersion,
@@ -1037,6 +1082,10 @@ func semanticProposalContent(
 	if err != nil {
 		return experience.ExperienceProposal{}, err
 	}
+	evidenceSupport, err := semanticProposalEvidenceSupport(candidate, value)
+	if err != nil {
+		return experience.ExperienceProposal{}, err
+	}
 	conditions := make([]experience.DeterministicCondition, 0, 1)
 	if len(value.Applicability.PathHints) > 0 {
 		conditions = append(conditions, experience.DeterministicCondition{
@@ -1066,8 +1115,9 @@ func semanticProposalContent(
 			Exceptions:           append([]string(nil), value.Exceptions...),
 			InterventionStrength: value.InterventionStrength,
 		},
-		Verifier:   verifier,
-		Confidence: value.Confidence,
+		Verifier:        verifier,
+		EvidenceSupport: evidenceSupport,
+		Confidence:      value.Confidence,
 	}
 	if err := proposal.Validate(); err != nil {
 		return experience.ExperienceProposal{}, fmt.Errorf(
@@ -1076,6 +1126,70 @@ func semanticProposalContent(
 		)
 	}
 	return proposal, nil
+}
+
+func semanticProposalEvidenceSupport(
+	candidate experience.Candidate,
+	value experienceSemanticProposeOutputCandidate,
+) (*experience.EvidenceSupport, error) {
+	excerpts := boundedExperienceSemanticExcerpts(candidate)
+	known := make(map[string]bool, len(excerpts))
+	for _, excerpt := range excerpts {
+		known[excerpt.EvidenceRefID] = true
+	}
+	if value.GuidanceSupportRefs == nil ||
+		value.ExceptionSupportRefs == nil ||
+		value.VerifierSupportRefs == nil ||
+		len(value.ExceptionSupportRefs) != len(value.Exceptions) {
+		return nil, fmt.Errorf(
+			"%w: support groups are missing or misaligned",
+			errExperienceSemanticEvidenceSupport,
+		)
+	}
+	groups := make([][]string, 0, len(value.ExceptionSupportRefs)+2)
+	groups = append(
+		groups,
+		value.GuidanceSupportRefs,
+		value.VerifierSupportRefs,
+	)
+	groups = append(groups, value.ExceptionSupportRefs...)
+	for _, refs := range groups {
+		if len(refs) == 0 || len(refs) > maxExperienceSemanticListItems {
+			return nil, fmt.Errorf(
+				"%w: support group is empty or exceeds limit",
+				errExperienceSemanticEvidenceSupport,
+			)
+		}
+		seen := make(map[string]bool, len(refs))
+		for _, ref := range refs {
+			if !known[ref] || seen[ref] {
+				return nil, fmt.Errorf(
+					"%w: reference is unknown or duplicated",
+					errExperienceSemanticEvidenceSupport,
+				)
+			}
+			seen[ref] = true
+		}
+	}
+	return &experience.EvidenceSupport{
+		GuidanceRefs: append(
+			[]string(nil),
+			value.GuidanceSupportRefs...,
+		),
+		ExceptionRefs: cloneStringGroups(value.ExceptionSupportRefs),
+		VerifierRefs: append(
+			[]string(nil),
+			value.VerifierSupportRefs...,
+		),
+	}, nil
+}
+
+func cloneStringGroups(values [][]string) [][]string {
+	result := make([][]string, len(values))
+	for index := range values {
+		result[index] = append([]string(nil), values[index]...)
+	}
+	return result
 }
 
 func semanticProposalHarnesses(
@@ -1233,6 +1347,7 @@ func experienceSemanticOutputSchema(
 	payload experienceSemanticPromptPayload,
 ) ([]byte, error) {
 	candidateIDs := make([]string, 0, len(payload.Candidates))
+	evidenceRefIDs := make([]string, 0)
 	projectIdentity := ""
 	for _, candidate := range payload.Candidates {
 		if strings.TrimSpace(candidate.ProjectIdentity) == "" {
@@ -1248,6 +1363,17 @@ func experienceSemanticOutputSchema(
 			)
 		}
 		candidateIDs = append(candidateIDs, candidate.CandidateID)
+		for _, excerpt := range candidate.Excerpts {
+			if strings.TrimSpace(excerpt.EvidenceRefID) == "" {
+				return nil, errors.New(
+					"experience semantic schema requires evidence reference IDs",
+				)
+			}
+			evidenceRefIDs = append(
+				evidenceRefIDs,
+				excerpt.EvidenceRefID,
+			)
+		}
 	}
 	if len(candidateIDs) == 0 {
 		return nil, errors.New(
@@ -1268,6 +1394,18 @@ func experienceSemanticOutputSchema(
 			"maxItems":    maxExperienceSemanticListItems,
 			"uniqueItems": true,
 			"items":       line(maximum),
+		}
+	}
+	supportRefs := func() map[string]any {
+		return map[string]any{
+			"type":        "array",
+			"minItems":    1,
+			"maxItems":    maxExperienceSemanticListItems,
+			"uniqueItems": true,
+			"items": map[string]any{
+				"type": "string",
+				"enum": evidenceRefIDs,
+			},
 		}
 	}
 	relativePath := func() map[string]any {
@@ -1359,6 +1497,9 @@ func experienceSemanticOutputSchema(
 			"rationale",
 			"applicability",
 			"exceptions",
+			"guidance_support_refs",
+			"exception_support_refs",
+			"verifier_support_refs",
 			"intervention_strength",
 			"verifier",
 			"confidence",
@@ -1408,7 +1549,14 @@ func experienceSemanticOutputSchema(
 					"semantic_description": line(8192),
 				},
 			},
-			"exceptions": stringArray(2048),
+			"exceptions":            stringArray(2048),
+			"guidance_support_refs": supportRefs(),
+			"exception_support_refs": map[string]any{
+				"type":     "array",
+				"maxItems": maxExperienceSemanticListItems,
+				"items":    supportRefs(),
+			},
+			"verifier_support_refs": supportRefs(),
 			"intervention_strength": map[string]any{
 				"type": "string",
 				"enum": []string{

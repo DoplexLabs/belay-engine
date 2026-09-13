@@ -16,7 +16,8 @@ const (
 	SemanticProposalPromptVersionV8  = "belay.experience-prompt.v8"
 	SemanticProposalPromptVersionV9  = "belay.experience-prompt.v9"
 	SemanticProposalPromptVersionV10 = "belay.experience-prompt.v10"
-	SemanticProposalPromptVersion    = SemanticProposalPromptVersionV10
+	SemanticProposalPromptVersionV11 = "belay.experience-prompt.v11"
+	SemanticProposalPromptVersion    = SemanticProposalPromptVersionV11
 	ExperienceSchemaVersion          = "belay.experience.v1"
 	ApplicationSchemaVersion         = "belay.experience-application.v1"
 	EvaluationSchemaVersion          = "belay.experience-evaluation.v1"
@@ -40,13 +41,20 @@ type Candidate struct {
 }
 
 type ExperienceProposal struct {
-	Type                       ExperienceType `json:"type"`
-	Scope                      Scope          `json:"scope"`
-	Applicability              Applicability  `json:"applicability"`
-	Guidance                   Guidance       `json:"guidance"`
-	Verifier                   Verifier       `json:"verifier"`
-	Confidence                 *float64       `json:"confidence,omitempty"`
-	SemanticCompilationPending bool           `json:"semantic_compilation_pending,omitempty"`
+	Type                       ExperienceType   `json:"type"`
+	Scope                      Scope            `json:"scope"`
+	Applicability              Applicability    `json:"applicability"`
+	Guidance                   Guidance         `json:"guidance"`
+	Verifier                   Verifier         `json:"verifier"`
+	EvidenceSupport            *EvidenceSupport `json:"evidence_support,omitempty"`
+	Confidence                 *float64         `json:"confidence,omitempty"`
+	SemanticCompilationPending bool             `json:"semantic_compilation_pending,omitempty"`
+}
+
+type EvidenceSupport struct {
+	GuidanceRefs  []string   `json:"guidance_refs"`
+	ExceptionRefs [][]string `json:"exception_refs"`
+	VerifierRefs  []string   `json:"verifier_refs"`
 }
 
 type SemanticProposal struct {

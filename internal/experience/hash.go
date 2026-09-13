@@ -64,7 +64,10 @@ func (value SemanticProposal) DeterministicID() string {
 			Applicability: normalizedApplicability(value.Proposal.Applicability),
 			Guidance:      normalizedGuidance(value.Proposal.Guidance),
 			Verifier:      normalizedVerifier(value.Proposal.Verifier),
-			Confidence:    value.Proposal.Confidence,
+			EvidenceSupport: normalizedEvidenceSupport(
+				value.Proposal.EvidenceSupport,
+			),
+			Confidence: value.Proposal.Confidence,
 		},
 		Harness:       value.Provenance.Harness,
 		Model:         strings.TrimSpace(value.Provenance.Model),
@@ -72,6 +75,35 @@ func (value SemanticProposal) DeterministicID() string {
 		InputHash:     strings.TrimSpace(value.Provenance.InputHash),
 		OutputHash:    strings.TrimSpace(value.Provenance.OutputHash),
 	})
+}
+
+func normalizedEvidenceSupport(value *EvidenceSupport) *EvidenceSupport {
+	if value == nil {
+		return nil
+	}
+	result := &EvidenceSupport{
+		GuidanceRefs: normalizeSupportRefs(value.GuidanceRefs),
+		VerifierRefs: normalizeSupportRefs(value.VerifierRefs),
+		ExceptionRefs: make(
+			[][]string,
+			len(value.ExceptionRefs),
+		),
+	}
+	for index := range value.ExceptionRefs {
+		result.ExceptionRefs[index] = normalizeSupportRefs(
+			value.ExceptionRefs[index],
+		)
+	}
+	return result
+}
+
+func normalizeSupportRefs(values []string) []string {
+	result := append([]string(nil), values...)
+	for index := range result {
+		result[index] = strings.TrimSpace(result[index])
+	}
+	sort.Strings(result)
+	return compactComparable(result)
 }
 
 func (value SemanticDecision) DeterministicID() string {

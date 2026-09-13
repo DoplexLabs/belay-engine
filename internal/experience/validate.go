@@ -109,6 +109,11 @@ func (value ExperienceProposal) Validate() error {
 	if err := value.Verifier.Validate(); err != nil {
 		return err
 	}
+	if value.EvidenceSupport != nil {
+		if err := value.EvidenceSupport.Validate(len(value.Guidance.Exceptions)); err != nil {
+			return err
+		}
+	}
 	if value.Confidence != nil && !validUnitInterval(*value.Confidence) {
 		return errors.New("proposal confidence must be between zero and one")
 	}
@@ -169,7 +174,8 @@ func (value SemanticProposalProvenance) Validate() error {
 		SemanticProposalPromptVersionV7,
 		SemanticProposalPromptVersionV8,
 		SemanticProposalPromptVersionV9,
-		SemanticProposalPromptVersionV10:
+		SemanticProposalPromptVersionV10,
+		SemanticProposalPromptVersionV11:
 	default:
 		return errors.New("semantic proposal prompt version is unsupported")
 	}
@@ -349,6 +355,35 @@ func (value Experience) Validate() error {
 	}
 	if value.Governance.Approval.CandidateID != value.Provenance.SourceCandidateID {
 		return errors.New("approval candidate must match version provenance source candidate")
+	}
+	return nil
+}
+
+func (value EvidenceSupport) Validate(exceptionCount int) error {
+	if len(value.GuidanceRefs) == 0 ||
+		len(value.GuidanceRefs) > maxListItems ||
+		len(value.VerifierRefs) == 0 ||
+		len(value.VerifierRefs) > maxListItems ||
+		len(value.ExceptionRefs) != exceptionCount {
+		return errors.New("proposal evidence support is incomplete or exceeds limit")
+	}
+	groups := make([][]string, 0, len(value.ExceptionRefs)+2)
+	groups = append(groups, value.GuidanceRefs, value.VerifierRefs)
+	groups = append(groups, value.ExceptionRefs...)
+	for _, refs := range groups {
+		if len(refs) == 0 || len(refs) > maxListItems {
+			return errors.New("proposal evidence support group is empty or exceeds limit")
+		}
+		seen := make(map[string]bool, len(refs))
+		for _, ref := range refs {
+			if err := validateIdentifier("proposal evidence support reference", ref); err != nil {
+				return err
+			}
+			if seen[ref] {
+				return errors.New("proposal evidence support contains duplicate references")
+			}
+			seen[ref] = true
+		}
 	}
 	return nil
 }
