@@ -43,10 +43,11 @@ func TestPrepareMissionPackBenchmarkRunIsolatesNoContextRun(t *testing.T) {
 		manifest.Environment["HOME"] != manifest.HarnessHomePath {
 		t.Fatalf("environment = %+v", manifest.Environment)
 	}
-	if !slices.Contains(manifest.Command.Arguments, "--ignore-user-config") ||
-		!slices.Contains(manifest.Command.Arguments, "--ignore-rules") ||
+	if !slices.Contains(manifest.Command.Arguments, "--ignore-rules") ||
 		!slices.Contains(manifest.Command.Arguments, "--ephemeral") ||
-		!slices.Contains(manifest.Command.Arguments, "workspace-write") {
+		!slices.Contains(manifest.Command.Arguments, "--approve-for-me") ||
+		slices.Contains(manifest.Command.Arguments, "--ignore-user-config") ||
+		slices.Contains(manifest.Command.Arguments, "--sandbox") {
 		t.Fatalf("arguments = %q", manifest.Command.Arguments)
 	}
 	if _, err := os.Stat(filepath.Join(manifest.WorkspacePath, ".git")); err != nil {
@@ -104,7 +105,11 @@ func TestPrepareMissionPackBenchmarkRunUsesHarnessStaticFile(t *testing.T) {
 	}
 	if !slices.Contains(manifest.Command.Arguments, "--strict-mcp-config") ||
 		!slices.Contains(manifest.Command.Arguments, "--no-session-persistence") ||
-		!slices.Contains(manifest.Command.Arguments, "project") {
+		!slices.Contains(manifest.Command.Arguments, "project") ||
+		!slices.Contains(
+			manifest.Command.Arguments,
+			`{"mcpServers":{}}`,
+		) {
 		t.Fatalf("arguments = %q", manifest.Command.Arguments)
 	}
 }
