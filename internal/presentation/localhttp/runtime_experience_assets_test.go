@@ -84,7 +84,7 @@ func TestRuntimeExperienceCopyAndDataAttributes(t *testing.T) {
 		`<body data-experience="current">`,
 		`id="app-shell" data-experience="current"`,
 		`<span id="nav-brief-label">Report</span>`,
-		`<span id="nav-attention-label">Attention</span>`,
+		`<span id="nav-attention-label">Patterns</span>`,
 		`<span id="nav-sessions-label">Sessions</span>`,
 	} {
 		if !strings.Contains(index, required) {
@@ -94,17 +94,17 @@ func TestRuntimeExperienceCopyAndDataAttributes(t *testing.T) {
 
 	for _, required := range []string{
 		`navBrief: "Report"`,
-		`navAttention: "Attention"`,
+		`navAttention: "Patterns"`,
 		`navSessions: "Sessions"`,
 		`briefLoading: "Preparing your report…"`,
 		`navBrief: "Report"`,
-		`navAttention: "Review"`,
-		`navSessions: "History"`,
+		`navAttention: "Patterns"`,
+		`navSessions: "Sessions"`,
 		`briefLoading: "Preparing your report…"`,
-		`briefOpenAttention: "Open all issues"`,
-		`briefOpenSessions: "Open history"`,
-		`attentionHeading: "Review"`,
-		`sessionsHeading: "History"`,
+		`briefOpenAttention: "View all patterns"`,
+		`briefOpenSessions: "View sessions"`,
+		`attentionHeading: "Patterns"`,
+		`sessionsHeading: "Sessions"`,
 		`document.body.dataset.experience = selected;`,
 		`elements.appShell.dataset.experience = selected;`,
 		`elements.navBriefLabel.textContent = copy.navBrief;`,

@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#0b0d10">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f6f5f0">
     <meta
       name="description"
       content="Belay Local session browser for private, on-device agent activity."
@@ -18,10 +18,10 @@
     <div class="app-shell" id="app-shell" data-experience="current">
       <header class="topbar">
         <div class="brand" aria-label="Belay Local">
-          <span class="brand-mark" aria-hidden="true">
-            <span></span>
-            <span></span>
-          </span>
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M10 3v23a8 8 0 1 0 8-8H10"></path>
+            <path d="M20 3v8c0 4-2 7-6 10l-4 3"></path>
+          </svg>
           <span>
             <strong>Belay</strong>
             <small>Local</small>
@@ -42,7 +42,7 @@
             id="nav-attention"
             type="button"
           >
-            <span id="nav-attention-label">Attention</span>
+            <span id="nav-attention-label">Patterns</span>
             <span class="nav-count" id="attention-nav-count" hidden></span>
           </button>
           <button
@@ -59,7 +59,7 @@
           title="Full transcripts are encrypted on this machine and never uploaded"
         >
           <span class="privacy-dot" aria-hidden="true"></span>
-          Encrypted on-device
+          Local · encrypted
         </div>
 
         <button class="icon-button" id="refresh-button" type="button">
@@ -87,8 +87,8 @@
             <header class="brief-header">
               <div>
                 <p class="eyebrow" id="brief-eyebrow">Belay Report</p>
-                <h1 id="brief-heading" tabindex="-1">Your agent usage</h1>
-                <p id="brief-window">Claude Code and Codex · all retained time</p>
+                <h1 id="brief-heading" tabindex="-1">Finding recurring patterns</h1>
+                <p id="brief-window">Across your retained Claude Code and Codex sessions</p>
               </div>
               <p
                 class="brief-status"
@@ -98,33 +98,6 @@
               ></p>
             </header>
 
-            <section class="brief-summary" aria-label="All-time usage summary">
-              <dl>
-                <div>
-                  <dt>Sessions</dt>
-                  <dd id="brief-session-count">—</dd>
-                </div>
-                <div>
-                  <dt>Hours</dt>
-                  <dd id="brief-agent-count">—</dd>
-                </div>
-                <div>
-                  <dt>Tokens</dt>
-                  <dd id="brief-outcome-count">—</dd>
-                </div>
-                <div>
-                  <dt>Dollars</dt>
-                  <dd id="brief-latest-activity">—</dd>
-                </div>
-              </dl>
-              <div
-                class="report-sparkline"
-                id="report-sparkline"
-                role="img"
-                aria-label="Weekly session usage"
-              ></div>
-            </section>
-
             <div class="brief-loading" id="brief-loading">
               <span class="spinner" aria-hidden="true"></span>
               <p id="brief-loading-text">Preparing your report…</p>
@@ -133,7 +106,7 @@
             <div class="brief-error" id="brief-error" role="alert" hidden>
               <h2 id="brief-error-title">Report unavailable</h2>
               <p id="brief-error-detail">
-                Belay could not prepare the report. Attention and Sessions remain available.
+                Belay could not prepare the report. Patterns and Sessions remain available.
               </p>
               <button class="secondary-button" id="brief-retry" type="button">
                 Try again
@@ -152,7 +125,7 @@
                     id="brief-open-attention"
                     type="button"
                   >
-                    Open all issues
+                    View all patterns
                   </button>
                 </div>
                 <div class="brief-card-grid" id="brief-action-list"></div>
@@ -161,6 +134,41 @@
                   <small id="brief-actions-empty-detail">
                     Belay keeps analyzing encrypted local transcripts as sessions arrive.
                   </small>
+                </div>
+              </section>
+
+              <section class="brief-section report-usage" aria-labelledby="report-usage-heading">
+                <div class="brief-section-heading">
+                  <div>
+                    <p class="eyebrow">All retained activity</p>
+                    <h2 id="report-usage-heading">Usage overview</h2>
+                  </div>
+                </div>
+                <div class="brief-summary" aria-label="All-time usage summary">
+                  <dl>
+                    <div>
+                      <dt>Sessions</dt>
+                      <dd id="brief-session-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Hours</dt>
+                      <dd id="brief-agent-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Tokens</dt>
+                      <dd id="brief-outcome-count">—</dd>
+                    </div>
+                    <div>
+                      <dt>Known spend</dt>
+                      <dd id="brief-latest-activity">—</dd>
+                    </div>
+                  </dl>
+                  <div
+                    class="report-sparkline"
+                    id="report-sparkline"
+                    role="img"
+                    aria-label="Weekly session usage"
+                  ></div>
                 </div>
               </section>
 
@@ -175,7 +183,7 @@
                     id="brief-open-sessions"
                     type="button"
                   >
-                    Open history
+                    View sessions
                   </button>
                 </div>
                 <div class="brief-recent-list" id="brief-recent-list"></div>
@@ -267,12 +275,12 @@
           <aside
             class="attention-panel"
             id="attention-list-pane"
-            aria-label="Attention inbox"
+            aria-label="Recurring patterns"
           >
             <div class="panel-heading attention-heading">
               <div>
                 <p class="eyebrow" id="attention-eyebrow">Findings</p>
-                <h1 id="attention-heading">Attention</h1>
+                <h1 id="attention-heading">Patterns</h1>
               </div>
               <span class="count-pill" id="attention-count">—</span>
             </div>
@@ -280,7 +288,7 @@
             <div
               class="attention-mode-tabs"
               role="tablist"
-              aria-label="Attention views"
+              aria-label="Pattern views"
             >
               <button
                 id="attention-mode-issues"
@@ -452,7 +460,7 @@
               aria-live="polite"
               hidden
             >
-              <span id="attention-status-label">Attention status</span>
+              <span id="attention-status-label">Pattern status</span>
             </div>
 
             <div class="attention-scroll">
@@ -707,7 +715,7 @@
                   class="back-button issue-back-button"
                   id="family-back-button"
                   type="button"
-                  aria-label="Back to Attention list"
+                  aria-label="Back to patterns"
                 >
                   ←
                 </button>
@@ -763,7 +771,7 @@
                     <span class="empty-glyph" aria-hidden="true">◇</span>
                     <p>No sessions with this finding were returned</p>
                     <small id="family-members-empty-detail">
-                      Refresh Attention before relying on this result.
+                      Refresh Patterns before relying on this result.
                     </small>
                   </div>
                   <div
@@ -786,7 +794,7 @@
                   class="back-button issue-back-button"
                   id="issue-back-button"
                   type="button"
-                  aria-label="Back to Attention list"
+                  aria-label="Back to patterns"
                 >
                   ←
                 </button>
