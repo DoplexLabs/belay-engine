@@ -231,6 +231,12 @@ func ExecuteMissionPackBenchmarkRun(
 		rawBody,
 	)
 	exclusionReasons := make([]string, 0, 1)
+	if reason := observeMissionPackBenchmarkInfrastructureFailure(
+		manifest.Entry.Harness,
+		rawBody,
+	); reason != "" {
+		exclusionReasons = append(exclusionReasons, reason)
+	}
 	if len(contamination) != 0 {
 		exclusionReasons = append(
 			exclusionReasons,
@@ -292,6 +298,39 @@ func ExecuteMissionPackBenchmarkRun(
 		HarnessProvenance:   provenance,
 		Usage:               usage,
 	}, nil
+}
+
+func observeMissionPackBenchmarkInfrastructureFailure(
+	harness MissionPackBenchmarkHarness,
+	body []byte,
+) string {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	for scanner.Scan() {
+		var event struct {
+			Type  string `json:"type"`
+			Error any    `json:"error"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			continue
+		}
+		encoded, _ := json.Marshal(event.Error)
+		message := strings.ToLower(string(encoded))
+		switch harness {
+		case MissionPackHarnessClaude:
+			if strings.Contains(message, "authentication_failed") ||
+				strings.Contains(message, "not logged in") {
+				return "harness_authentication_failure"
+			}
+		case MissionPackHarnessCodex:
+			if strings.Contains(message, "unauthorized") ||
+				strings.Contains(message, "failed to load aws credentials") ||
+				strings.Contains(message, "missing bearer") {
+				return "harness_authentication_failure"
+			}
+		}
+	}
+	return ""
 }
 
 func observeMissionPackBenchmarkHarnessProvenance(

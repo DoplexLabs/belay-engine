@@ -230,6 +230,27 @@ func TestObserveMissionPackBenchmarkClaudeUsagePrefersHarnessCost(t *testing.T) 
 	}
 }
 
+func TestObserveMissionPackBenchmarkInfrastructureFailure(t *testing.T) {
+	claude := []byte(
+		`{"type":"assistant","error":"authentication_failed"}`,
+	)
+	if got := observeMissionPackBenchmarkInfrastructureFailure(
+		MissionPackHarnessClaude,
+		claude,
+	); got != "harness_authentication_failure" {
+		t.Fatalf("Claude failure = %q", got)
+	}
+	codex := []byte(
+		`{"type":"turn.failed","error":{"message":"failed to load AWS credentials"}}`,
+	)
+	if got := observeMissionPackBenchmarkInfrastructureFailure(
+		MissionPackHarnessCodex,
+		codex,
+	); got != "harness_authentication_failure" {
+		t.Fatalf("Codex failure = %q", got)
+	}
+}
+
 func TestBenchmarkEnvironmentOnlyInheritsRecordedAllowlistedKeys(t *testing.T) {
 	got := benchmarkEnvironment(
 		[]string{
