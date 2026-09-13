@@ -285,6 +285,19 @@ func NormalizedErrorSignature(turn transcript.Turn) string {
 	return normalizedErrorSignature(turn)
 }
 
+// NormalizedFirstFailureLine returns the retry-loop fingerprint form of the
+// first retained non-empty tool-result line. It does not decide whether the
+// result failed; callers must use ToolResultFailed first.
+func NormalizedFirstFailureLine(turn transcript.Turn) string {
+	line := strings.ToLower(firstMeaningfulLine(turn.Payload.ToolResult))
+	line = tempPathPattern.ReplaceAllString(line, "<tmp>")
+	line = absolutePathPattern.ReplaceAllString(line, "<path>")
+	line = hashPattern.ReplaceAllString(line, "<hash>")
+	line = numberPattern.ReplaceAllString(line, "<n>")
+	line = spacePattern.ReplaceAllString(line, " ")
+	return truncateRunes(strings.TrimSpace(line), maxErrorSignatureRunes)
+}
+
 // CommandRepairFamily returns the first logical command's stable executable
 // family for conservative repair comparison. It only tokenizes shell syntax;
 // it never expands variables, substitutions, or executes any input.

@@ -36,6 +36,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var missionPackBenchmarkSchedule bool
 	var missionPackBenchmarkPrepare bool
 	var missionPackBenchmarkExecute bool
+	var missionPackBenchmarkRecurrence bool
 	var privateEvalCapsule bool
 	var completePrivateEvalCapsule bool
 	var materializeSelectionValue bool
@@ -47,6 +48,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var benchmarkPlan string
 	var benchmarkSchedule string
 	var benchmarkManifest string
+	var benchmarkRecurrenceInput string
 	var benchmarkRoot string
 	var benchmarkGradleCache string
 	var benchmarkSequence int
@@ -89,6 +91,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"missionpack-benchmark-execute",
 		false,
 		"execute and externally score one launchable Mission Pack benchmark manifest",
+	)
+	flags.BoolVar(
+		&missionPackBenchmarkRecurrence,
+		"missionpack-benchmark-recurrence",
+		false,
+		"derive frozen cross-session failed-command fingerprints from benchmark raw streams",
 	)
 	flags.BoolVar(
 		&privateEvalCapsule,
@@ -155,6 +163,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"benchmark-manifest",
 		"",
 		"path to a prepared Mission Pack benchmark run manifest",
+	)
+	flags.StringVar(
+		&benchmarkRecurrenceInput,
+		"benchmark-recurrence-input",
+		"",
+		"path to a strict Mission Pack benchmark recurrence input JSON file",
 	)
 	flags.StringVar(
 		&benchmarkRoot,
@@ -255,6 +269,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	if missionPackBenchmarkSchedule {
 		if missionPackBenchmarkPrepare || missionPackBenchmarkExecute ||
+			missionPackBenchmarkRecurrence ||
 			privateEvalCapsule || completePrivateEvalCapsule ||
 			materializeSelectionValue || comparative || realClaude || realCodex {
 			return errors.New(
@@ -272,7 +287,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		)
 	}
 	if missionPackBenchmarkPrepare {
-		if missionPackBenchmarkExecute ||
+		if missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
 			privateEvalCapsule || completePrivateEvalCapsule ||
 			materializeSelectionValue || comparative || realClaude || realCodex {
 			return errors.New(
@@ -308,7 +323,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		)
 	}
 	if missionPackBenchmarkExecute {
-		if privateEvalCapsule || completePrivateEvalCapsule ||
+		if missionPackBenchmarkRecurrence ||
+			privateEvalCapsule || completePrivateEvalCapsule ||
 			materializeSelectionValue || comparative || realClaude || realCodex {
 			return errors.New(
 				"Mission Pack benchmark execution cannot be combined with other evaluation modes",
@@ -330,11 +346,28 @@ func run(args []string, stdout, stderr io.Writer) error {
 			"benchmark execution inputs require --missionpack-benchmark-execute",
 		)
 	}
+	if missionPackBenchmarkRecurrence {
+		if privateEvalCapsule || completePrivateEvalCapsule ||
+			materializeSelectionValue || comparative || realClaude || realCodex {
+			return errors.New(
+				"Mission Pack benchmark recurrence analysis cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(benchmarkRecurrenceInput) == "" {
+			return errors.New(
+				"--benchmark-recurrence-input is required with --missionpack-benchmark-recurrence",
+			)
+		}
+	} else if strings.TrimSpace(benchmarkRecurrenceInput) != "" {
+		return errors.New(
+			"--benchmark-recurrence-input requires --missionpack-benchmark-recurrence",
+		)
+	}
 
 	if completePrivateEvalCapsule {
 		if privateEvalCapsule || materializeSelectionValue ||
 			comparative || missionPackBenchmarkPrepare ||
-			missionPackBenchmarkExecute ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
 			realClaude || realCodex {
 			return errors.New(
 				"private eval capsule completion cannot be combined with other evaluation modes",
@@ -355,7 +388,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if materializeSelectionValue {
 		if privateEvalCapsule || completePrivateEvalCapsule ||
 			comparative || missionPackBenchmarkPrepare ||
-			missionPackBenchmarkExecute ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
 			realClaude || realCodex {
 			return errors.New(
 				"selection value materialization cannot be combined with other evaluation modes",
@@ -374,7 +407,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	if root == "" && !privateEvalCapsule && !completePrivateEvalCapsule &&
 		!missionPackBenchmarkSchedule && !missionPackBenchmarkPrepare &&
-		!missionPackBenchmarkExecute {
+		!missionPackBenchmarkExecute && !missionPackBenchmarkRecurrence {
 		value, err := os.MkdirTemp("", "belay-c5-cross-harness-")
 		if err != nil {
 			return err
@@ -444,6 +477,35 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		result = value
+	} else if missionPackBenchmarkRecurrence {
+		var input evalrun.MissionPackBenchmarkRecurrenceInput
+		if err := decodeStrictJSONFile(
+			benchmarkRecurrenceInput,
+			"Mission Pack benchmark recurrence input",
+			&input,
+		); err != nil {
+			return err
+		}
+		inputPath, err := filepath.Abs(benchmarkRecurrenceInput)
+		if err != nil {
+			return err
+		}
+		for index := range input.Runs {
+			if !filepath.IsAbs(input.Runs[index].RawEventsPath) {
+				input.Runs[index].RawEventsPath = filepath.Join(
+					filepath.Dir(inputPath),
+					input.Runs[index].RawEventsPath,
+				)
+			}
+		}
+		value, err := evalrun.AnalyzeMissionPackBenchmarkRecurrence(
+			context.Background(),
+			input,
+		)
+		if err != nil {
+			return err
+		}
+		result = value
 	} else if materializeSelectionValue {
 		var input evalrun.SelectionValueInput
 		if err := decodeStrictJSONFile(
@@ -470,7 +532,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		result = value
 	} else if privateEvalCapsule {
 		if comparative || missionPackBenchmarkPrepare ||
-			missionPackBenchmarkExecute ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
 			realClaude || realCodex {
 			return fmt.Errorf(
 				"private eval capsule export cannot be combined with harness evaluation modes",
