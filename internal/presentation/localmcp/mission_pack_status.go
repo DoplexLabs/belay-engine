@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/DoplexLabs/belay-engine/internal/experience"
+	"github.com/DoplexLabs/belay-engine/internal/experience/impact"
 	"github.com/DoplexLabs/belay-engine/internal/localapp"
+	"github.com/DoplexLabs/belay-engine/internal/transcript"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -178,12 +180,79 @@ func missionPackStatusItemSchema() *jsonschema.Schema {
 				0,
 				5,
 			),
+			"observed_after": missionPackObservedImpactSchema(),
 		},
 		"instruction",
 		"version",
 		"status",
 		"coverage_gaps",
 		"evidence",
+	)
+}
+
+func missionPackObservedImpactSchema() *jsonschema.Schema {
+	return closedObjectSchema(
+		map[string]*jsonschema.Schema{
+			"observed_at": timestampSchema(),
+			"comparison_state": enumStringSchema(
+				impact.ComparisonMatched,
+				impact.ComparisonInsufficientBaseline,
+			),
+			"matched_sessions": integerSchema(0, 5),
+			"matched_on": arraySchema(
+				enumStringSchema(
+					impact.MatchProject,
+					impact.MatchHarness,
+					impact.MatchTaskFamily,
+					impact.MatchIssueFingerprint,
+				),
+				2,
+				4,
+			),
+			"corrections":     missionPackImpactMetricSchema(),
+			"failed_attempts": missionPackImpactMetricSchema(),
+			"verification_after_last_edit": enumStringSchema(
+				impact.VerificationObserved,
+				impact.VerificationNotObserved,
+				impact.VerificationNotApplicable,
+			),
+			"task_outcome_state": enumStringSchema(
+				string(experience.TaskOutcomeNotObserved),
+				string(experience.TaskOutcomeSucceeded),
+				string(experience.TaskOutcomeFailed),
+				string(experience.TaskOutcomeUnknown),
+			),
+			"transcript_coverage": enumStringSchema(
+				string(transcript.CoverageComplete),
+				string(transcript.CoveragePartial),
+			),
+			"outcome_coverage_complete": {Type: "boolean"},
+			"evidence_start_turn":       nonNegativeIntegerSchema(),
+			"evidence_end_turn":         nonNegativeIntegerSchema(),
+		},
+		"observed_at",
+		"comparison_state",
+		"matched_sessions",
+		"matched_on",
+		"corrections",
+		"failed_attempts",
+		"verification_after_last_edit",
+		"task_outcome_state",
+		"transcript_coverage",
+		"outcome_coverage_complete",
+		"evidence_start_turn",
+		"evidence_end_turn",
+	)
+}
+
+func missionPackImpactMetricSchema() *jsonschema.Schema {
+	return closedObjectSchema(
+		map[string]*jsonschema.Schema{
+			"current":      {Type: "number"},
+			"prior_median": {Type: "number"},
+			"delta":        {Type: "number"},
+		},
+		"current",
 	)
 }
 

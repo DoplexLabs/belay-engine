@@ -33,6 +33,7 @@ const (
 	mutationExperienceReviewAction mutationPurpose = "experience_review_action"
 	mutationMissionPackPreview     mutationPurpose = "mission_pack_preview"
 	mutationMissionPackReceipt     mutationPurpose = "mission_pack_receipt"
+	mutationExperienceImpact       mutationPurpose = "experience_impact"
 	mutationTrajectoryDerivation   mutationPurpose = "trajectory_derivation"
 	guardedSQLiteDriverName                        = "belay_local_sqlite"
 )
@@ -130,6 +131,21 @@ func initializeMutationConnection(
 	if experienceReady {
 		if _, err := connection.ExecContext(ctx, experienceMutationTriggerSQL, nil); err != nil {
 			return errors.New("install connection-local experience mutation guards")
+		}
+	}
+	impactReady, err := experienceImpactMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if impactReady {
+		if _, err := connection.ExecContext(
+			ctx,
+			experienceImpactMutationTriggerSQL,
+			nil,
+		); err != nil {
+			return errors.New(
+				"install connection-local experience impact mutation guards",
+			)
 		}
 	}
 	trajectoryDerivationReady, err := trajectoryDerivationMutationTablesReady(
@@ -431,6 +447,32 @@ func trajectoryDerivationMutationTablesReady(
 	return count == 1, nil
 }
 
+func experienceImpactMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name = 'experience_impact_observations'`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect experience impact mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect experience impact mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect experience impact mutation schema")
+	}
+	return count == 1, nil
+}
+
 func (s *Store) installMutationGuards(ctx context.Context) error {
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
@@ -463,6 +505,14 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	}
 	if _, err := connection.ExecContext(ctx, experienceMutationTriggerSQL); err != nil {
 		return errors.New("install connection-local experience mutation guards")
+	}
+	if _, err := connection.ExecContext(
+		ctx,
+		experienceImpactMutationTriggerSQL,
+	); err != nil {
+		return errors.New(
+			"install connection-local experience impact mutation guards",
+		)
 	}
 	if _, err := connection.ExecContext(
 		ctx,
@@ -525,6 +575,7 @@ const mutationAuthorizationTableSQL = `
 					'experience_review_action',
 					'mission_pack_preview',
 					'mission_pack_receipt',
+					'experience_impact',
 					'trajectory_derivation'
 				)
 			)
@@ -1252,6 +1303,29 @@ const trajectoryDerivationMutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'trajectory derivation deletion is not authorized');
+	END;`
+
+const experienceImpactMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_experience_impact_insert
+	BEFORE INSERT ON main.experience_impact_observations
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'experience_impact'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'experience impact insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_experience_impact_update
+	BEFORE UPDATE ON main.experience_impact_observations
+	BEGIN
+		SELECT RAISE(ABORT, 'experience impact observations are immutable');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_experience_impact_delete
+	BEFORE DELETE ON main.experience_impact_observations
+	BEGIN
+		SELECT RAISE(ABORT, 'experience impact observations are durable');
 	END;`
 
 const fixMutationTriggerSQL = `

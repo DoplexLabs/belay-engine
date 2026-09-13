@@ -1169,6 +1169,24 @@ func testMissionPackStatusResult() localapp.MissionPackStatusResult {
 				TurnIndex: &turn,
 				Excerpt:   "focused verifier passed",
 			}},
+			ObservedAfter: &localapp.MissionPackObservedImpact{
+				ObservedAt:      evaluatedAt.Add(time.Minute),
+				ComparisonState: "matched",
+				MatchedSessions: 4,
+				MatchedOn:       []string{"project", "harness"},
+				Corrections: localapp.MissionPackImpactMetric{
+					Current: 1,
+				},
+				FailedAttempts: localapp.MissionPackImpactMetric{
+					Current: 1,
+				},
+				VerificationAfterLastEdit: "observed",
+				TaskOutcomeState:          "unknown",
+				TranscriptCoverage:        "complete",
+				OutcomeCoverageComplete:   false,
+				EvidenceStartTurn:         3,
+				EvidenceEndTurn:           9,
+			},
 		}},
 	}
 }

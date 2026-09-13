@@ -47,8 +47,8 @@ func TestMigration022ExperienceReviewActionsSchema(t *testing.T) {
 	if err := store.db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM schema_migrations`,
-	).Scan(&migrations); err != nil || migrations != 23 {
-		t.Fatalf("migration count/error = %d/%v, want 23", migrations, err)
+	).Scan(&migrations); err != nil || migrations != 24 {
+		t.Fatalf("migration count/error = %d/%v, want 24", migrations, err)
 	}
 }
 

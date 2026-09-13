@@ -60,6 +60,11 @@ type MissionPackStatusRepository interface {
 		context.Context,
 		string,
 	) (*experience.Evaluation, error)
+	QueryExperienceImpactObservations(
+		context.Context,
+		string,
+		int,
+	) ([]local.ExperienceImpactObservation, error)
 }
 
 type MissionPackStatusResult struct {
@@ -83,6 +88,28 @@ type MissionPackStatusItem struct {
 	TaskOutcomeState   experience.TaskOutcomeState      `json:"task_outcome_state,omitempty"`
 	CoverageGaps       []experience.CoverageRequirement `json:"coverage_gaps"`
 	Evidence           []MissionPackStatusEvidence      `json:"evidence"`
+	ObservedAfter      *MissionPackObservedImpact       `json:"observed_after,omitempty"`
+}
+
+type MissionPackObservedImpact struct {
+	ObservedAt                time.Time                   `json:"observed_at"`
+	ComparisonState           string                      `json:"comparison_state"`
+	MatchedSessions           int                         `json:"matched_sessions"`
+	MatchedOn                 []string                    `json:"matched_on"`
+	Corrections               MissionPackImpactMetric     `json:"corrections"`
+	FailedAttempts            MissionPackImpactMetric     `json:"failed_attempts"`
+	VerificationAfterLastEdit string                      `json:"verification_after_last_edit"`
+	TaskOutcomeState          experience.TaskOutcomeState `json:"task_outcome_state"`
+	TranscriptCoverage        transcript.SessionCoverage  `json:"transcript_coverage"`
+	OutcomeCoverageComplete   bool                        `json:"outcome_coverage_complete"`
+	EvidenceStartTurn         int64                       `json:"evidence_start_turn"`
+	EvidenceEndTurn           int64                       `json:"evidence_end_turn"`
+}
+
+type MissionPackImpactMetric struct {
+	Current     float64  `json:"current"`
+	PriorMedian *float64 `json:"prior_median,omitempty"`
+	Delta       *float64 `json:"delta,omitempty"`
 }
 
 type MissionPackStatusEvidence struct {
@@ -275,9 +302,69 @@ func (s *MissionPackStatusService) Get(
 			),
 			application.SessionKey,
 		)
+		observations, err := s.repository.QueryExperienceImpactObservations(
+			ctx,
+			application.ApplicationID,
+			1,
+		)
+		if err != nil {
+			return MissionPackStatusResult{}, fmt.Errorf(
+				"load exact Mission Pack impact observation: %w",
+				err,
+			)
+		}
+		if len(observations) > 0 {
+			item.ObservedAfter, err = missionPackObservedImpact(
+				application,
+				observations[0],
+			)
+			if err != nil {
+				return MissionPackStatusResult{},
+					ErrMissionPackStatusMismatch
+			}
+		}
 		result.Items = append(result.Items, item)
 	}
 	return result, nil
+}
+
+func missionPackObservedImpact(
+	application experience.Application,
+	record local.ExperienceImpactObservation,
+) (*MissionPackObservedImpact, error) {
+	observation := record.Observation
+	if observation.ApplicationID != application.ApplicationID ||
+		observation.Experience != application.Experience ||
+		observation.ProjectIdentity != application.ProjectIdentity ||
+		observation.SessionKey != application.SessionKey ||
+		record.ObservedAt.IsZero() {
+		return nil, ErrMissionPackStatusMismatch
+	}
+	return &MissionPackObservedImpact{
+		ObservedAt:      record.ObservedAt.UTC(),
+		ComparisonState: observation.Comparison.State,
+		MatchedSessions: observation.Comparison.ComparableSessions,
+		MatchedOn:       append([]string(nil), observation.Comparison.MatchBasis...),
+		Corrections: MissionPackImpactMetric{
+			Current: float64(observation.Current.ExplicitCorrections),
+			PriorMedian: observation.Comparison.BaselineMedian.
+				ExplicitCorrections,
+			Delta: observation.Comparison.Delta.ExplicitCorrections,
+		},
+		FailedAttempts: MissionPackImpactMetric{
+			Current: float64(observation.Current.FailedToolResults),
+			PriorMedian: observation.Comparison.BaselineMedian.
+				FailedToolResults,
+			Delta: observation.Comparison.Delta.FailedToolResults,
+		},
+		VerificationAfterLastEdit: observation.Current.
+			VerificationAfterFinalEdit,
+		TaskOutcomeState:        observation.Current.TaskOutcomeState,
+		TranscriptCoverage:      observation.Coverage.CurrentTranscript,
+		OutcomeCoverageComplete: observation.Coverage.OutcomeComplete,
+		EvidenceStartTurn:       observation.Evidence.StartTurn,
+		EvidenceEndTurn:         observation.Evidence.EndTurn,
+	}, nil
 }
 
 func validateMissionPackStatusReceipt(

@@ -140,6 +140,17 @@ var (
 		_, err = coordinator.Evaluate(ctx, 64)
 		return err
 	}
+	deriveExperienceImpactsOnce = func(
+		ctx context.Context,
+		store *local.Store,
+	) error {
+		coordinator, err := localapp.NewExperienceImpactCoordinator(store)
+		if err != nil {
+			return err
+		}
+		_, err = coordinator.Observe(ctx, 64)
+		return err
+	}
 	deriveSessionTrajectoriesOnce = func(
 		ctx context.Context,
 		store *local.Store,
@@ -745,11 +756,13 @@ func pollTranscripts(
 		reconciliationErr := reconcileMissionPackReceiptsOnce(ctx, store)
 		trajectoryErr := deriveSessionTrajectoriesOnce(ctx, store)
 		evaluationErr := evaluateExperienceApplicationsOnce(ctx, store)
+		impactErr := deriveExperienceImpactsOnce(ctx, store)
 		for _, err := range []error{
 			importErr,
 			reconciliationErr,
 			trajectoryErr,
 			evaluationErr,
+			impactErr,
 		} {
 			if err != nil &&
 				!errors.Is(err, context.Canceled) &&

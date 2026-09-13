@@ -44,8 +44,8 @@ func TestMigration005AndAppendEventResolved(t *testing.T) {
 	).Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 23 {
-		t.Fatalf("migration count = %d, want 23", migrations)
+	if migrations != 24 {
+		t.Fatalf("migration count = %d, want 24", migrations)
 	}
 
 	event := storageTestEvent(
