@@ -145,15 +145,27 @@ type InsightResult struct {
 	Fixes    []InsightFix     `json:"fixes"`
 }
 
+type InsightSanitization struct {
+	DroppedClusters            int `json:"dropped_clusters,omitempty"`
+	DroppedFixes               int `json:"dropped_fixes,omitempty"`
+	InvalidClusterFields       int `json:"invalid_cluster_fields,omitempty"`
+	UnknownClusterCandidates   int `json:"unknown_cluster_candidates,omitempty"`
+	AmbiguousClusterCandidates int `json:"ambiguous_cluster_candidates,omitempty"`
+	InvalidFixFields           int `json:"invalid_fix_fields,omitempty"`
+	UnknownFixIssues           int `json:"unknown_fix_issues,omitempty"`
+	AmbiguousFixIssues         int `json:"ambiguous_fix_issues,omitempty"`
+}
+
 type InsightRecord struct {
-	InsightID     string        `json:"insight_id"`
-	Project       Project       `json:"project"`
-	Harness       string        `json:"harness"`
-	Model         string        `json:"model,omitempty"`
-	PromptVersion string        `json:"prompt_version"`
-	InputHash     string        `json:"input_hash"`
-	GeneratedAt   time.Time     `json:"generated_at"`
-	Result        InsightResult `json:"result"`
+	InsightID     string              `json:"insight_id"`
+	Project       Project             `json:"project"`
+	Harness       string              `json:"harness"`
+	Model         string              `json:"model,omitempty"`
+	PromptVersion string              `json:"prompt_version"`
+	InputHash     string              `json:"input_hash"`
+	GeneratedAt   time.Time           `json:"generated_at"`
+	Result        InsightResult       `json:"result"`
+	Sanitization  InsightSanitization `json:"sanitization,omitempty"`
 }
 
 type FixRecord struct {
