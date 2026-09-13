@@ -87,7 +87,7 @@ func TestProgressiveInitializationRefreshPreservesActiveNavigation(t *testing.T)
 		`if (state.selectedSessionID) return false;`,
 		`await refreshSessions(false);`,
 		`if (preserveCurrent && priorBrief) {`,
-		`Initial import is still in progress; these values are partial.`,
+		`Importing earlier sessions…`,
 		`No recent activity has been imported yet`,
 		`Initial import is still in progress; this result is partial and will update automatically.`,
 	} {
@@ -163,7 +163,7 @@ func TestInitializationWrappedResponseAndPartialBriefFixture(t *testing.T) {
 		`elements.initializationBanner.hidden = !message;`,
 		`elements.initializationBanner.textContent = message;`,
 		`initializing && sessionCount === 0`,
-		`Initial import is still in progress; these values are partial.`,
+		`Importing earlier sessions…`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("wrapped initializing response behavior is missing %q", required)

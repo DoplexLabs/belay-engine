@@ -25,7 +25,7 @@ func TestMissionPackBrowserContract(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		`"Prepare next session"`,
+		`"Use in next session"`,
 		`/v1/mission-pack?issue_id=${encodeURIComponent(issueID)}&intent=general`,
 		`readText(response.schema_version) !== "belay.mission-pack.v1"`,
 		`missionPackCacheByID.set(pack.pack_id, pack);`,

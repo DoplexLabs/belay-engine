@@ -19,49 +19,49 @@
   const experienceCopy = Object.freeze({
     current: Object.freeze({
       navBrief: "Report",
-      navAttention: "Attention",
+      navAttention: "Patterns",
       navSessions: "Sessions",
       briefEyebrow: "Belay Report",
       briefLoading: "Preparing your report…",
       briefErrorTitle: "Report unavailable",
       briefErrorDetail:
-        "Belay could not prepare the report. Attention and Sessions remain available.",
-      briefOpenAttention: "Open all issues",
-      briefOpenSessions: "Open history",
+        "Belay could not prepare the report. Patterns and Sessions remain available.",
+      briefOpenAttention: "View all patterns",
+      briefOpenSessions: "View sessions",
       briefRecentEmptyDetail:
         "Use /belay in Claude Code or $belay in Codex to review the top issue.",
-      attentionAriaLabel: "Attention inbox",
-      attentionEyebrow: "Findings",
-      attentionHeading: "Attention",
-      attentionStatus: "Attention status",
-      attentionBackLabel: "Back to Attention list",
+      attentionAriaLabel: "Recurring patterns",
+      attentionEyebrow: "Across your agent sessions",
+      attentionHeading: "Patterns",
+      attentionStatus: "Pattern status",
+      attentionBackLabel: "Back to patterns",
       attentionEmptyDetail:
-        "Refresh Attention before relying on this result.",
-      attentionFilterSummary: "Filter Attention",
+        "Refresh Patterns before relying on this result.",
+      attentionFilterSummary: "Filter patterns",
       sessionsHeading: "Sessions",
     }),
     "value-first": Object.freeze({
       navBrief: "Report",
-      navAttention: "Review",
-      navSessions: "History",
+      navAttention: "Patterns",
+      navSessions: "Sessions",
       briefEyebrow: "Belay Report",
       briefLoading: "Preparing your report…",
       briefErrorTitle: "Report unavailable",
       briefErrorDetail:
-        "Belay could not prepare the report. Review and History remain available.",
-      briefOpenAttention: "Open all issues",
-      briefOpenSessions: "Open history",
+        "Belay could not prepare the report. Patterns and Sessions remain available.",
+      briefOpenAttention: "View all patterns",
+      briefOpenSessions: "View sessions",
       briefRecentEmptyDetail:
         "Use /belay in Claude Code or $belay in Codex to review the top issue.",
-      attentionAriaLabel: "Review findings",
-      attentionEyebrow: "Findings and evidence gaps",
-      attentionHeading: "Review",
-      attentionStatus: "Review status",
-      attentionBackLabel: "Back to Review list",
+      attentionAriaLabel: "Recurring patterns",
+      attentionEyebrow: "Across your agent sessions",
+      attentionHeading: "Patterns",
+      attentionStatus: "Pattern status",
+      attentionBackLabel: "Back to patterns",
       attentionEmptyDetail:
-        "Refresh Review before relying on this result.",
-      attentionFilterSummary: "Filter Review",
-      sessionsHeading: "History",
+        "Refresh Patterns before relying on this result.",
+      attentionFilterSummary: "Filter patterns",
+      sessionsHeading: "Sessions",
     }),
   });
   const explicitOutcomes = new Set(["succeeded", "failed", "interrupted"]);
@@ -1317,11 +1317,21 @@
     const harnesses = Array.isArray(brief.totals.harnesses)
       ? brief.totals.harnesses.map(displayHarness).filter(Boolean)
       : [];
-    elements.briefWindow.textContent = harnesses.length
-      ? `All retained activity across ${harnesses.join(" and ")}`
-      : "All retained activity across supported harnesses";
+    const issueCount = brief.top_issues.length;
+    elements.briefHeading.textContent =
+      issueCount === 0
+        ? "No recurring pattern yet"
+        : issueCount === 1
+          ? "Your top recurring pattern"
+          : `Your top ${formatNumber(issueCount)} recurring patterns`;
+    const sessionCount = toFiniteNumber(brief.totals.sessions);
+    const harnessCopy = harnesses.length
+      ? ` from ${harnesses.join(" and ")}`
+      : "";
+    elements.briefWindow.textContent =
+      `Across ${formatNumber(sessionCount)} retained ${sessionCount === 1 ? "session" : "sessions"}${harnessCopy}`;
     elements.briefStatus.textContent = initializationInProgress()
-      ? "Initial import is still in progress; these values are partial."
+      ? "Importing earlier sessions…"
       : `Updated ${formatRelativeTime(brief.generated_at) || "just now"}`;
     renderReportTotals(brief);
     renderReportIssues(brief.top_issues);
@@ -1363,24 +1373,28 @@
     focusRegistry.missionPackTriggers.clear();
     focusRegistry.reportEvidenceTriggers.clear();
     const fragment = document.createDocumentFragment();
-    issues.forEach((issue) => {
-      fragment.append(createReportIssueCard(issue));
+    issues.forEach((issue, index) => {
+      fragment.append(createReportIssueCard(issue, index));
     });
     elements.briefActionList.replaceChildren(fragment);
     elements.briefActionsEmpty.hidden = issues.length !== 0;
   }
 
-  function createReportIssueCard(issue) {
+  function createReportIssueCard(issue, index) {
     const card = createElement("article", "brief-action-card report-issue-card");
+    card.dataset.priority = index === 0 ? "primary" : "secondary";
     card.append(
-      createElement("h3", "report-issue-headline", readText(issue.headline)),
+      createElement(
+        "h3",
+        "report-issue-headline",
+        humanizeReportHeadline(issue.headline),
+      ),
       createElement(
         "p",
         "brief-evidence report-issue-metrics",
         [
           formatIssueDollarCost(issue.cost),
           formatIssueMinutes(issue.cost),
-          formatIssueTokens(issue.cost),
           `${formatNumber(issue.session_count)} ${toFiniteNumber(issue.session_count) === 1 ? "session" : "sessions"}`,
           reportTrendSummary(issue.trend),
         ]
@@ -1396,7 +1410,7 @@
       createElement(
         "strong",
         "report-issue-fix-target",
-        readText(issue.suggested_fix.target_file) || "Agent instructions",
+        `Suggested fix · ${compactDisplayPath(issue.suggested_fix.target_file) || "Agent instructions"}`,
       ),
       createElement(
         "p",
@@ -1410,7 +1424,7 @@
     const prepareButton = createElement(
       "button",
       "primary-button",
-      "Prepare next session",
+      "Use in next session",
     );
     prepareButton.type = "button";
     prepareButton.setAttribute("aria-haspopup", "dialog");
@@ -1446,15 +1460,15 @@
       : {};
     const role = readableLabel(excerpt && excerpt.role, "Transcript");
     const tool = readText(excerpt && excerpt.tool_name);
-    const session = compactID(citation.session_key);
     const turn = Number.isFinite(Number(citation.turn_index))
       ? `turn ${formatNumber(citation.turn_index)}`
       : "";
+    const occurredAt = formatFullDate(parseDate(citation.occurred_at));
     wrapper.append(
       createElement(
         "p",
         "report-issue-preview-citation",
-        [role, tool, session, turn].filter(Boolean).join(" · "),
+        [role, tool, turn, occurredAt].filter(Boolean).join(" · "),
       ),
       createElement(
         "blockquote",
@@ -1474,6 +1488,27 @@
     const boundary = candidate.search(/\s+\S*$/);
     const clipped = boundary >= 160 ? candidate.slice(0, boundary) : candidate;
     return `${clipped.trimEnd()}…`;
+  }
+
+  function compactDisplayPath(value) {
+    const path = readText(value).trim().replace(/[\\/]+$/, "");
+    if (!path) return "";
+    const segments = path.split(/[\\/]/).filter(Boolean);
+    return segments[segments.length - 1] || path;
+  }
+
+  function humanizeReportHeadline(value) {
+    let headline = readText(value).trim();
+    if (!headline) return "Recurring agent pattern";
+    headline = headline.replace(/`([^`]*[\\/][^`]*)`/g, (_, path) => {
+      return `\`${compactDisplayPath(path)}\``;
+    });
+    headline = headline.replace(
+      /(?:\/Users\/|\/home\/|\/private\/|[A-Za-z]:\\)[^\s,;:()[\]{}]+/g,
+      (path) => compactDisplayPath(path),
+    );
+    headline = headline.replace(/\b1 sessions\b/gi, "1 session");
+    return headline;
   }
 
   function clearMissionPackCache() {
@@ -1792,7 +1827,7 @@
     state.dialogReturnFocus = { type: "report-evidence", issueID };
     state.activeModal = "report-evidence";
     elements.reportEvidenceTitle.textContent =
-      readText(issue && issue.headline) || "Issue details";
+      humanizeReportHeadline(issue && issue.headline);
     const excerpts = Array.isArray(issue && issue.excerpts)
       ? issue.excerpts
       : [];
@@ -1822,13 +1857,13 @@
       : {};
     const role = readableLabel(excerpt && excerpt.role, "Transcript");
     const tool = readText(excerpt && excerpt.tool_name);
-    const session = readText(citation.session_key) || "session unavailable";
+    const session = readText(citation.session_key);
     const turn = Number.isFinite(Number(citation.turn_index))
       ? `turn ${formatNumber(citation.turn_index)}`
       : "turn unavailable";
     const occurredAt =
       formatFullDate(parseDate(citation.occurred_at)) || "time unavailable";
-    const source = readText(citation.source_file_id) || "source unavailable";
+    const source = readText(citation.source_file_id);
     const offset = Number.isFinite(Number(citation.jsonl_byte_offset))
       ? `byte ${formatNumber(citation.jsonl_byte_offset)}`
       : "byte offset unavailable";
@@ -1836,7 +1871,7 @@
       createElement(
         "p",
         "cost-issue-citation report-evidence-citation",
-        [role, tool, session, turn, occurredAt, source, offset]
+        [role, tool, turn, occurredAt]
           .filter(Boolean)
           .join(" · "),
       ),
@@ -1846,6 +1881,20 @@
         readText(excerpt && excerpt.text) || "Excerpt unavailable",
       ),
     );
+    const technicalCitation = createElement(
+      "details",
+      "report-evidence-technical",
+    );
+    technicalCitation.append(
+      createElement("summary", "", "Technical citation"),
+      createElement(
+        "code",
+        "",
+        [session, source, offset].filter(Boolean).join(" · ") ||
+          "No additional citation details",
+      ),
+    );
+    wrapper.append(technicalCitation);
     return wrapper;
   }
 
@@ -1854,7 +1903,10 @@
     const fragment = document.createDocumentFragment();
     [
       ["Kind", readableLabel(fix.kind, "Project instruction")],
-      ["Target file", readText(fix.target_file) || "Agent instructions"],
+      [
+        "Target file",
+        compactDisplayPath(fix.target_file) || "Agent instructions",
+      ],
       [
         "Rationale",
         readText(fix.rationale) ||
@@ -1905,7 +1957,7 @@
         createElement(
           "strong",
           "",
-          `${stateLabel}: ${readText(fix.target_file) || "configuration"}`,
+          `${stateLabel}: ${compactDisplayPath(fix.target_file) || "configuration"}`,
         ),
         createElement(
           "p",
@@ -3169,7 +3221,7 @@
   function formatIssueMinutes(cost) {
     const minutes = Math.max(0, toFiniteNumber(cost && cost.wasted_minutes));
     const formatted =
-      minutes >= 10 ? Math.round(minutes).toString() : minutes.toFixed(1);
+      minutes >= 10 ? formatNumber(Math.round(minutes)) : minutes.toFixed(1);
     return `${cost && cost.lower_bound ? "At least " : ""}${formatted} min`;
   }
 
