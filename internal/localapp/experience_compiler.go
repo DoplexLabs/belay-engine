@@ -586,6 +586,7 @@ func selectionLexicalTerms(value string) map[string]struct{} {
 	)
 	result := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
+		part = normalizeSelectionLexicalTerm(part)
 		if part == "" {
 			continue
 		}
@@ -595,6 +596,18 @@ func selectionLexicalTerms(value string) map[string]struct{} {
 		result[part] = struct{}{}
 	}
 	return result
+}
+
+func normalizeSelectionLexicalTerm(value string) string {
+	switch value {
+	case "asynchronous":
+		return "async"
+	case "cancellation", "cancelled", "canceled",
+		"cancelling", "canceling", "cancels":
+		return "cancel"
+	default:
+		return value
+	}
 }
 
 func estimateExperienceSelectionTokens(

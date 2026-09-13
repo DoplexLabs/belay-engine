@@ -260,6 +260,34 @@ func TestExperienceCompilerSelectionUsesTaskHintWhenPreTaskPathsAreUnknown(
 	}
 }
 
+func TestExperienceCompilerSelectionNormalizesAsyncVocabulary(t *testing.T) {
+	now := time.Date(2026, 9, 10, 23, 20, 0, 0, time.UTC)
+	value := compilerTestExperience(t, "async vocabulary")
+	value.Scope.TaskFamilies = []string{"Python asynchronous concurrency"}
+	value.Applicability.SemanticDescription =
+		"Cancel sibling tasks and await cleanup before returning."
+	compilerTestRehash(t, &value)
+	store := &experienceCompilerTestStore{
+		generation: compilerTestGeneration(now, compilerTestRef(value)),
+		values:     compilerTestStoredValues(value),
+	}
+	result := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessCodex,
+			TaskFamily:      "implement",
+			TaskHint:        "Async cancellation and cleanup",
+			RepositoryPaths: make([]string, 0),
+		},
+	)
+	if len(result.Selected) != 1 {
+		t.Fatalf("async vocabulary selection = %+v", result)
+	}
+}
+
 func TestExperienceCompilerSelectionSupportsOnlyPathConditions(t *testing.T) {
 	now := time.Date(2026, 9, 10, 23, 30, 0, 0, time.UTC)
 	supported := compilerTestExperience(t, "path condition")

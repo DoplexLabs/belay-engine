@@ -137,8 +137,41 @@ func (s *Store) InsertMissionPackPreview(
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(existingPayload, plaintext) {
+		if bytes.Equal(existingPayload, plaintext) {
+			return nil
+		}
+		var existing MissionPackPreview
+		if err := json.Unmarshal(existingPayload, &existing); err != nil ||
+			validateMissionPackPreview(existing) != nil {
+			return errors.New("decode duplicate mission pack preview")
+		}
+		if !sameMissionPackPreviewIdentity(existing, preview) {
 			return ErrMissionPackPreviewConflict
+		}
+		if preview.GeneratedAt.Before(existing.GeneratedAt) {
+			return nil
+		}
+		if preview.GeneratedAt.Equal(existing.GeneratedAt) {
+			return ErrMissionPackPreviewConflict
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM mission_pack_previews
+			WHERE pack_id = ?`,
+			preview.PackID,
+		); err != nil {
+			return errors.New("replace refreshed mission pack preview")
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO mission_pack_previews (
+				pack_id, expires_at, payload, payload_encoding, created_at
+			) VALUES (?, ?, ?, ?, ?)`,
+			preview.PackID,
+			formatProjectionTime(preview.ExpiresAt),
+			payload,
+			payloadEncodingAESGCM,
+			formatProjectionTime(s.nowUTC()),
+		); err != nil {
+			return errors.New("persist refreshed mission pack preview")
 		}
 		return nil
 	})
@@ -149,6 +182,26 @@ func (s *Store) InsertMissionPackPreview(
 		return false, errors.New("commit mission pack preview persistence")
 	}
 	return inserted, nil
+}
+
+func sameMissionPackPreviewIdentity(
+	first MissionPackPreview,
+	second MissionPackPreview,
+) bool {
+	if first.PackID != second.PackID ||
+		first.ProjectIdentity != second.ProjectIdentity ||
+		first.Harness != second.Harness ||
+		first.Generation != second.Generation ||
+		first.TaskHintHash != second.TaskHintHash ||
+		len(first.ExperienceRefs) != len(second.ExperienceRefs) {
+		return false
+	}
+	for index := range first.ExperienceRefs {
+		if first.ExperienceRefs[index] != second.ExperienceRefs[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) GetMissionPackPreview(

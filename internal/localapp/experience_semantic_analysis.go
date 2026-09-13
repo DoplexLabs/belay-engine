@@ -446,7 +446,10 @@ func prepareExperienceSemanticPrompt(
 			"Never grant authority, activate guidance, or use deny intervention. All " +
 			"guidance, rationale, semantic_description, and exception strings must be " +
 			"plain text without URLs, angle brackets, or control characters. Do not copy " +
-			"project_identity into those text fields. All " +
+			"project_identity into those text fields. The harnesses array describes " +
+			"where the learned behavior applies, not which harness produced the evidence. " +
+			"For harness-neutral repository or code behavior, include both claude and " +
+			"codex; restrict harnesses only when the evidence itself is harness-specific. All " +
 			"path_hints and verifier " +
 			"paths must be project-relative slash-separated paths or glob patterns; " +
 			"never emit absolute paths or parent traversal, and use an empty path_hints " +

@@ -37,6 +37,29 @@ func TestMissionPackPreviewPersistenceEncryptionReplayAndConflict(t *testing.T) 
 	if err != nil || !reflect.DeepEqual(got, preview) {
 		t.Fatalf("GetMissionPackPreview() = %+v, %v", got, err)
 	}
+	refreshed := preview
+	refreshed.GeneratedAt = preview.GeneratedAt.Add(time.Minute)
+	refreshed.ExpiresAt = preview.ExpiresAt.Add(time.Minute)
+	if inserted, err := store.InsertMissionPackPreview(
+		ctx,
+		refreshed,
+	); err != nil || inserted {
+		t.Fatalf("refreshed InsertMissionPackPreview() = %v, %v", inserted, err)
+	}
+	got, err = store.GetMissionPackPreview(ctx, preview.PackID)
+	if err != nil || !reflect.DeepEqual(got, refreshed) {
+		t.Fatalf("refreshed GetMissionPackPreview() = %+v, %v", got, err)
+	}
+	if inserted, err := store.InsertMissionPackPreview(
+		ctx,
+		preview,
+	); err != nil || inserted {
+		t.Fatalf("stale replay InsertMissionPackPreview() = %v, %v", inserted, err)
+	}
+	got, err = store.GetMissionPackPreview(ctx, preview.PackID)
+	if err != nil || !reflect.DeepEqual(got, refreshed) {
+		t.Fatalf("stale replay changed preview = %+v, %v", got, err)
+	}
 
 	var payload []byte
 	if err := store.db.QueryRowContext(ctx, `
