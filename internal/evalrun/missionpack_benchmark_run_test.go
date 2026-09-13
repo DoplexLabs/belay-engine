@@ -46,6 +46,11 @@ func TestPrepareMissionPackBenchmarkRunIsolatesNoContextRun(t *testing.T) {
 	if !slices.Contains(manifest.Command.Arguments, "--ignore-rules") ||
 		!slices.Contains(manifest.Command.Arguments, "--ephemeral") ||
 		!slices.Contains(manifest.Command.Arguments, "--approve-for-me") ||
+		!argumentPairPresent(
+			manifest.Command.Arguments,
+			"--add-dir",
+			manifest.GradleHomePath,
+		) ||
 		slices.Contains(manifest.Command.Arguments, "--ignore-user-config") ||
 		slices.Contains(manifest.Command.Arguments, "--sandbox") {
 		t.Fatalf("arguments = %q", manifest.Command.Arguments)
@@ -58,6 +63,15 @@ func TestPrepareMissionPackBenchmarkRunIsolatesNoContextRun(t *testing.T) {
 			t.Fatalf("%s unexpectedly present: %v", forbidden, err)
 		}
 	}
+}
+
+func argumentPairPresent(arguments []string, flag, value string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == flag && arguments[index+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPrepareMissionPackBenchmarkRunUsesHarnessStaticFile(t *testing.T) {

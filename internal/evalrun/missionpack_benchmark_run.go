@@ -586,6 +586,7 @@ func benchmarkHarnessCommand(
 			"--ephemeral",
 			"--approve-for-me",
 			"--ignore-rules",
+			"--add-dir", gradleHome,
 			"--model", model,
 			"--cd", workspace,
 			prompt,
