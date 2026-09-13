@@ -425,8 +425,13 @@ func prepareExperienceSemanticPrompt(
 			"reusable behavior established by the cited evidence; do not propose guidance " +
 			"that merely repeats the verifier command. If the evidence supports only a " +
 			"verification command and no reusable behavior, reject it as redundant. " +
+			"Preserve every explicit qualification or exception that materially limits " +
+			"the reusable behavior; never broaden a rule by dropping its exception. " +
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
 			"Never grant authority, activate guidance, or use deny intervention. All " +
+			"guidance, rationale, semantic_description, and exception strings must be " +
+			"plain text without URLs, angle brackets, or control characters. Do not copy " +
+			"project_identity into those text fields. All " +
 			"path_hints and verifier " +
 			"paths must be project-relative slash-separated paths or glob patterns; " +
 			"never emit absolute paths or parent traversal, and use an empty path_hints " +
@@ -742,17 +747,31 @@ func semanticProposalContent(
 			"experience semantic proposal rationale exceeds decision explanation limit",
 		)
 	}
-	for _, text := range append(
-		[]string{
-			value.Guidance,
-			value.Rationale,
-			value.Applicability.SemanticDescription,
+	textFields := []struct {
+		name  string
+		value string
+	}{
+		{name: "guidance", value: value.Guidance},
+		{name: "rationale", value: value.Rationale},
+		{
+			name:  "semantic_description",
+			value: value.Applicability.SemanticDescription,
 		},
-		value.Exceptions...,
-	) {
-		if !semanticProposalPlainText(text) {
-			return experience.ExperienceProposal{}, errors.New(
-				"experience semantic proposal contains URL, markup, or control text",
+	}
+	for index, exception := range value.Exceptions {
+		textFields = append(textFields, struct {
+			name  string
+			value string
+		}{
+			name:  fmt.Sprintf("exception[%d]", index),
+			value: exception,
+		})
+	}
+	for _, field := range textFields {
+		if !semanticProposalPlainText(field.value) {
+			return experience.ExperienceProposal{}, fmt.Errorf(
+				"experience semantic proposal %s contains URL, markup, or control text",
+				field.name,
 			)
 		}
 	}
