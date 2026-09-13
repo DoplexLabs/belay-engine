@@ -71,7 +71,7 @@ jobs:
             "dist/belay-local-developer-alpha-v${ALPHA_VERSION}-darwin-arm64.tar.gz"
 
       - name: Upload short-lived workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: belay-local-developer-alpha
           path: |
