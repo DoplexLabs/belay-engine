@@ -56,7 +56,7 @@ cat > "${output}" <<EOF
 class Belay < Formula
   desc "Private local intelligence for Claude Code and Codex sessions"
   homepage "https://getbelay.vercel.app"
-  url "https://github.com/DoplexLabs/homebrew-tap/releases/download/v${version}/belay-local-developer-alpha-v${version}-darwin-arm64.tar.gz"
+  url "https://github.com/DoplexLabs/belay-engine/releases/download/v${version}/belay-local-developer-alpha-v${version}-darwin-arm64.tar.gz"
   version "${version}"
   sha256 "${sha256}"
   license "Apache-2.0"

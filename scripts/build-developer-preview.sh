@@ -7,7 +7,7 @@ readonly NUMBAT_COMMIT="f0778c09dc48281aa93a3887d05096c0a1f3f9f7"
 readonly NUMBAT_VERSION_MARKER="f0778c09dc48"
 readonly NUMBAT_LICENSE_SHA256="c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 readonly NUMBAT_THIRD_PARTY_SHA256="c2732acc87437d691ad1c5fc70cd1c6596a8999a1926721a2004f3e7b7692c77"
-readonly DEFAULT_VERSION="0.0.1-alpha.1"
+readonly DEFAULT_VERSION="0.0.1-alpha.4"
 
 usage() {
   cat <<'EOF'
@@ -17,7 +17,7 @@ Build Belay Local Developer Alpha archives without publishing them.
 
 Options:
   --arch arm64|amd64|all  Target macOS architecture (default: native)
-  --version VERSION       Artifact version label (default: 0.0.1-alpha.1)
+  --version VERSION       Artifact version label (default: 0.0.1-alpha.4)
   --output-dir PATH       Output directory (default: ./dist)
   --numbat-source PATH    Use an existing pristine Numbat checkout
   --codesign-identity ID  Sign both binaries with an Apple Developer ID

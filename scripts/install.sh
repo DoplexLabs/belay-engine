@@ -2,8 +2,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly DEFAULT_VERSION="0.0.1-alpha.1"
-readonly REPOSITORY="DoplexLabs/homebrew-tap"
+readonly DEFAULT_VERSION="0.0.1-alpha.4"
+readonly REPOSITORY="DoplexLabs/belay-engine"
 
 die() {
   printf 'belay-install: %s\n' "$*" >&2
@@ -17,7 +17,7 @@ usage: install.sh [options]
 Install or update Belay for the current macOS user.
 
 Options:
-  --version VERSION             Release version (default: 0.0.1-alpha.1)
+  --version VERSION             Release version (default: 0.0.1-alpha.4)
   --quickstart                  Start private Belay onboarding after install
   --allow-codex-mcp-add         Pass the explicit Codex MCP opt-in to quickstart
   --uninstall                   Remove the program, monitor hooks, and Belay MCP

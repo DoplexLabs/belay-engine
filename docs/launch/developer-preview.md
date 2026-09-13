@@ -1,20 +1,21 @@
 # Belay Local Developer Alpha
 
-Prepared version: `0.0.1-alpha.1`
+Prepared version: `0.0.1-alpha.4`
 
 This is an individual-developer alpha for private, accountless observation of
 local Codex and Claude Code activity. It is Local-only. Belay Teams is not included.
 
-Local source-built validation artifacts are unsigned and unnotarized. The
-external installer accepts only a Developer ID-signed and Apple-notarized
-release produced by the gated release workflow.
+The founder-led external alpha is unsigned and unnotarized. Its release
+workflow still requires a clean tree, the full suite, checksum verification,
+packaged smoke testing, and explicit publication authorization. A later broad
+release remains gated on Developer ID signing and Apple notarization.
 
 The alpha is:
 
 - Apple Silicon macOS only (`darwin/arm64`)
 - validated only for Codex and Claude Code
 - distributed only after a separate human authorization
-- not a production release, installer, or supported update channel
+- an explicitly unsupported prerelease rather than a production channel
 
 Intel macOS remains an engineering build target but is not an alpha support
 claim until an Intel clean-machine run passes. Linux and Windows are out of
@@ -39,20 +40,20 @@ Use a clean checkout on an Apple Silicon Mac:
 
 ```bash
 make verify
-make preview ALPHA_VERSION=0.0.1-alpha.1 ALPHA_ARCH=arm64
+make preview ALPHA_VERSION=0.0.1-alpha.4 ALPHA_ARCH=arm64
 ```
 
 Or run the complete automated, non-publishing readiness path:
 
 ```bash
-make alpha-readiness ALPHA_VERSION=0.0.1-alpha.1
+make alpha-readiness ALPHA_VERSION=0.0.1-alpha.4
 ```
 
 Expected output:
 
 ```text
-dist/belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz
-dist/belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz.sha256
+dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
+dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
 ```
 
 The commands do not sign, notarize, tag, publish, release, deploy, or contact a
@@ -63,7 +64,7 @@ commit:
 
 ```bash
 scripts/build-developer-preview.sh \
-  --version 0.0.1-alpha.1 \
+  --version 0.0.1-alpha.4 \
   --arch arm64 \
   --numbat-source /absolute/path/to/pristine/numbat \
   --output-dir ./dist
@@ -98,14 +99,14 @@ Keep the archive and companion checksum together:
 ```bash
 cd /path/to/downloads
 shasum -a 256 -c \
-  belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz.sha256
+  belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
 ```
 
 From a source checkout, run the disposable smoke test:
 
 ```bash
 scripts/smoke-developer-preview.sh \
-  ./dist/belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz
+  ./dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
 ```
 
 The smoke test verifies archive paths, internal checksums, architecture, the
@@ -134,27 +135,26 @@ per-binary path. Do not disable Gatekeeper or any system-wide protection.
 
 ## Install-to-first-insight path
 
-For a published signed alpha:
+For the published external alpha:
 
 ```bash
-brew install doplexlabs/tap/belay
-belay quickstart
+curl -fsSL https://getbelay.vercel.app/install | bash
 ```
 
-The public tap downloads the release from `DoplexLabs/homebrew-tap`, while the
-private engine repository remains inaccessible. The short fallback installer
-is `curl -fsSL https://getbelay.vercel.app/install | bash`. It verifies the
-release checksum and embedded package checksums, rejects dirty, unsigned, or
-unnotarized builds, and installs a stable `belay` command under the current
-user. Re-running it upgrades the installation.
+The short installer downloads the exact prerelease from
+`DoplexLabs/belay-engine`. It verifies the release checksum and embedded package
+checksums, rejects dirty builds, and installs a stable `belay` command under the
+current user. The bootstrap explicitly opts into the current unsigned alpha;
+that exception is not used by the future signed channel. Re-running it upgrades
+the installation.
 
-For a local unsigned validation artifact, use the manual extraction path below.
+For a local validation artifact, use the manual extraction path below.
 
 Extract the package and keep both binaries together:
 
 ```bash
-tar -xzf belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz
-cd belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64
+tar -xzf belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
+cd belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64
 
 ./bin/belay quickstart
 ```

@@ -1,4 +1,4 @@
-ALPHA_VERSION ?= 0.0.1-alpha.1
+ALPHA_VERSION ?= 0.0.1-alpha.4
 ALPHA_ARCH ?= arm64
 ALPHA_OUTPUT ?= ./dist
 

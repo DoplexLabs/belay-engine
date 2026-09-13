@@ -13,32 +13,26 @@ separate product and is not included in this Local alpha.
 
 ## Belay Local Developer Alpha
 
-The prepared version is `0.0.1-alpha.1`. Local source builds remain unsigned
-and unnotarized. The external distribution path is Apple Silicon-only and
-publishes only after Developer ID signing, Apple notarization, checksum
-verification, packaged smoke testing, and installer validation all pass.
+The prepared version is `0.0.1-alpha.4`. This founder-led external alpha is
+unsigned, unnotarized, and Apple Silicon-only. Publication remains gated on the
+full test suite, checksum verification, packaged smoke testing, and explicit
+human authorization. A later broadly advertised release remains gated on Apple
+Developer ID signing and notarization.
 
 ### Install
 
-After the signed alpha release is published, installation is:
+To install and begin onboarding in one command:
 
 ```bash
-brew install doplexlabs/tap/belay
-belay quickstart
+curl -fsSL https://getbelay.vercel.app/install | bash
 ```
 
-To install and begin onboarding in one command without Homebrew:
-
-```bash
-curl -fsSL https://getbelay.vercel.app/install | bash -s -- --quickstart
-```
-
-The public Homebrew tap and short installer endpoint resolve only to the
-versioned signed release in `DoplexLabs/homebrew-tap`; private engine source is
-never exposed. The installer accepts only the expected Apple Silicon archive,
-verifies both external and internal checksums, and rejects dirty, unsigned, or
-unnotarized builds. Re-running it upgrades the stable installation. Uninstall
-preserves encrypted local history:
+The short installer resolves to the exact versioned GitHub prerelease in
+`DoplexLabs/belay-engine`. It accepts only the expected Apple Silicon archive,
+verifies both external and internal checksums, and rejects dirty builds. The
+alpha bootstrap explicitly permits the current unsigned package; testers should
+review that limitation before running it. Re-running the command upgrades the
+installation. Uninstall preserves encrypted local history:
 
 ```bash
 curl -fsSL https://getbelay.vercel.app/install | bash -s -- --uninstall
@@ -56,7 +50,6 @@ Alpha scope:
 - Attention Inbox with deterministic issues and exact matching sessions
 - Bounded fix proposals and append-only application records with no arbitrary
   project-file write
-- Exact post-attempt recurrence monitoring with bounded retained evidence
 - Governed local MCP tools for evidence, issues, fixes, Mission Packs, and
   experience learning
 
@@ -252,13 +245,13 @@ Silicon:
 
 ```bash
 make verify
-make preview ALPHA_VERSION=0.0.1-alpha.1 ALPHA_ARCH=arm64
+make preview ALPHA_VERSION=0.0.1-alpha.4 ALPHA_ARCH=arm64
 ```
 
 Run the complete non-publishing automated readiness path:
 
 ```bash
-make alpha-readiness ALPHA_VERSION=0.0.1-alpha.1
+make alpha-readiness ALPHA_VERSION=0.0.1-alpha.4
 ```
 
 That target verifies source and release-surface checks, builds the arm64
@@ -269,8 +262,8 @@ deploys, or modifies real Belay/harness state.
 The expected files are:
 
 ```text
-dist/belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz
-dist/belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz.sha256
+dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
+dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
 ```
 
 No artifact is published merely by running these commands.
@@ -282,10 +275,10 @@ the directory containing both files:
 
 ```bash
 shasum -a 256 -c \
-  belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz.sha256
+  belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
 
-tar -xzf belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64.tar.gz
-cd belay-local-developer-alpha-v0.0.1-alpha.1-darwin-arm64
+tar -xzf belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
+cd belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64
 
 ./bin/belay quickstart
 ```
@@ -537,5 +530,6 @@ distributable, regardless of which automated checks pass.
   [`docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md`](docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md)
 
 The normal CI workflow validates code and release-surface checks. The separate
-Developer Alpha workflow is manual-only and may upload short-lived workflow
-artifacts; it contains no release or publishing step.
+Developer Alpha workflow is manual-only. It always uploads a short-lived
+workflow artifact and publishes an unsigned GitHub prerelease only when its
+explicit `publish` input is true.

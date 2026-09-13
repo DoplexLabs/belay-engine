@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly ALPHA_VERSION="0.0.1-alpha.1"
+readonly ALPHA_VERSION="0.0.1-alpha.4"
 readonly NUMBAT_COMMIT="f0778c09dc48281aa93a3887d05096c0a1f3f9f7"
 
 die() {
@@ -63,8 +63,6 @@ for path in \
 done
 
 require_text "${repository_root}/README.md" "Apple Silicon"
-require_text "${repository_root}/README.md" \
-  "brew install doplexlabs/tap/belay"
 require_text "${repository_root}/README.md" \
   "curl -fsSL https://getbelay.vercel.app/install | bash"
 require_text "${repository_root}/docs/launch/developer-preview.md" "Apple Silicon"
@@ -170,15 +168,21 @@ require_text "${repository_root}/scripts/install.sh" \
 require_text "${repository_root}/scripts/notarize-release.sh" \
   'xcrun notarytool submit'
 require_text "${repository_root}/scripts/install.sh" \
-  'readonly REPOSITORY="DoplexLabs/homebrew-tap"'
+  'readonly REPOSITORY="DoplexLabs/belay-engine"'
 require_text "${repository_root}/scripts/render-homebrew-formula.sh" \
-  'DoplexLabs/homebrew-tap/releases/download'
+  'DoplexLabs/belay-engine/releases/download'
 require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
   'scripts/notarize-release.sh'
 require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
   'gh release create'
 require_text "${repository_root}/.github/workflows/signed-alpha-release.yml" \
-  'DoplexLabs/homebrew-tap'
+  'DoplexLabs/belay-engine'
+require_text "${repository_root}/.github/workflows/developer-preview.yml" \
+  'if: ${{ inputs.publish }}'
+require_text "${repository_root}/.github/workflows/developer-preview.yml" \
+  'gh release create'
+require_text "${repository_root}/.github/workflows/developer-preview.yml" \
+  'DoplexLabs/belay-engine'
 require_text "${repository_root}/scripts/smoke-developer-preview.sh" \
   '"${belay}" agents'
 require_text "${repository_root}/.github/workflows/developer-preview.yml" \
@@ -262,12 +266,6 @@ fi
 if grep -Fq 'if: runner.arch' \
   "${repository_root}/.github/workflows/developer-preview.yml"; then
   die "developer-alpha workflow may not conditionally skip native smoke"
-fi
-
-if grep -Eq \
-  'softprops/action-gh-release|ncipollo/release-action|gh[[:space:]]+release|gh[[:space:]]+api.*releases|git[[:space:]]+push|git[[:space:]]+tag|npm[[:space:]]+publish|docker[[:space:]]+push|aws[[:space:]]+s3' \
-  "${repository_root}/.github/workflows/developer-preview.yml"; then
-  die "developer-alpha workflow contains a release or publishing command"
 fi
 
 printf 'alpha release-surface validation passed\n'
