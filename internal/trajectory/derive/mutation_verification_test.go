@@ -176,13 +176,24 @@ func TestVerificationOutcomeRequiresSingleExplicitExitCode(t *testing.T) {
 	}
 }
 
-func TestMutationWithoutCanonicalMatchDoesNotGuessByFilename(t *testing.T) {
+func TestMutationVerificationFallsBackToExplicitTranscriptMutation(t *testing.T) {
 	base := time.Date(2026, 9, 10, 17, 40, 0, 0, time.UTC)
 	session := fixtureSession("ses_mutation_missing", transcript.CoverageComplete)
+	notError := false
+	result := resultFixtureTurn(
+		session.SessionKey,
+		2,
+		base.Add(2*time.Second),
+		"verify-1",
+		nil,
+	)
+	result.Payload.ToolIsError = &notError
 	got, err := Session(Input{
 		Session: session,
 		Turns: []transcript.Turn{
 			mutationFixtureTurn(session.SessionKey, 0, base, "edit-1", "internal/a.go"),
+			commandFixtureTurn(session.SessionKey, 1, base.Add(time.Second), "verify-1", "go test ./..."),
+			result,
 		},
 		CanonicalEvents: []model.Event{
 			fixtureEvent("evt_tool_only", session.SessionKey, 1, base, "tool.call", "edit-1"),
@@ -204,8 +215,18 @@ func TestMutationWithoutCanonicalMatchDoesNotGuessByFilename(t *testing.T) {
 		t.Fatal(err)
 	}
 	if relationCounts(got.Edges)[trajectory.RelationModifies] != 0 ||
-		!hasDiagnostic(got.Diagnostics, DiagnosticMissingMutation) {
-		t.Fatalf("mutation match was guessed: %+v", got)
+		relationCounts(got.Edges)[trajectory.RelationVerifies] != 1 ||
+		len(got.Outcomes) != 1 ||
+		got.Outcomes[0].Kind != trajectory.OutcomeVerificationPass ||
+		hasDiagnostic(got.Diagnostics, DiagnosticMissingMutation) {
+		t.Fatalf("transcript mutation fallback = %+v", got)
+	}
+	verifyEdge := edgeWithRelation(t, got.Edges, trajectory.RelationVerifies)
+	if verifyEdge.To.Kind != trajectory.NodeTranscriptTurn ||
+		verifyEdge.To.TurnIndex == nil ||
+		*verifyEdge.To.TurnIndex != 0 ||
+		len(verifyEdge.SourceRefs) != 2 {
+		t.Fatalf("transcript mutation verification edge = %+v", verifyEdge)
 	}
 }
 

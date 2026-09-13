@@ -154,8 +154,8 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	verify.Payload.RawCommand = "go test ./..."
 	result := candidateTurn("ses_success", 3, transcript.RoleToolResult)
 	result.Payload.ToolCallID = "verify_1"
-	exitCode := 0
-	result.Payload.ExitCode = &exitCode
+	notError := false
+	result.Payload.ToolIsError = &notError
 	result.Payload.ToolResult = "ok"
 	editRef := candidateTurnRef(edit)
 	verifyRef := candidateTurnRef(verify)

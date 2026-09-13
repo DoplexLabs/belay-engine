@@ -211,11 +211,11 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		if !ok {
 			continue
 		}
-		rawCommand := strings.TrimSpace(call.Payload.RawCommand)
-		commandClass, recognized := transcriptissues.ClassifyVerificationCommand(
-			rawCommand,
-			value.projectConfigs[outcome.SessionKey],
-		)
+		commandClass, rawCommand, recognized :=
+			transcriptissues.RetainedVerificationCommand(
+				call,
+				value.projectConfigs[outcome.SessionKey],
+			)
 		if !recognized {
 			continue
 		}
@@ -433,11 +433,13 @@ func (value *compiler) commandOutcomeTurns(
 			result, resultRef = turn, ref
 		}
 	}
+	failed, known := transcriptissues.ExplicitToolResultFailed(result)
 	if callRef.Kind == "" || resultRef.Kind == "" ||
 		call.Payload.ToolCallID == "" ||
 		call.Payload.ToolCallID != result.Payload.ToolCallID ||
-		result.Payload.ExitCode == nil ||
-		*result.Payload.ExitCode != wantExitCode {
+		!known ||
+		(failed && wantExitCode == 0) ||
+		(!failed && wantExitCode != 0) {
 		return transcript.Turn{}, trajectory.NodeRef{}, transcript.Turn{}, trajectory.NodeRef{}, false
 	}
 	return call, callRef, result, resultRef, true
@@ -453,11 +455,16 @@ func (value *compiler) explicitResult(
 	count := 0
 	for _, ref := range refs {
 		turn, ok := value.turn(ref)
+		failed, known := transcriptissues.ExplicitToolResultFailed(turn)
+		exitCode := 0
+		if failed {
+			exitCode = 1
+		}
 		if !ok || turn.Role != transcript.RoleToolResult ||
 			call.Payload.ToolCallID == "" ||
 			turn.Payload.ToolCallID != call.Payload.ToolCallID ||
-			turn.Payload.ExitCode == nil ||
-			!exitMatches(*turn.Payload.ExitCode) {
+			!known ||
+			!exitMatches(exitCode) {
 			continue
 		}
 		match, matchRef = turn, ref
@@ -479,7 +486,8 @@ func (value *compiler) matchingVerificationEdges(
 			edge.Confidence != trajectory.ConfidenceHigh ||
 			edge.DerivationVersion != outcome.DerivationVersion ||
 			!sameNode(edge.From, callRef) ||
-			edge.To.Kind != trajectory.NodeCanonicalEvent ||
+			(edge.To.Kind != trajectory.NodeCanonicalEvent &&
+				edge.To.Kind != trajectory.NodeTranscriptTurn) ||
 			!containsNode(edge.SourceRefs, callRef) ||
 			!containsNode(edge.SourceRefs, edge.To) {
 			continue

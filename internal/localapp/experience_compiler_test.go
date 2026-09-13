@@ -205,6 +205,61 @@ func TestExperienceCompilerSelectionRequiresExactScopedMatches(t *testing.T) {
 	}
 }
 
+func TestExperienceCompilerSelectionUsesTaskHintWhenPreTaskPathsAreUnknown(
+	t *testing.T,
+) {
+	now := time.Date(2026, 9, 10, 23, 25, 0, 0, time.UTC)
+	value := compilerTestExperience(t, "sqlite migration")
+	value.Scope.TaskFamilies = []string{
+		"database-migration",
+		"schema-change",
+	}
+	value.Scope.RepositoryPaths = []string{"task.py"}
+	value.Applicability.DeterministicConditions =
+		[]experience.DeterministicCondition{{
+			Kind:   experience.ConditionPathPattern,
+			Values: []string{"task.py"},
+		}}
+	value.Applicability.SemanticDescription =
+		"Writing SQLite migrations that must be safely re-runnable."
+	value.Guidance.Instruction =
+		"Make SQLite schema migrations idempotent and atomic."
+	compilerTestRehash(t, &value)
+	store := compilerTestStoreFor(now, value)
+
+	relevant := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessClaude,
+			TaskFamily:      "implement",
+			TaskHint:        "SQLite migration invariants",
+			RepositoryPaths: []string{},
+		},
+	)
+	if len(relevant.Selected) != 1 || relevant.Selected[0].Score <= 10 {
+		t.Fatalf("relevant pre-task selection = %+v", relevant)
+	}
+
+	unrelated := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessClaude,
+			TaskFamily:      "implement",
+			TaskHint:        "Update the CSS color palette",
+			RepositoryPaths: []string{},
+		},
+	)
+	if len(unrelated.Selected) != 0 {
+		t.Fatalf("unrelated pre-task selection = %+v", unrelated)
+	}
+}
+
 func TestExperienceCompilerSelectionSupportsOnlyPathConditions(t *testing.T) {
 	now := time.Date(2026, 9, 10, 23, 30, 0, 0, time.UTC)
 	supported := compilerTestExperience(t, "path condition")

@@ -120,7 +120,8 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 			return commandClassBuild
 		}
 	case "python", "python3":
-		if len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest" {
+		if len(fields) > 2 && fields[1] == "-m" &&
+			(fields[2] == "pytest" || fields[2] == "unittest") {
 			return commandClassTest
 		}
 	case "pytest", "jest", "vitest", "mocha":
@@ -251,6 +252,29 @@ func ClassifyVerificationCommand(
 	}
 }
 
+// RetainedVerificationCommand returns a retained tool call's recognized
+// verification class and command. It falls back to structured tool input when
+// a native transcript does not provide a separate raw_command field.
+func RetainedVerificationCommand(
+	turn transcript.Turn,
+	config issueintel.ProjectConfig,
+) (class, raw string, ok bool) {
+	class, _, raw, ok = commandInfo(turn, config)
+	if !ok {
+		return "", "", false
+	}
+	switch class {
+	case commandClassTest,
+		commandClassBuild,
+		commandClassTypecheck,
+		commandClassLint,
+		commandClassFormat:
+		return class, raw, true
+	default:
+		return "", "", false
+	}
+}
+
 // ExtractEditedFiles returns normalized file paths explicitly present in a
 // retained file-edit tool call. It does not infer paths from surrounding turns.
 func ExtractEditedFiles(turn transcript.Turn) []string {
@@ -277,6 +301,22 @@ func RetainedCommandInfo(
 // a failure by the transcript issue detector's deterministic rules.
 func ToolResultFailed(turn transcript.Turn) bool {
 	return turnFailed(turn)
+}
+
+// ExplicitToolResultFailed returns a harness-reported success or failure
+// status without interpreting result text. Numeric exit codes take precedence;
+// Claude's explicit is_error field is used when no exit code is available.
+func ExplicitToolResultFailed(turn transcript.Turn) (failed, known bool) {
+	if turn.Role != transcript.RoleToolResult {
+		return false, false
+	}
+	if turn.Payload.ExitCode != nil {
+		return *turn.Payload.ExitCode != 0, true
+	}
+	if turn.Payload.ToolIsError != nil {
+		return *turn.Payload.ToolIsError, true
+	}
+	return false, false
 }
 
 // NormalizedErrorSignature returns the detector's stable normalized error
