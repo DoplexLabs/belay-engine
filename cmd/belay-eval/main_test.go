@@ -167,6 +167,146 @@ func TestRunSelectionValueModeRequiresStrictExclusiveInput(t *testing.T) {
 	}
 }
 
+func TestRunMaterializesMissionPackBenchmarkScheduleFromStrictPlan(
+	t *testing.T,
+) {
+	directory := t.TempDir()
+	planPath := filepath.Join(directory, "plan.json")
+	outputPath := filepath.Join(directory, "schedule.json")
+	plan := evalrun.MissionPackBenchmarkPlan{
+		SchemaVersion:     evalrun.MissionPackBenchmarkPlanSchemaVersion,
+		StudyID:           "belay-mp-v1",
+		Phase:             "pilot",
+		TaskID:            "task_a",
+		RandomizationSeed: "e16546310598ef48ffddcc1a8f18978400addf714f693b97bdfb7cf4dd20ca11",
+		BlocksPerHarness:  4,
+		Arms: []evalrun.MissionPackBenchmarkArm{
+			evalrun.MissionPackArmNoContext,
+		},
+		Harnesses: []evalrun.MissionPackBenchmarkHarness{
+			evalrun.MissionPackHarnessClaude,
+			evalrun.MissionPackHarnessCodex,
+		},
+	}
+	writeJSONFile(t, planPath, plan)
+	var stdout bytes.Buffer
+	if err := run([]string{
+		"--missionpack-benchmark-schedule",
+		"--benchmark-plan", planPath,
+		"--output", outputPath,
+	}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schedule evalrun.MissionPackBenchmarkSchedule
+	if err := json.Unmarshal(body, &schedule); err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Entries) != 8 ||
+		schedule.Entries[0].RunID == "" ||
+		schedule.PlanSHA256 == "" {
+		t.Fatalf("schedule = %+v", schedule)
+	}
+
+	unknownPath := filepath.Join(directory, "unknown.json")
+	if err := os.WriteFile(
+		unknownPath,
+		[]byte(`{"schema_version":"belay.missionpack-benchmark-plan.v1","unexpected":true}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err = run([]string{
+		"--missionpack-benchmark-schedule",
+		"--benchmark-plan", unknownPath,
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown plan error = %v", err)
+	}
+}
+
+func TestRunPreparesMissionPackBenchmarkRunWithoutHarnessInvocation(
+	t *testing.T,
+) {
+	directory := t.TempDir()
+	benchmarkRoot := filepath.Join(directory, "benchmark")
+	for name, body := range map[string]string{
+		"config/task-a-prompt.txt": "Frozen task prompt.\n",
+		"task/settings.gradle.kts": "rootProject.name = \"fixture\"\n",
+		"task/src/Contract.kt":     "interface Contract\n",
+		"arms/static/AGENTS.md":    "static\n",
+		"arms/static/CLAUDE.md":    "static\n",
+	} {
+		path := filepath.Join(benchmarkRoot, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schedulePath := filepath.Join(directory, "schedule.json")
+	writeJSONFile(t, schedulePath, evalrun.MissionPackBenchmarkSchedule{
+		SchemaVersion: evalrun.MissionPackBenchmarkScheduleSchemaVersion,
+		PlanSHA256:    strings.Repeat("a", 64),
+		Entries: []evalrun.MissionPackBenchmarkScheduleEntry{{
+			Sequence: 1,
+			Block:    1,
+			Harness:  evalrun.MissionPackHarnessCodex,
+			Arm:      evalrun.MissionPackArmNoContext,
+			RunID:    "belay-mp-v1-task_a-pilot-b001-codex-n",
+		}},
+	})
+	runRoot := filepath.Join(directory, "run")
+	outputPath := filepath.Join(directory, "manifest.json")
+	if err := run([]string{
+		"--missionpack-benchmark-prepare",
+		"--benchmark-schedule", schedulePath,
+		"--benchmark-root", benchmarkRoot,
+		"--benchmark-sequence", "1",
+		"--root", runRoot,
+		"--benchmark-codex-model", "openai.gpt-5.6-sol",
+		"--max-budget-usd", "10",
+		"--max-token-operations", "250000",
+		"--wall-timeout-seconds", "2700",
+		"--output", outputPath,
+	}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest evalrun.MissionPackBenchmarkRunManifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion !=
+		evalrun.MissionPackBenchmarkRunManifestSchemaVersion ||
+		manifest.Entry.RunID == "" ||
+		manifest.Command.Executable != "codex" ||
+		manifest.Launchable {
+		t.Fatalf("manifest = %+v", manifest)
+	}
+	if !strings.Contains(
+		strings.Join(manifest.Blockers, ","),
+		"gradle_cache_template_missing",
+	) {
+		t.Fatalf("blockers = %q", manifest.Blockers)
+	}
+	err = run([]string{
+		"--missionpack-benchmark-execute",
+		"--benchmark-manifest", outputPath,
+		"--confirm-paid-benchmark-run",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "not launchable") {
+		t.Fatalf("execute unlaunchable manifest error = %v", err)
+	}
+}
+
 func validDraftCapsule() evalrun.PrivateEvalCapsule {
 	return evalrun.PrivateEvalCapsule{
 		SchemaVersion: evalrun.PrivateEvalCapsuleSchemaVersion,
