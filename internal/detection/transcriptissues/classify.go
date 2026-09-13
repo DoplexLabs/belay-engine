@@ -87,6 +87,19 @@ func commandFromToolInput(raw json.RawMessage) string {
 }
 
 func classifyCommand(raw string, config issueintel.ProjectConfig) string {
+	for _, candidate := range verificationCommandCandidates(raw) {
+		class := classifyCommandCandidate(candidate, config)
+		if class != commandClassOther {
+			return class
+		}
+	}
+	return commandClassOther
+}
+
+func classifyCommandCandidate(
+	raw string,
+	config issueintel.ProjectConfig,
+) string {
 	normalized := strings.ToLower(spacePattern.ReplaceAllString(strings.TrimSpace(raw), " "))
 	for _, configured := range config.VerificationCommands {
 		configured = strings.ToLower(spacePattern.ReplaceAllString(strings.TrimSpace(configured), " "))
@@ -120,7 +133,8 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 			return commandClassBuild
 		}
 	case "python", "python3":
-		if len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest" {
+		if len(fields) > 2 && fields[1] == "-m" &&
+			(fields[2] == "pytest" || fields[2] == "unittest") {
 			return commandClassTest
 		}
 	case "pytest", "jest", "vitest", "mocha":
@@ -145,6 +159,68 @@ func classifyCommand(raw string, config issueintel.ProjectConfig) string {
 		}
 	}
 	return verificationClassFromExecutable(executable)
+}
+
+func verificationCommandCandidates(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	result := []string{raw}
+	current := raw
+	for range 4 {
+		left, right, ok := splitTopLevelAndAnd(current)
+		if !ok || !workingDirectoryWrapper(left) {
+			break
+		}
+		result = append(result, right)
+		current = right
+	}
+	return result
+}
+
+func splitTopLevelAndAnd(raw string) (string, string, bool) {
+	var quote byte
+	escaped := false
+	for index := 0; index+1 < len(raw); index++ {
+		character := raw[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if character == '\\' && quote == '"' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			quote = character
+		case '&':
+			if raw[index+1] != '&' {
+				continue
+			}
+			left := strings.TrimSpace(raw[:index])
+			right := strings.TrimSpace(raw[index+2:])
+			return left, right, left != "" && right != ""
+		}
+	}
+	return "", "", false
+}
+
+func workingDirectoryWrapper(raw string) bool {
+	tokens, ok := firstLogicalCommandTokens(raw)
+	if !ok || len(tokens) != 2 {
+		return false
+	}
+	return strings.EqualFold(filepath.Base(tokens[0]), "cd")
 }
 
 func packageScript(fields []string) string {
@@ -251,6 +327,34 @@ func ClassifyVerificationCommand(
 	}
 }
 
+// RetainedVerificationCommand returns a retained tool call's recognized
+// verification class and command. It falls back to structured tool input when
+// a native transcript does not provide a separate raw_command field.
+func RetainedVerificationCommand(
+	turn transcript.Turn,
+	config issueintel.ProjectConfig,
+) (class, raw string, ok bool) {
+	raw = strings.TrimSpace(turn.Payload.RawCommand)
+	if raw == "" && turn.Role == transcript.RoleToolCall {
+		raw = commandFromToolInput(turn.Payload.ToolInput)
+	}
+	if raw == "" {
+		return "", "", false
+	}
+	for _, candidate := range verificationCommandCandidates(raw) {
+		class = classifyCommandCandidate(candidate, config)
+		switch class {
+		case commandClassTest,
+			commandClassBuild,
+			commandClassTypecheck,
+			commandClassLint,
+			commandClassFormat:
+			return class, candidate, true
+		}
+	}
+	return "", "", false
+}
+
 // ExtractEditedFiles returns normalized file paths explicitly present in a
 // retained file-edit tool call. It does not infer paths from surrounding turns.
 func ExtractEditedFiles(turn transcript.Turn) []string {
@@ -279,10 +383,39 @@ func ToolResultFailed(turn transcript.Turn) bool {
 	return turnFailed(turn)
 }
 
+// ExplicitToolResultFailed returns a harness-reported success or failure
+// status without interpreting result text. Numeric exit codes take precedence;
+// Claude's explicit is_error field is used when no exit code is available.
+func ExplicitToolResultFailed(turn transcript.Turn) (failed, known bool) {
+	if turn.Role != transcript.RoleToolResult {
+		return false, false
+	}
+	if turn.Payload.ExitCode != nil {
+		return *turn.Payload.ExitCode != 0, true
+	}
+	if turn.Payload.ToolIsError != nil {
+		return *turn.Payload.ToolIsError, true
+	}
+	return false, false
+}
+
 // NormalizedErrorSignature returns the detector's stable normalized error
 // signature for a retained tool result.
 func NormalizedErrorSignature(turn transcript.Turn) string {
 	return normalizedErrorSignature(turn)
+}
+
+// NormalizedFirstFailureLine returns the retry-loop fingerprint form of the
+// first retained non-empty tool-result line. It does not decide whether the
+// result failed; callers must use ToolResultFailed first.
+func NormalizedFirstFailureLine(turn transcript.Turn) string {
+	line := strings.ToLower(firstMeaningfulLine(turn.Payload.ToolResult))
+	line = tempPathPattern.ReplaceAllString(line, "<tmp>")
+	line = absolutePathPattern.ReplaceAllString(line, "<path>")
+	line = hashPattern.ReplaceAllString(line, "<hash>")
+	line = numberPattern.ReplaceAllString(line, "<n>")
+	line = spacePattern.ReplaceAllString(line, " ")
+	return truncateRunes(strings.TrimSpace(line), maxErrorSignatureRunes)
 }
 
 // CommandRepairFamily returns the first logical command's stable executable

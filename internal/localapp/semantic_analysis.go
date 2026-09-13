@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	InsightPromptVersion               = "belay.insight-prompt.v3"
+	InsightPromptVersion               = "belay.insight-prompt.v4"
 	maxSemanticProjects                = 100
 	maxSemanticCommandOutput           = 4 << 20
 	maxClaudeInlineSchema              = 64 << 10
@@ -90,19 +90,23 @@ type semanticRawHarnessResult struct {
 }
 
 type SemanticAnalysisReport struct {
-	Projects                     int `json:"projects"`
-	Skipped                      int `json:"skipped"`
-	Clusters                     int `json:"clusters"`
-	Fixes                        int `json:"fixes"`
-	ExperienceProjectsConsidered int `json:"experience_projects_considered"`
-	ExperienceProjectsCompiled   int `json:"experience_projects_compiled"`
-	ExperienceProjectsAnalyzed   int `json:"experience_projects_analyzed"`
-	ExperienceProjectFailures    int `json:"experience_project_failures"`
-	ExperienceCandidatesInserted int `json:"experience_candidates_inserted"`
-	ExperienceCandidatesReplayed int `json:"experience_candidates_replayed"`
-	ExperienceProposals          int `json:"experience_proposals"`
-	ExperienceRejections         int `json:"experience_rejections"`
-	ExperienceDefers             int `json:"experience_defers"`
+	Projects                     int      `json:"projects"`
+	Skipped                      int      `json:"skipped"`
+	Clusters                     int      `json:"clusters"`
+	Fixes                        int      `json:"fixes"`
+	SanitizedProjects            int      `json:"sanitized_projects"`
+	DroppedClusters              int      `json:"dropped_clusters"`
+	DroppedFixes                 int      `json:"dropped_fixes"`
+	ExperienceProjectsConsidered int      `json:"experience_projects_considered"`
+	ExperienceProjectsCompiled   int      `json:"experience_projects_compiled"`
+	ExperienceProjectsAnalyzed   int      `json:"experience_projects_analyzed"`
+	ExperienceProjectFailures    int      `json:"experience_project_failures"`
+	ExperienceFailureDetails     []string `json:"experience_failure_details,omitempty"`
+	ExperienceCandidatesInserted int      `json:"experience_candidates_inserted"`
+	ExperienceCandidatesReplayed int      `json:"experience_candidates_replayed"`
+	ExperienceProposals          int      `json:"experience_proposals"`
+	ExperienceRejections         int      `json:"experience_rejections"`
+	ExperienceDefers             int      `json:"experience_defers"`
 }
 
 func (report *SemanticAnalysisReport) AddExperience(
@@ -116,6 +120,10 @@ func (report *SemanticAnalysisReport) AddExperience(
 	report.ExperienceProjectsCompiled += experienceReport.ProjectsCompiled
 	report.ExperienceProjectsAnalyzed += experienceReport.ProjectsAnalyzed
 	report.ExperienceProjectFailures += experienceReport.ProjectFailures
+	report.ExperienceFailureDetails = append(
+		report.ExperienceFailureDetails,
+		experienceReport.FailureDetails...,
+	)
 	report.ExperienceCandidatesInserted +=
 		experienceReport.CandidatesInserted
 	report.ExperienceCandidatesReplayed +=
@@ -178,12 +186,15 @@ func AnalyzeSemanticProjects(
 			analysisErrors = append(analysisErrors, err)
 			continue
 		}
-		if err := validateSemanticResult(
+		sanitized, diagnostics := sanitizeSemanticResult(
 			boundedInput,
 			result.Result,
-		); err != nil {
-			analysisErrors = append(analysisErrors, err)
-			continue
+		)
+		if diagnostics.DroppedClusters > 0 ||
+			diagnostics.DroppedFixes > 0 {
+			report.SanitizedProjects++
+			report.DroppedClusters += diagnostics.DroppedClusters
+			report.DroppedFixes += diagnostics.DroppedFixes
 		}
 		generatedAt := time.Now().UTC()
 		record := issueintel.InsightRecord{
@@ -199,15 +210,16 @@ func AnalyzeSemanticProjects(
 			PromptVersion: InsightPromptVersion,
 			InputHash:     inputHash,
 			GeneratedAt:   generatedAt,
-			Result:        result.Result,
+			Result:        sanitized,
+			Sanitization:  diagnostics,
 		}
 		if err := store.ReplaceProjectInsight(ctx, record); err != nil {
 			analysisErrors = append(analysisErrors, err)
 			continue
 		}
 		report.Projects++
-		report.Clusters += len(result.Result.Clusters)
-		report.Fixes += len(result.Result.Fixes)
+		report.Clusters += len(sanitized.Clusters)
+		report.Fixes += len(sanitized.Fixes)
 	}
 	return report, errors.Join(analysisErrors...)
 }
@@ -789,7 +801,9 @@ func semanticPromptFromBounded(
 			" analysis, prefer " + preferredTarget + ". " +
 			"Use another approved target only when the evidence clearly requires it. " +
 			"Approved targets are CLAUDE.md, AGENTS.md, .claude/settings.json, " +
-			"and .codex/rules/default.rules. Return only schema-valid JSON.\n\n",
+			"and .codex/rules/default.rules. Use each issue ID and correction " +
+			"candidate ID at most once across the entire response. Return only " +
+			"schema-valid JSON.\n\n",
 	)
 	prompt := append(instructions, inputBody...)
 	sum := sha256.Sum256(append(
@@ -999,6 +1013,29 @@ func validateSemanticResult(
 	input issueintel.SemanticInput,
 	result issueintel.InsightResult,
 ) error {
+	_, diagnostics := sanitizeSemanticResult(input, result)
+	switch {
+	case diagnostics.InvalidFixFields > 0:
+		return errors.New("semantic result contains an invalid fix")
+	case diagnostics.UnknownFixIssues > 0 ||
+		diagnostics.AmbiguousFixIssues > 0:
+		return errors.New("semantic result contains an invalid fix")
+	case diagnostics.InvalidClusterFields > 0:
+		return errors.New("semantic result contains an invalid cluster")
+	case diagnostics.UnknownClusterCandidates > 0 ||
+		diagnostics.AmbiguousClusterCandidates > 0:
+		return errors.New(
+			"semantic result contains an invalid cluster candidate",
+		)
+	default:
+		return nil
+	}
+}
+
+func sanitizeSemanticResult(
+	input issueintel.SemanticInput,
+	result issueintel.InsightResult,
+) (issueintel.InsightResult, issueintel.InsightSanitization) {
 	issueIDs := make(map[string]bool, len(input.Issues))
 	for _, issue := range input.Issues {
 		issueIDs[issue.IssueID] = true
@@ -1007,19 +1044,36 @@ func validateSemanticResult(
 	for _, candidate := range input.CorrectionCandidates {
 		candidateIDs[candidate.CandidateID] = true
 	}
-	seenIssues := make(map[string]bool, len(result.Fixes))
+
+	fixCounts := make(map[string]int, len(result.Fixes))
 	for _, fix := range result.Fixes {
-		if !issueIDs[fix.IssueID] ||
-			seenIssues[fix.IssueID] ||
-			!validInsightLine(fix.RuleText, 500) ||
+		fixCounts[fix.IssueID]++
+	}
+	var sanitized issueintel.InsightResult
+	var diagnostics issueintel.InsightSanitization
+	for _, fix := range result.Fixes {
+		switch {
+		case !issueIDs[fix.IssueID]:
+			diagnostics.DroppedFixes++
+			diagnostics.UnknownFixIssues++
+		case fixCounts[fix.IssueID] > 1:
+			diagnostics.DroppedFixes++
+			diagnostics.AmbiguousFixIssues++
+		case !validInsightLine(fix.RuleText, 500) ||
 			!validInsightTarget(fix.TargetFile) ||
 			fix.Confidence < 0 ||
-			fix.Confidence > 1 {
-			return errors.New("semantic result contains an invalid fix")
+			fix.Confidence > 1:
+			diagnostics.DroppedFixes++
+			diagnostics.InvalidFixFields++
+		default:
+			sanitized.Fixes = append(sanitized.Fixes, fix)
 		}
-		seenIssues[fix.IssueID] = true
 	}
-	seenCandidates := make(map[string]bool)
+
+	type clusterCandidate struct {
+		value issueintel.InsightCluster
+	}
+	baseValid := make([]clusterCandidate, 0, len(result.Clusters))
 	for _, cluster := range result.Clusters {
 		if len(cluster.CandidateIDs) == 0 ||
 			!validInsightLine(cluster.Topic, 120) ||
@@ -1027,18 +1081,69 @@ func validateSemanticResult(
 			!validInsightTarget(cluster.TargetFile) ||
 			cluster.Confidence < 0 ||
 			cluster.Confidence > 1 {
-			return errors.New("semantic result contains an invalid cluster")
+			diagnostics.DroppedClusters++
+			diagnostics.InvalidClusterFields++
+			continue
 		}
+		unknown := false
+		duplicate := false
+		withinCluster := make(map[string]bool, len(cluster.CandidateIDs))
 		for _, candidateID := range cluster.CandidateIDs {
-			if !candidateIDs[candidateID] || seenCandidates[candidateID] {
-				return errors.New(
-					"semantic result contains an invalid cluster candidate",
-				)
+			if !candidateIDs[candidateID] {
+				unknown = true
+				break
 			}
-			seenCandidates[candidateID] = true
+			if withinCluster[candidateID] {
+				duplicate = true
+				break
+			}
+			withinCluster[candidateID] = true
+		}
+		if unknown {
+			diagnostics.DroppedClusters++
+			diagnostics.UnknownClusterCandidates++
+			continue
+		}
+		if duplicate {
+			diagnostics.DroppedClusters++
+			diagnostics.AmbiguousClusterCandidates++
+			continue
+		}
+		cluster.CandidateIDs = append([]string(nil), cluster.CandidateIDs...)
+		sort.Strings(cluster.CandidateIDs)
+		baseValid = append(baseValid, clusterCandidate{value: cluster})
+	}
+
+	candidateCounts := make(map[string]int, len(candidateIDs))
+	for _, cluster := range baseValid {
+		for _, candidateID := range cluster.value.CandidateIDs {
+			candidateCounts[candidateID]++
 		}
 	}
-	return nil
+	for _, cluster := range baseValid {
+		ambiguous := false
+		for _, candidateID := range cluster.value.CandidateIDs {
+			if candidateCounts[candidateID] > 1 {
+				ambiguous = true
+				break
+			}
+		}
+		if ambiguous {
+			diagnostics.DroppedClusters++
+			diagnostics.AmbiguousClusterCandidates++
+			continue
+		}
+		sanitized.Clusters = append(sanitized.Clusters, cluster.value)
+	}
+	sort.Slice(sanitized.Fixes, func(i, j int) bool {
+		return sanitized.Fixes[i].IssueID < sanitized.Fixes[j].IssueID
+	})
+	sort.Slice(sanitized.Clusters, func(i, j int) bool {
+		left := strings.Join(sanitized.Clusters[i].CandidateIDs, "\x00")
+		right := strings.Join(sanitized.Clusters[j].CandidateIDs, "\x00")
+		return left < right
+	})
+	return sanitized, diagnostics
 }
 
 func validInsightLine(value string, maximum int) bool {

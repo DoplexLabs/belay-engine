@@ -205,6 +205,89 @@ func TestExperienceCompilerSelectionRequiresExactScopedMatches(t *testing.T) {
 	}
 }
 
+func TestExperienceCompilerSelectionUsesTaskHintWhenPreTaskPathsAreUnknown(
+	t *testing.T,
+) {
+	now := time.Date(2026, 9, 10, 23, 25, 0, 0, time.UTC)
+	value := compilerTestExperience(t, "sqlite migration")
+	value.Scope.TaskFamilies = []string{
+		"database-migration",
+		"schema-change",
+	}
+	value.Scope.RepositoryPaths = []string{"task.py"}
+	value.Applicability.DeterministicConditions =
+		[]experience.DeterministicCondition{{
+			Kind:   experience.ConditionPathPattern,
+			Values: []string{"task.py"},
+		}}
+	value.Applicability.SemanticDescription =
+		"Writing SQLite migrations that must be safely re-runnable."
+	value.Guidance.Instruction =
+		"Make SQLite schema migrations idempotent and atomic."
+	compilerTestRehash(t, &value)
+	store := compilerTestStoreFor(now, value)
+
+	relevant := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessClaude,
+			TaskFamily:      "implement",
+			TaskHint:        "SQLite migration invariants",
+			RepositoryPaths: []string{},
+		},
+	)
+	if len(relevant.Selected) != 1 || relevant.Selected[0].Score <= 10 {
+		t.Fatalf("relevant pre-task selection = %+v", relevant)
+	}
+
+	unrelated := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessClaude,
+			TaskFamily:      "implement",
+			TaskHint:        "Update the CSS color palette",
+			RepositoryPaths: []string{},
+		},
+	)
+	if len(unrelated.Selected) != 0 {
+		t.Fatalf("unrelated pre-task selection = %+v", unrelated)
+	}
+}
+
+func TestExperienceCompilerSelectionNormalizesAsyncVocabulary(t *testing.T) {
+	now := time.Date(2026, 9, 10, 23, 20, 0, 0, time.UTC)
+	value := compilerTestExperience(t, "async vocabulary")
+	value.Scope.TaskFamilies = []string{"Python asynchronous concurrency"}
+	value.Applicability.SemanticDescription =
+		"Cancel sibling tasks and await cleanup before returning."
+	compilerTestRehash(t, &value)
+	store := &experienceCompilerTestStore{
+		generation: compilerTestGeneration(now, compilerTestRef(value)),
+		values:     compilerTestStoredValues(value),
+	}
+	result := compilerTestSelect(
+		t,
+		store,
+		now,
+		ExperienceSelectionRequest{
+			ProjectIdentity: value.Scope.ProjectIdentity,
+			Harness:         experience.HarnessCodex,
+			TaskFamily:      "implement",
+			TaskHint:        "Async cancellation and cleanup",
+			RepositoryPaths: make([]string, 0),
+		},
+	)
+	if len(result.Selected) != 1 {
+		t.Fatalf("async vocabulary selection = %+v", result)
+	}
+}
+
 func TestExperienceCompilerSelectionSupportsOnlyPathConditions(t *testing.T) {
 	now := time.Date(2026, 9, 10, 23, 30, 0, 0, time.UTC)
 	supported := compilerTestExperience(t, "path condition")

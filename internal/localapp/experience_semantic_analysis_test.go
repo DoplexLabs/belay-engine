@@ -90,8 +90,13 @@ func TestPrepareExperienceSemanticPromptIsBoundedAndCandidateOnly(
 	t *testing.T,
 ) {
 	candidate := experienceSemanticTestCandidate("prompt")
-	candidate.ObservedBehavior = strings.Repeat("observation-", 600)
-	candidate.UserFeedback = strings.Repeat("feedback-", 1000)
+	candidate.ObservedBehavior = "/Users/private/work/task.py " +
+		strings.Repeat("observation-", 600)
+	candidate.UserFeedback = "/home/private-user/scratch " +
+		strings.Repeat("feedback-", 1000)
+	candidate.Proposal.Scope.RepositoryPaths = []string{"task.py"}
+	candidate.Evidence.Refs[0].Excerpt =
+		"Updated /Users/private/work/task.py and /tmp/private-scratch."
 	candidate.Proposal.Guidance.Rationale =
 		"UNRELATED_PENDING_GUIDANCE_CANARY"
 	candidate.OutcomeRefs = make([]string, 0, 30)
@@ -143,6 +148,9 @@ func TestPrepareExperienceSemanticPromptIsBoundedAndCandidateOnly(
 		"UNRELATED_PENDING_GUIDANCE_CANARY",
 		candidate.Proposal.Guidance.Instruction,
 		candidate.Provenance.InputHash,
+		"/Users/private",
+		"/home/private-user",
+		"/tmp/private-scratch",
 	} {
 		if bytes.Contains(prompt, []byte(forbidden)) {
 			t.Fatalf("experience prompt exposed unrelated value %q", forbidden)
@@ -179,6 +187,7 @@ func TestPrepareExperienceSemanticPromptIsBoundedAndCandidateOnly(
 	}
 	if !bytes.Contains(prompt, []byte("Evaluate each candidate independently")) ||
 		!bytes.Contains(prompt, []byte("project-relative")) ||
+		!bytes.Contains(prompt, []byte("task.py")) ||
 		!bytes.Contains(schema, []byte(`"pattern"`)) {
 		t.Fatalf("semantic prompt/schema do not constrain repository paths")
 	}
@@ -815,11 +824,17 @@ func TestAnalyzeExperienceCandidatesStoresExactlyOneResultPerBranch(
 		proposed.ProjectIdentity,
 		SemanticHarnessClaude,
 		func(
-			context.Context,
-			SemanticHarness,
-			[]byte,
-			[]byte,
+			_ context.Context,
+			_ SemanticHarness,
+			prompt []byte,
+			_ []byte,
 		) (ExperienceSemanticHarnessResult, error) {
+			if !bytes.Contains(
+				prompt,
+				[]byte("necessary exact command or path"),
+			) {
+				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+			}
 			return ExperienceSemanticHarnessResult{
 				Output: output,
 				Model:  "claude-test",
@@ -859,11 +874,17 @@ func TestAnalyzeExperienceCandidatesReportsDispositionReplays(t *testing.T) {
 		candidate.ProjectIdentity,
 		SemanticHarnessClaude,
 		func(
-			context.Context,
-			SemanticHarness,
-			[]byte,
-			[]byte,
+			_ context.Context,
+			_ SemanticHarness,
+			prompt []byte,
+			_ []byte,
 		) (ExperienceSemanticHarnessResult, error) {
+			if !bytes.Contains(
+				prompt,
+				[]byte("necessary exact command or path"),
+			) {
+				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+			}
 			return ExperienceSemanticHarnessResult{
 				Output: experienceSemanticValidOutput(candidate),
 				Model:  "claude-test",
@@ -929,11 +950,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV3WithV4Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV4 {
-		t.Fatalf("experience prompt version = %q, want v4", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV10 {
+		t.Fatalf("experience prompt version = %q, want v10", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -942,7 +963,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV3WithV4Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV3,
+				experience.SemanticProposalPromptVersionV9,
 			): true,
 		},
 	}
@@ -967,15 +988,64 @@ func TestAnalyzeExperienceCandidatesReanalyzesV3WithV4Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV4 ||
+			experience.SemanticProposalPromptVersionV10 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV4 {
+			experience.SemanticProposalPromptVersionV10 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,
 			store.stored,
 			err,
 		)
+	}
+}
+
+func TestSemanticProposalHarnessesTransferRepositoryProcedures(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("repository-procedure")
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	value := experienceSemanticProposeOutputCandidate{
+		Applicability: experienceSemanticOutputApplicability{
+			PathHints: []string{"task.py"},
+			Harnesses: []experience.Harness{experience.HarnessCodex},
+			Models:    []string{},
+		},
+	}
+	got := semanticProposalHarnesses(candidate, value)
+	if !reflect.DeepEqual(
+		got,
+		[]experience.Harness{
+			experience.HarnessClaude,
+			experience.HarnessCodex,
+		},
+	) {
+		t.Fatalf("repository procedure harnesses = %v", got)
+	}
+
+	value.Applicability.PathHints = []string{".codex/config.toml"}
+	got = semanticProposalHarnesses(candidate, value)
+	if !reflect.DeepEqual(got, []experience.Harness{experience.HarnessCodex}) {
+		t.Fatalf("harness-specific procedure harnesses = %v", got)
+	}
+}
+
+func TestSemanticProposalPlainTextAllowsComparisons(t *testing.T) {
+	for _, value := range []string{
+		"Advance only when incoming version > stored version.",
+		"Select rows observed_at <= example_time.",
+	} {
+		if !semanticProposalPlainText(value) {
+			t.Fatalf("comparison text rejected: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"See https://example.test/rule",
+		"Use <script>alert(1)</script>",
+		"Read [the rule](docs/rule.md)",
+		"Run `go test ./...`",
+	} {
+		if semanticProposalPlainText(value) {
+			t.Fatalf("markup text accepted: %q", value)
+		}
 	}
 }
 

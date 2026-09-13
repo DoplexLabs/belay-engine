@@ -3,17 +3,23 @@ package experience
 import "time"
 
 const (
-	CandidateSchemaVersion          = "belay.experience-candidate.v1"
-	SemanticProposalSchemaVersion   = "belay.experience-semantic-proposal.v1"
-	SemanticDecisionSchemaVersion   = "belay.experience-semantic-decision.v1"
-	SemanticProposalPromptVersionV1 = "belay.experience-prompt.v1"
-	SemanticProposalPromptVersionV2 = "belay.experience-prompt.v2"
-	SemanticProposalPromptVersionV3 = "belay.experience-prompt.v3"
-	SemanticProposalPromptVersionV4 = "belay.experience-prompt.v4"
-	SemanticProposalPromptVersion   = SemanticProposalPromptVersionV4
-	ExperienceSchemaVersion         = "belay.experience.v1"
-	ApplicationSchemaVersion        = "belay.experience-application.v1"
-	EvaluationSchemaVersion         = "belay.experience-evaluation.v1"
+	CandidateSchemaVersion           = "belay.experience-candidate.v1"
+	SemanticProposalSchemaVersion    = "belay.experience-semantic-proposal.v1"
+	SemanticDecisionSchemaVersion    = "belay.experience-semantic-decision.v1"
+	SemanticProposalPromptVersionV1  = "belay.experience-prompt.v1"
+	SemanticProposalPromptVersionV2  = "belay.experience-prompt.v2"
+	SemanticProposalPromptVersionV3  = "belay.experience-prompt.v3"
+	SemanticProposalPromptVersionV4  = "belay.experience-prompt.v4"
+	SemanticProposalPromptVersionV5  = "belay.experience-prompt.v5"
+	SemanticProposalPromptVersionV6  = "belay.experience-prompt.v6"
+	SemanticProposalPromptVersionV7  = "belay.experience-prompt.v7"
+	SemanticProposalPromptVersionV8  = "belay.experience-prompt.v8"
+	SemanticProposalPromptVersionV9  = "belay.experience-prompt.v9"
+	SemanticProposalPromptVersionV10 = "belay.experience-prompt.v10"
+	SemanticProposalPromptVersion    = SemanticProposalPromptVersionV10
+	ExperienceSchemaVersion          = "belay.experience.v1"
+	ApplicationSchemaVersion         = "belay.experience-application.v1"
+	EvaluationSchemaVersion          = "belay.experience-evaluation.v1"
 )
 
 type Candidate struct {

@@ -302,6 +302,126 @@ func TestValidateSemanticResultRejectsUnknownCandidateIDs(t *testing.T) {
 	}
 }
 
+func TestSanitizeSemanticResultKeepsIndependentValidItems(t *testing.T) {
+	input := semanticTestInput()
+	secondCandidate := input.CorrectionCandidates[0]
+	secondCandidate.CandidateID = "candidate-2"
+	thirdCandidate := input.CorrectionCandidates[0]
+	thirdCandidate.CandidateID = "candidate-3"
+	input.CorrectionCandidates = append(
+		input.CorrectionCandidates,
+		secondCandidate,
+		thirdCandidate,
+	)
+	secondIssue := input.Issues[0]
+	secondIssue.IssueID = "csi_second"
+	input.Issues = append(input.Issues, secondIssue)
+
+	result, diagnostics := sanitizeSemanticResult(
+		input,
+		issueintel.InsightResult{
+			Clusters: []issueintel.InsightCluster{
+				{
+					CandidateIDs: []string{"candidate-1"},
+					Topic:        "Verification",
+					RuleText:     "Run verification before claiming completion.",
+					TargetFile:   "AGENTS.md",
+					Confidence:   0.9,
+				},
+				{
+					CandidateIDs: []string{"candidate-2"},
+					Topic:        "First interpretation",
+					RuleText:     "Inspect the relevant configuration first.",
+					TargetFile:   "AGENTS.md",
+					Confidence:   0.8,
+				},
+				{
+					CandidateIDs: []string{"candidate-2", "candidate-3"},
+					Topic:        "Second interpretation",
+					RuleText:     "Confirm the applicable scope before editing.",
+					TargetFile:   "AGENTS.md",
+					Confidence:   0.8,
+				},
+			},
+			Fixes: []issueintel.InsightFix{
+				{
+					IssueID:    "csi_test",
+					RuleText:   "Diagnose the cause before repeating a failed command.",
+					TargetFile: "AGENTS.md",
+					Confidence: 0.9,
+				},
+				{
+					IssueID:    "csi_second",
+					RuleText:   "First conflicting rule.",
+					TargetFile: "AGENTS.md",
+					Confidence: 0.8,
+				},
+				{
+					IssueID:    "csi_second",
+					RuleText:   "Second conflicting rule.",
+					TargetFile: "CLAUDE.md",
+					Confidence: 0.8,
+				},
+			},
+		},
+	)
+	if len(result.Clusters) != 1 ||
+		result.Clusters[0].CandidateIDs[0] != "candidate-1" ||
+		len(result.Fixes) != 1 ||
+		result.Fixes[0].IssueID != "csi_test" ||
+		diagnostics.DroppedClusters != 2 ||
+		diagnostics.AmbiguousClusterCandidates != 2 ||
+		diagnostics.DroppedFixes != 2 ||
+		diagnostics.AmbiguousFixIssues != 2 {
+		t.Fatalf("sanitized result/diagnostics = %+v/%+v", result, diagnostics)
+	}
+}
+
+func TestAnalyzeSemanticProjectsPersistsSanitizedEmptyResult(t *testing.T) {
+	input := semanticTestInput()
+	store := &semanticAnalysisTestStore{
+		projects: []issueintel.Project{input.Project},
+		inputs: map[string]issueintel.SemanticInput{
+			input.Project.Identity: input,
+		},
+		existing: make(map[string]issueintel.InsightRecord),
+	}
+	report, err := AnalyzeSemanticProjects(
+		context.Background(),
+		store,
+		SemanticHarnessCodex,
+		func(
+			context.Context,
+			SemanticHarness,
+			[]byte,
+			[]byte,
+		) (SemanticHarnessResult, error) {
+			return SemanticHarnessResult{
+				Model: "codex-test",
+				Result: issueintel.InsightResult{
+					Clusters: []issueintel.InsightCluster{{
+						CandidateIDs: []string{"candidate-unknown"},
+						Topic:        "Untrusted output",
+						RuleText:     "Do not persist this generated rule.",
+						TargetFile:   "AGENTS.md",
+						Confidence:   0.9,
+					}},
+				},
+			}, nil
+		},
+	)
+	if err != nil ||
+		report.Projects != 1 ||
+		report.SanitizedProjects != 1 ||
+		report.DroppedClusters != 1 ||
+		report.Clusters != 0 ||
+		len(store.stored) != 1 ||
+		len(store.stored[0].Result.Clusters) != 0 ||
+		store.stored[0].Sanitization.UnknownClusterCandidates != 1 {
+		t.Fatalf("sanitized report/store/error = %+v/%+v/%v", report, store.stored, err)
+	}
+}
+
 func TestPrepareSemanticPromptBoundsLargeInputDeterministically(t *testing.T) {
 	input := largeSemanticTestInput()
 	bounded, prompt, schema, inputHash, err := prepareSemanticPrompt(
@@ -606,11 +726,15 @@ func TestSemanticPromptIsHarnessAwareAndVersioned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if InsightPromptVersion != "belay.insight-prompt.v3" {
+	if InsightPromptVersion != "belay.insight-prompt.v4" {
 		t.Fatalf("prompt version = %q", InsightPromptVersion)
 	}
 	if !bytes.Contains(claudePrompt, []byte("prefer CLAUDE.md")) ||
-		!bytes.Contains(codexPrompt, []byte("prefer AGENTS.md")) {
+		!bytes.Contains(codexPrompt, []byte("prefer AGENTS.md")) ||
+		!bytes.Contains(
+			claudePrompt,
+			[]byte("candidate ID at most once"),
+		) {
 		t.Fatalf(
 			"harness preferences missing:\nclaude=%s\ncodex=%s",
 			claudePrompt,

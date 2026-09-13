@@ -32,6 +32,10 @@ func TestProjectInsightIsEncryptedReplaceableAndGuarded(t *testing.T) {
 				Confidence: 0.9,
 			}},
 		},
+		Sanitization: issueintel.InsightSanitization{
+			DroppedClusters:          1,
+			UnknownClusterCandidates: 1,
+		},
 	}
 	if err := store.ReplaceProjectInsight(ctx, record); err != nil {
 		t.Fatal(err)
@@ -48,7 +52,10 @@ func TestProjectInsightIsEncryptedReplaceableAndGuarded(t *testing.T) {
 		t.Fatal("insight payload was stored in plaintext")
 	}
 	got, err := store.GetProjectInsight(ctx, record.Project.Identity)
-	if err != nil || got.Result.Fixes[0].RuleText != canary {
+	if err != nil ||
+		got.Result.Fixes[0].RuleText != canary ||
+		got.Sanitization.DroppedClusters != 1 ||
+		got.Sanitization.UnknownClusterCandidates != 1 {
 		t.Fatalf("insight/error = %+v/%v", got, err)
 	}
 	if _, err := store.db.ExecContext(

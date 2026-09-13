@@ -211,11 +211,11 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		if !ok {
 			continue
 		}
-		rawCommand := strings.TrimSpace(call.Payload.RawCommand)
-		commandClass, recognized := transcriptissues.ClassifyVerificationCommand(
-			rawCommand,
-			value.projectConfigs[outcome.SessionKey],
-		)
+		commandClass, rawCommand, recognized :=
+			transcriptissues.RetainedVerificationCommand(
+				call,
+				value.projectConfigs[outcome.SessionKey],
+			)
 		if !recognized {
 			continue
 		}
@@ -229,6 +229,13 @@ func (value *compiler) compileSuccessfulProcedures() error {
 			sourceRefs = append(sourceRefs, edge.SourceRefs...)
 			generatedAt = maxTime(generatedAt, edge.OccurredAt)
 		}
+		sourceRefs = append(
+			sourceRefs,
+			value.successfulProcedureContextRefs(
+				outcome.SessionKey,
+				sourceRefs,
+			)...,
+		)
 		evidence, ok := value.evidenceSet(sourceRefs, []trajectory.Outcome{outcome})
 		if !ok {
 			continue
@@ -433,11 +440,13 @@ func (value *compiler) commandOutcomeTurns(
 			result, resultRef = turn, ref
 		}
 	}
+	failed, known := transcriptissues.ExplicitToolResultFailed(result)
 	if callRef.Kind == "" || resultRef.Kind == "" ||
 		call.Payload.ToolCallID == "" ||
 		call.Payload.ToolCallID != result.Payload.ToolCallID ||
-		result.Payload.ExitCode == nil ||
-		*result.Payload.ExitCode != wantExitCode {
+		!known ||
+		(failed && wantExitCode == 0) ||
+		(!failed && wantExitCode != 0) {
 		return transcript.Turn{}, trajectory.NodeRef{}, transcript.Turn{}, trajectory.NodeRef{}, false
 	}
 	return call, callRef, result, resultRef, true
@@ -453,11 +462,16 @@ func (value *compiler) explicitResult(
 	count := 0
 	for _, ref := range refs {
 		turn, ok := value.turn(ref)
+		failed, known := transcriptissues.ExplicitToolResultFailed(turn)
+		exitCode := 0
+		if failed {
+			exitCode = 1
+		}
 		if !ok || turn.Role != transcript.RoleToolResult ||
 			call.Payload.ToolCallID == "" ||
 			turn.Payload.ToolCallID != call.Payload.ToolCallID ||
-			turn.Payload.ExitCode == nil ||
-			!exitMatches(*turn.Payload.ExitCode) {
+			!known ||
+			!exitMatches(exitCode) {
 			continue
 		}
 		match, matchRef = turn, ref
@@ -479,7 +493,8 @@ func (value *compiler) matchingVerificationEdges(
 			edge.Confidence != trajectory.ConfidenceHigh ||
 			edge.DerivationVersion != outcome.DerivationVersion ||
 			!sameNode(edge.From, callRef) ||
-			edge.To.Kind != trajectory.NodeCanonicalEvent ||
+			(edge.To.Kind != trajectory.NodeCanonicalEvent &&
+				edge.To.Kind != trajectory.NodeTranscriptTurn) ||
 			!containsNode(edge.SourceRefs, callRef) ||
 			!containsNode(edge.SourceRefs, edge.To) {
 			continue
@@ -498,6 +513,95 @@ func (value *compiler) matchingVerificationEdges(
 		}
 	}
 	return result
+}
+
+func (value *compiler) successfulProcedureContextRefs(
+	sessionKey string,
+	sourceRefs []trajectory.NodeRef,
+) []trajectory.NodeRef {
+	minimum, maximum := int64(-1), int64(-1)
+	for _, ref := range sourceRefs {
+		if ref.Kind != trajectory.NodeTranscriptTurn ||
+			ref.SessionKey != sessionKey ||
+			ref.TurnIndex == nil {
+			continue
+		}
+		if minimum < 0 || *ref.TurnIndex < minimum {
+			minimum = *ref.TurnIndex
+		}
+		if *ref.TurnIndex > maximum {
+			maximum = *ref.TurnIndex
+		}
+	}
+	if minimum < 0 || maximum < 0 {
+		return nil
+	}
+	turns := make([]transcript.Turn, 0)
+	for key, turn := range value.turns {
+		if key.sessionKey == sessionKey {
+			turns = append(turns, turn)
+		}
+	}
+	sort.Slice(turns, func(i, j int) bool {
+		return turns[i].TurnIndex < turns[j].TurnIndex
+	})
+	var priorUser *transcript.Turn
+	var followingUser *transcript.Turn
+	var followingAssistant *transcript.Turn
+	for index := range turns {
+		turn := turns[index]
+		if strings.TrimSpace(turn.Payload.ParentToolUseID) != "" {
+			continue
+		}
+		switch {
+		case turn.Role == transcript.RoleUser &&
+			turn.TurnIndex < minimum &&
+			minimum-turn.TurnIndex <= 64 &&
+			usefulProcedureContextText(turn.Payload.Text):
+			copyValue := turn
+			priorUser = &copyValue
+		case turn.Role == transcript.RoleUser &&
+			turn.TurnIndex > maximum &&
+			turn.TurnIndex-maximum <= 64 &&
+			followingUser == nil &&
+			usefulProcedureContextText(turn.Payload.Text):
+			copyValue := turn
+			followingUser = &copyValue
+		case turn.Role == transcript.RoleAssistant &&
+			turn.TurnIndex > maximum &&
+			turn.TurnIndex-maximum <= 64 &&
+			usefulProcedureContextText(turn.Payload.Text):
+			if followingUser != nil &&
+				turn.TurnIndex < followingUser.TurnIndex {
+				continue
+			}
+			copyValue := turn
+			followingAssistant = &copyValue
+		}
+	}
+	result := make([]trajectory.NodeRef, 0, 3)
+	for _, turn := range []*transcript.Turn{
+		priorUser,
+		followingUser,
+		followingAssistant,
+	} {
+		if turn != nil {
+			index := turn.TurnIndex
+			result = append(result, trajectory.NodeRef{
+				Kind:       trajectory.NodeTranscriptTurn,
+				SessionKey: turn.SessionKey,
+				TurnIndex:  &index,
+			})
+		}
+	}
+	return result
+}
+
+func usefulProcedureContextText(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" &&
+		len(value) <= maxCandidateExcerptBytes &&
+		!transcriptissues.IsMachineGeneratedEnvelope(value)
 }
 
 func (value *compiler) matchingRepairEdges(

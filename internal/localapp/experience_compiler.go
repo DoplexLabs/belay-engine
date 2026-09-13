@@ -476,24 +476,38 @@ func scoreExperienceSelection(
 		}
 		score += 20
 	}
+	lexicalOverlap := selectionLexicalOverlap(
+		request.TaskHint,
+		value.Applicability.SemanticDescription+" "+
+			value.Guidance.Instruction+" "+
+			value.Guidance.Rationale+" "+
+			strings.Join(value.Scope.TaskFamilies, " "),
+	)
+	unresolvedSemanticScope := false
 	if len(value.Scope.TaskFamilies) > 0 {
-		if request.TaskFamily == "" ||
-			!selectionContains(
+		if request.TaskFamily != "" &&
+			selectionContains(
 				value.Scope.TaskFamilies,
 				request.TaskFamily,
 			) {
+			score += 30
+		} else if lexicalOverlap == 0 {
 			return 0, false
+		} else {
+			unresolvedSemanticScope = true
 		}
-		score += 30
 	}
 	if len(value.Scope.RepositoryPaths) > 0 {
-		if !selectionPathsMatch(
+		if len(request.RepositoryPaths) == 0 {
+			unresolvedSemanticScope = true
+		} else if !selectionPathsMatch(
 			value.Scope.RepositoryPaths,
 			request.RepositoryPaths,
 		) {
 			return 0, false
+		} else {
+			score += 30
 		}
-		score += 30
 	}
 	if len(value.Scope.Models) > 0 {
 		if request.Model == "" ||
@@ -503,20 +517,24 @@ func scoreExperienceSelection(
 		score += 20
 	}
 	for _, condition := range value.Applicability.DeterministicConditions {
-		if condition.Kind != experience.ConditionPathPattern ||
-			!selectionPathsMatch(
-				condition.Values,
-				request.RepositoryPaths,
-			) {
+		if condition.Kind != experience.ConditionPathPattern {
+			return 0, false
+		}
+		if len(request.RepositoryPaths) == 0 {
+			unresolvedSemanticScope = true
+			continue
+		}
+		if !selectionPathsMatch(
+			condition.Values,
+			request.RepositoryPaths,
+		) {
 			return 0, false
 		}
 	}
-	score += selectionLexicalOverlap(
-		request.TaskHint,
-		value.Applicability.SemanticDescription+" "+
-			value.Guidance.Instruction+" "+
-			value.Guidance.Rationale,
-	)
+	if unresolvedSemanticScope && lexicalOverlap == 0 {
+		return 0, false
+	}
+	score += lexicalOverlap
 	return score, true
 }
 
@@ -553,6 +571,12 @@ func selectionLexicalOverlap(taskHint, experienceText string) int {
 }
 
 func selectionLexicalTerms(value string) map[string]struct{} {
+	stopwords := map[string]struct{}{
+		"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {},
+		"be": {}, "by": {}, "for": {}, "from": {}, "in": {}, "is": {},
+		"it": {}, "of": {}, "on": {}, "or": {}, "that": {}, "the": {},
+		"this": {}, "to": {}, "with": {},
+	}
 	parts := strings.FieldsFunc(
 		strings.ToLower(value),
 		func(character rune) bool {
@@ -562,11 +586,28 @@ func selectionLexicalTerms(value string) map[string]struct{} {
 	)
 	result := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
-		if part != "" {
-			result[part] = struct{}{}
+		part = normalizeSelectionLexicalTerm(part)
+		if part == "" {
+			continue
 		}
+		if _, ignored := stopwords[part]; ignored {
+			continue
+		}
+		result[part] = struct{}{}
 	}
 	return result
+}
+
+func normalizeSelectionLexicalTerm(value string) string {
+	switch value {
+	case "asynchronous":
+		return "async"
+	case "cancellation", "cancelled", "canceled",
+		"cancelling", "canceling", "cancels":
+		return "cancel"
+	default:
+		return value
+	}
 }
 
 func estimateExperienceSelectionTokens(

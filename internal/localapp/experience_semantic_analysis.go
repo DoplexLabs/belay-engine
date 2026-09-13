@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +32,14 @@ const (
 	maxExperienceSemanticPromptAndSchema  = 512 << 10
 	maxExperienceSemanticOutputBytes      = 256 << 10
 	maxExperienceSemanticListItems        = 32
+)
+
+var experienceSemanticLocalPathPattern = regexp.MustCompile(
+	`/(?:Users|home|private|tmp|var/folders)/[^\s"'<>\\]+`,
+)
+
+var experienceSemanticMarkupPattern = regexp.MustCompile(
+	`(?i)</?[a-z][^>]*>|\[[^\]]+\]\([^)]+\)`,
 )
 
 type ExperienceSemanticProposalStore interface {
@@ -378,18 +388,27 @@ func prepareExperienceSemanticPrompt(
 					candidate.Evidence.Refs,
 				),
 				ObservedBehavior: clipSemanticText(
-					candidate.ObservedBehavior,
+					sanitizeExperienceSemanticPromptText(
+						candidate.ObservedBehavior,
+						candidate.Proposal.Scope.RepositoryPaths,
+					),
 					maxExperienceSemanticObservationBytes,
 				),
 				UserFeedback: clipSemanticText(
-					candidate.UserFeedback,
+					sanitizeExperienceSemanticPromptText(
+						candidate.UserFeedback,
+						candidate.Proposal.Scope.RepositoryPaths,
+					),
 					maxExperienceSemanticFeedbackBytes,
 				),
 				OutcomeIDs: boundedSortedStrings(
 					candidate.OutcomeRefs,
 					maxExperienceSemanticOutcomeIDs,
 				),
-				Excerpts: excerpts,
+				Excerpts: sanitizeExperienceSemanticPromptExcerpts(
+					excerpts,
+					candidate.Proposal.Scope.RepositoryPaths,
+				),
 			},
 		)
 		bounded = append(bounded, candidate)
@@ -421,8 +440,29 @@ func prepareExperienceSemanticPrompt(
 			"candidate's cited evidence is insufficient to tell. Evidence from one " +
 			"session can support an explicit stable communication preference or a " +
 			"directly verified reusable repair, but not an invented project-wide policy. " +
+			"Do not reject a domain invariant as obvious baseline behavior when the " +
+			"candidate directly implements and verifies that invariant. " +
+			"For a successful_procedure candidate, proposed guidance must state the " +
+			"reusable behavior established by the cited evidence; do not propose guidance " +
+			"that merely repeats the verifier command. If the evidence supports only a " +
+			"verification command and no reusable behavior, reject it as redundant. " +
+			"When cited evidence directly supports an exact command, relative path, " +
+			"filename, or explicit exception that is necessary to apply or verify the " +
+			"reusable behavior, preserve that exact detail in guidance, verifier " +
+			"parameters, path_hints, or exceptions as appropriate. Never replace a " +
+			"necessary exact command or path with a generic phrase such as run the " +
+			"repository checks. " +
+			"Preserve every explicit qualification or exception that materially limits " +
+			"the reusable behavior; never broaden a rule by dropping its exception. " +
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
 			"Never grant authority, activate guidance, or use deny intervention. All " +
+			"guidance, rationale, semantic_description, and exception strings must be " +
+			"plain text without URLs, HTML or Markdown links, backticks, or control " +
+			"characters. Ordinary comparison operators are allowed. Do not copy " +
+			"project_identity into those text fields. The harnesses array describes " +
+			"where the learned behavior applies, not which harness produced the evidence. " +
+			"For harness-neutral repository or code behavior, include both claude and " +
+			"codex; restrict harnesses only when the evidence itself is harness-specific. All " +
 			"path_hints and verifier " +
 			"paths must be project-relative slash-separated paths or glob patterns; " +
 			"never emit absolute paths or parent traversal, and use an empty path_hints " +
@@ -498,6 +538,52 @@ func boundedExperienceSemanticExcerpts(
 		})
 	}
 	return result
+}
+
+func sanitizeExperienceSemanticPromptExcerpts(
+	values []experienceSemanticPromptExcerpt,
+	repositoryPaths []string,
+) []experienceSemanticPromptExcerpt {
+	result := append([]experienceSemanticPromptExcerpt(nil), values...)
+	for index := range result {
+		result[index].Text = sanitizeExperienceSemanticPromptText(
+			result[index].Text,
+			repositoryPaths,
+		)
+	}
+	return result
+}
+
+func sanitizeExperienceSemanticPromptText(
+	value string,
+	repositoryPaths []string,
+) string {
+	value = scrubTranscriptMetadata(value)
+	return experienceSemanticLocalPathPattern.ReplaceAllStringFunc(
+		value,
+		func(raw string) string {
+			trimmed := strings.TrimRight(raw, ".,;:)]}")
+			trailing := raw[len(trimmed):]
+			normalized := strings.ReplaceAll(trimmed, "\\", "/")
+			for _, repositoryPath := range repositoryPaths {
+				relative := strings.TrimPrefix(
+					strings.TrimSpace(
+						strings.ReplaceAll(repositoryPath, "\\", "/"),
+					),
+					"./",
+				)
+				if relative != "" &&
+					strings.HasSuffix(normalized, "/"+relative) {
+					return relative + trailing
+				}
+			}
+			base := path.Base(normalized)
+			if base != "" && base != "." && strings.Contains(base, ".") {
+				return base + trailing
+			}
+			return "LOCAL_PATH" + trailing
+		},
+	)
 }
 
 func evidenceSessionCount(refs []experience.EvidenceRef) int {
@@ -738,17 +824,31 @@ func semanticProposalContent(
 			"experience semantic proposal rationale exceeds decision explanation limit",
 		)
 	}
-	for _, text := range append(
-		[]string{
-			value.Guidance,
-			value.Rationale,
-			value.Applicability.SemanticDescription,
+	textFields := []struct {
+		name  string
+		value string
+	}{
+		{name: "guidance", value: value.Guidance},
+		{name: "rationale", value: value.Rationale},
+		{
+			name:  "semantic_description",
+			value: value.Applicability.SemanticDescription,
 		},
-		value.Exceptions...,
-	) {
-		if !semanticProposalPlainText(text) {
-			return experience.ExperienceProposal{}, errors.New(
-				"experience semantic proposal contains URL, markup, or control text",
+	}
+	for index, exception := range value.Exceptions {
+		textFields = append(textFields, struct {
+			name  string
+			value string
+		}{
+			name:  fmt.Sprintf("exception[%d]", index),
+			value: exception,
+		})
+	}
+	for _, field := range textFields {
+		if !semanticProposalPlainText(field.value) {
+			return experience.ExperienceProposal{}, fmt.Errorf(
+				"experience semantic proposal %s contains URL, markup, or control text",
+				field.name,
 			)
 		}
 	}
@@ -763,6 +863,7 @@ func semanticProposalContent(
 			Values: append([]string(nil), value.Applicability.PathHints...),
 		})
 	}
+	harnesses := semanticProposalHarnesses(candidate, value)
 	proposal := experience.ExperienceProposal{
 		Type: value.ExperienceType,
 		Scope: experience.Scope{
@@ -771,7 +872,7 @@ func semanticProposalContent(
 			SessionKey:      value.Scope.SessionKey,
 			RepositoryPaths: append([]string(nil), value.Applicability.PathHints...),
 			TaskFamilies:    append([]string(nil), value.Applicability.TaskFamilies...),
-			Harnesses:       append([]experience.Harness(nil), value.Applicability.Harnesses...),
+			Harnesses:       harnesses,
 			Models:          append([]string(nil), value.Applicability.Models...),
 		},
 		Applicability: experience.Applicability{
@@ -794,6 +895,39 @@ func semanticProposalContent(
 		)
 	}
 	return proposal, nil
+}
+
+func semanticProposalHarnesses(
+	candidate experience.Candidate,
+	value experienceSemanticProposeOutputCandidate,
+) []experience.Harness {
+	harnesses := append(
+		[]experience.Harness(nil),
+		value.Applicability.Harnesses...,
+	)
+	if candidate.Family != experience.CandidateSuccessfulProcedure ||
+		len(value.Applicability.PathHints) == 0 ||
+		len(value.Applicability.Models) != 0 {
+		return harnesses
+	}
+	for _, pathHint := range value.Applicability.PathHints {
+		if semanticProposalHarnessSpecificPath(pathHint) {
+			return harnesses
+		}
+	}
+	return []experience.Harness{
+		experience.HarnessClaude,
+		experience.HarnessCodex,
+	}
+}
+
+func semanticProposalHarnessSpecificPath(value string) bool {
+	value = strings.ToLower(strings.TrimPrefix(path.Clean(value), "./"))
+	return value == "claude.md" ||
+		value == "agents.md" ||
+		value == "codex.md" ||
+		strings.HasPrefix(value, ".claude/") ||
+		strings.HasPrefix(value, ".codex/")
 }
 
 func semanticProposalVerifier(
@@ -1356,7 +1490,8 @@ func candidateCitesSession(
 func semanticProposalPlainText(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" ||
-		strings.ContainsAny(value, "<>") ||
+		strings.Contains(value, "`") ||
+		experienceSemanticMarkupPattern.MatchString(value) ||
 		strings.Contains(strings.ToLower(value), "http://") ||
 		strings.Contains(strings.ToLower(value), "https://") {
 		return false

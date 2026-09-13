@@ -240,6 +240,48 @@ func TestCommandRepairFamilyIsConservativeAndUnwrapsEnvironment(t *testing.T) {
 	}
 }
 
+func TestRetainedVerificationCommandRecognizesUnittestFromToolInput(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{
+			command: "python3 -m unittest -v 2>&1 | tail -20",
+			want:    "python3 -m unittest -v 2>&1 | tail -20",
+		},
+		{
+			command: `cd "$(pwd)" && python3 -m unittest -v`,
+			want:    "python3 -m unittest -v",
+		},
+	}
+	for _, test := range tests {
+		input, err := json.Marshal(map[string]string{
+			"command": test.command,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		class, raw, ok := RetainedVerificationCommand(
+			transcript.Turn{
+				Role:     transcript.RoleToolCall,
+				ToolName: "Bash",
+				Payload:  transcript.Payload{ToolInput: input},
+			},
+			issueintel.ProjectConfig{},
+		)
+		if !ok || class != commandClassTest || raw != test.want {
+			t.Fatalf(
+				"verification %q = %q/%q/%t, want test/%q/true",
+				test.command,
+				class,
+				raw,
+				ok,
+				test.want,
+			)
+		}
+	}
+}
+
 func TestMachineGeneratedEnvelopeBoundaries(t *testing.T) {
 	tests := []struct {
 		name  string

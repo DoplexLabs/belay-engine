@@ -4,6 +4,7 @@ package derive
 
 import (
 	"errors"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	Version                        = "belay.trajectory-derive.v4"
+	Version                        = "belay.trajectory-derive.v7"
 	MaxDiagnostics                 = 512
 	verificationMutationTurnWindow = 100
 	repairCommandTurnWindow        = 20
@@ -79,7 +80,7 @@ type positionedTurn struct {
 type matchedMutation struct {
 	position int
 	turn     transcript.Turn
-	event    model.Event
+	target   trajectory.NodeRef
 }
 
 type commandAttempt struct {
@@ -461,7 +462,7 @@ func (result *Result) deriveMutationVerification(
 	matchedMutations := make([]matchedMutation, 0)
 	for position, turn := range turns {
 		if turn.Role != transcript.RoleToolCall ||
-			len(transcriptissues.ExtractEditedFiles(turn)) == 0 {
+			len(projectEditedFiles(session, turn)) == 0 {
 			continue
 		}
 		callID := strings.TrimSpace(turn.Payload.ToolCallID)
@@ -470,10 +471,11 @@ func (result *Result) deriveMutationVerification(
 		}
 		targets := mutationEvents[callID]
 		if len(targets) == 0 {
-			result.addDiagnostic(
-				DiagnosticMissingMutation,
-				referencePointer(turnReference(turn)),
-			)
+			matchedMutations = append(matchedMutations, matchedMutation{
+				position: position,
+				turn:     turn,
+				target:   turnReference(turn),
+			})
 			continue
 		}
 		for _, event := range targets {
@@ -493,7 +495,7 @@ func (result *Result) deriveMutationVerification(
 			matchedMutations = append(matchedMutations, matchedMutation{
 				position: position,
 				turn:     turn,
-				event:    event,
+				target:   eventRef,
 			})
 		}
 	}
@@ -503,11 +505,11 @@ func (result *Result) deriveMutationVerification(
 		if turn.Role != transcript.RoleToolCall {
 			continue
 		}
-		raw := strings.TrimSpace(turn.Payload.RawCommand)
-		if _, recognized := transcriptissues.ClassifyVerificationCommand(
-			raw,
+		_, _, recognized := transcriptissues.RetainedVerificationCommand(
+			turn,
 			config,
-		); !recognized {
+		)
+		if !recognized {
 			continue
 		}
 		windowStart := position - verificationMutationTurnWindow
@@ -524,21 +526,23 @@ func (result *Result) deriveMutationVerification(
 				continue
 			}
 			mutationTurnRef := turnReference(mutation.turn)
-			eventRef := eventReference(mutation.event)
+			sourceRefs := []trajectory.NodeRef{
+				verificationRef,
+				mutationTurnRef,
+			}
+			if mutation.target.Kind != trajectory.NodeTranscriptTurn {
+				sourceRefs = append(sourceRefs, mutation.target)
+			}
 			result.Edges = append(
 				result.Edges,
 				newEdgeWithSources(
 					session,
 					verificationRef,
 					trajectory.RelationVerifies,
-					eventRef,
+					mutation.target,
 					turn.OccurredAt,
 					trajectory.EvidenceDeterministicInference,
-					[]trajectory.NodeRef{
-						verificationRef,
-						mutationTurnRef,
-						eventRef,
-					},
+					sourceRefs,
 				),
 			)
 		}
@@ -594,7 +598,10 @@ func (result *Result) deriveVerificationOutcome(
 		return
 	}
 	verificationResult := matches[0]
-	if verificationResult.Payload.ExitCode == nil {
+	failed, known := transcriptissues.ExplicitToolResultFailed(
+		verificationResult,
+	)
+	if !known {
 		result.addDiagnostic(
 			DiagnosticUnknownVerificationResult,
 			referencePointer(turnReference(verificationResult)),
@@ -603,7 +610,7 @@ func (result *Result) deriveVerificationOutcome(
 	}
 	kind := trajectory.OutcomeVerificationPass
 	outcomeResult := trajectory.ResultSucceeded
-	if *verificationResult.Payload.ExitCode != 0 {
+	if failed {
 		kind = trajectory.OutcomeVerificationFail
 		outcomeResult = trajectory.ResultFailed
 	}
@@ -729,7 +736,7 @@ func (result *Result) deriveCompletionClaims(
 		}
 		latestMutationPosition := -1
 		for prior := position - 1; prior >= 0; prior-- {
-			if len(transcriptissues.ExtractEditedFiles(turns[prior])) > 0 {
+			if len(projectEditedFiles(session, turns[prior])) > 0 {
 				latestMutationPosition = prior
 				break
 			}
@@ -740,25 +747,57 @@ func (result *Result) deriveCompletionClaims(
 		claimRef := turnReference(turn)
 		for _, mutation := range mutationsByPosition[latestMutationPosition] {
 			mutationTurnRef := turnReference(mutation.turn)
-			eventRef := eventReference(mutation.event)
+			sourceRefs := []trajectory.NodeRef{
+				claimRef,
+				mutationTurnRef,
+			}
+			if mutation.target.Kind != trajectory.NodeTranscriptTurn {
+				sourceRefs = append(sourceRefs, mutation.target)
+			}
 			result.Edges = append(
 				result.Edges,
 				newEdgeWithSources(
 					session,
 					claimRef,
 					trajectory.RelationClaimsCompletionAfter,
-					eventRef,
+					mutation.target,
 					turn.OccurredAt,
 					trajectory.EvidenceDeterministicInference,
-					[]trajectory.NodeRef{
-						claimRef,
-						mutationTurnRef,
-						eventRef,
-					},
+					sourceRefs,
 				),
 			)
 		}
 	}
+}
+
+func projectEditedFiles(
+	session transcript.Session,
+	turn transcript.Turn,
+) []string {
+	files := transcriptissues.ExtractEditedFiles(turn)
+	root := strings.TrimSpace(session.ProjectPath)
+	if len(files) == 0 || !filepath.IsAbs(root) {
+		return files
+	}
+	root = filepath.Clean(root)
+	base := strings.TrimSpace(turn.Payload.CWD)
+	if !filepath.IsAbs(base) {
+		base = root
+	}
+	result := make([]string, 0, len(files))
+	for _, path := range files {
+		candidate := path
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(base, candidate)
+		}
+		relative, err := filepath.Rel(root, filepath.Clean(candidate))
+		if err != nil || relative == ".." ||
+			strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		result = append(result, path)
+	}
+	return result
 }
 
 func (result *Result) deriveCompactions(
@@ -809,9 +848,18 @@ func explicitCommandAttempts(
 		matches := results[callID]
 		if len(matches) != 1 ||
 			matches[0].position <= position ||
-			segments[matches[0].position] != segments[position] ||
-			matches[0].turn.Payload.ExitCode == nil {
+			segments[matches[0].position] != segments[position] {
 			continue
+		}
+		failed, known := transcriptissues.ExplicitToolResultFailed(
+			matches[0].turn,
+		)
+		if !known {
+			continue
+		}
+		exitCode := 0
+		if failed {
+			exitCode = 1
 		}
 		attempts = append(attempts, commandAttempt{
 			position:       position,
@@ -821,7 +869,7 @@ func explicitCommandAttempts(
 			result:         matches[0].turn,
 			signature:      signature,
 			repairFamily:   repairFamily,
-			exitCode:       *matches[0].turn.Payload.ExitCode,
+			exitCode:       exitCode,
 		})
 	}
 	return attempts

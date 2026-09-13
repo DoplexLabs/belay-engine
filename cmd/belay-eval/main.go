@@ -33,6 +33,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var root string
 	var output string
 	var comparative bool
+	var missionPackBenchmarkSchedule bool
+	var missionPackBenchmarkPrepare bool
+	var missionPackBenchmarkExecute bool
+	var missionPackBenchmarkRecurrence bool
 	var privateEvalCapsule bool
 	var completePrivateEvalCapsule bool
 	var materializeSelectionValue bool
@@ -41,10 +45,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var capsuleDraft string
 	var capsuleReplay string
 	var selectionInput string
+	var benchmarkPlan string
+	var benchmarkSchedule string
+	var benchmarkManifest string
+	var benchmarkRecurrenceInput string
+	var benchmarkRoot string
+	var benchmarkGradleCache string
+	var benchmarkSequence int
 	var realClaude bool
 	var realCodex bool
+	var claudeExecutable string
+	var claudeModel string
 	var codexExecutable string
+	var benchmarkCodexModel string
 	var model string
+	var maxBudgetUSD float64
+	var maxTokenOperations int64
+	var wallTimeoutSeconds int
+	var confirmPaidBenchmarkRun bool
 	var repetitions int
 	flags := flag.NewFlagSet("belay-eval", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -55,6 +73,30 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"comparative",
 		false,
 		"run the five-baseline C6 comparative pilot",
+	)
+	flags.BoolVar(
+		&missionPackBenchmarkSchedule,
+		"missionpack-benchmark-schedule",
+		false,
+		"materialize a deterministic Mission Pack benchmark schedule from strict JSON",
+	)
+	flags.BoolVar(
+		&missionPackBenchmarkPrepare,
+		"missionpack-benchmark-prepare",
+		false,
+		"prepare one isolated scheduled Mission Pack benchmark run without invoking a harness",
+	)
+	flags.BoolVar(
+		&missionPackBenchmarkExecute,
+		"missionpack-benchmark-execute",
+		false,
+		"execute and externally score one launchable Mission Pack benchmark manifest",
+	)
+	flags.BoolVar(
+		&missionPackBenchmarkRecurrence,
+		"missionpack-benchmark-recurrence",
+		false,
+		"derive frozen cross-session failed-command fingerprints from benchmark raw streams",
 	)
 	flags.BoolVar(
 		&privateEvalCapsule,
@@ -104,6 +146,48 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"",
 		"path to a selection-value input JSON file",
 	)
+	flags.StringVar(
+		&benchmarkPlan,
+		"benchmark-plan",
+		"",
+		"path to a Mission Pack benchmark plan JSON file",
+	)
+	flags.StringVar(
+		&benchmarkSchedule,
+		"benchmark-schedule",
+		"",
+		"path to a materialized Mission Pack benchmark schedule JSON file",
+	)
+	flags.StringVar(
+		&benchmarkManifest,
+		"benchmark-manifest",
+		"",
+		"path to a prepared Mission Pack benchmark run manifest",
+	)
+	flags.StringVar(
+		&benchmarkRecurrenceInput,
+		"benchmark-recurrence-input",
+		"",
+		"path to a strict Mission Pack benchmark recurrence input JSON file",
+	)
+	flags.StringVar(
+		&benchmarkRoot,
+		"benchmark-root",
+		"",
+		"path to the belay-benchmark-cryptoswift-kmp repository",
+	)
+	flags.StringVar(
+		&benchmarkGradleCache,
+		"benchmark-gradle-cache",
+		"",
+		"path to the frozen benchmark Gradle cache template",
+	)
+	flags.IntVar(
+		&benchmarkSequence,
+		"benchmark-sequence",
+		0,
+		"one-based schedule sequence to prepare",
+	)
 	flags.BoolVar(
 		&realClaude,
 		"real-claude",
@@ -117,16 +201,58 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"invoke installed Codex ephemerally for the destination session",
 	)
 	flags.StringVar(
+		&claudeExecutable,
+		"claude",
+		"claude",
+		"Claude executable name or path",
+	)
+	flags.StringVar(
+		&claudeModel,
+		"claude-model",
+		"FOUNDER_SIGN_OFF_REQUIRED",
+		"fixed Claude model for the Mission Pack benchmark",
+	)
+	flags.StringVar(
 		&codexExecutable,
 		"codex",
 		"codex",
 		"Codex executable name or path",
 	)
 	flags.StringVar(
+		&benchmarkCodexModel,
+		"benchmark-codex-model",
+		"FOUNDER_SIGN_OFF_REQUIRED",
+		"fixed Codex model for the Mission Pack benchmark",
+	)
+	flags.StringVar(
 		&model,
 		"model",
 		"openai.gpt-5.6-sol",
 		"fixed Codex model for comparative evaluation",
+	)
+	flags.Float64Var(
+		&maxBudgetUSD,
+		"max-budget-usd",
+		0,
+		"fixed per-session benchmark spend cap",
+	)
+	flags.Int64Var(
+		&maxTokenOperations,
+		"max-token-operations",
+		0,
+		"fixed per-session benchmark input-plus-output token cap",
+	)
+	flags.IntVar(
+		&wallTimeoutSeconds,
+		"wall-timeout-seconds",
+		0,
+		"fixed per-session benchmark wall-clock cap",
+	)
+	flags.BoolVar(
+		&confirmPaidBenchmarkRun,
+		"confirm-paid-benchmark-run",
+		false,
+		"confirm that this invocation may contact the pinned model provider and spend the signed budget",
 	)
 	flags.IntVar(
 		&repetitions,
@@ -141,9 +267,108 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("belay-eval accepts no positional arguments")
 	}
 
+	if missionPackBenchmarkSchedule {
+		if missionPackBenchmarkPrepare || missionPackBenchmarkExecute ||
+			missionPackBenchmarkRecurrence ||
+			privateEvalCapsule || completePrivateEvalCapsule ||
+			materializeSelectionValue || comparative || realClaude || realCodex {
+			return errors.New(
+				"Mission Pack benchmark scheduling cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(benchmarkPlan) == "" {
+			return errors.New(
+				"--benchmark-plan is required with --missionpack-benchmark-schedule",
+			)
+		}
+	} else if strings.TrimSpace(benchmarkPlan) != "" {
+		return errors.New(
+			"--benchmark-plan requires --missionpack-benchmark-schedule",
+		)
+	}
+	if missionPackBenchmarkPrepare {
+		if missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
+			privateEvalCapsule || completePrivateEvalCapsule ||
+			materializeSelectionValue || comparative || realClaude || realCodex {
+			return errors.New(
+				"Mission Pack benchmark preparation cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(benchmarkSchedule) == "" {
+			return errors.New(
+				"--benchmark-schedule is required with --missionpack-benchmark-prepare",
+			)
+		}
+		if strings.TrimSpace(benchmarkRoot) == "" {
+			return errors.New(
+				"--benchmark-root is required with --missionpack-benchmark-prepare",
+			)
+		}
+		if benchmarkSequence < 1 {
+			return errors.New(
+				"--benchmark-sequence must be positive with --missionpack-benchmark-prepare",
+			)
+		}
+		if strings.TrimSpace(root) == "" {
+			return errors.New(
+				"--root is required with --missionpack-benchmark-prepare",
+			)
+		}
+	} else if strings.TrimSpace(benchmarkSchedule) != "" ||
+		strings.TrimSpace(benchmarkRoot) != "" ||
+		strings.TrimSpace(benchmarkGradleCache) != "" ||
+		benchmarkSequence != 0 {
+		return errors.New(
+			"benchmark run inputs require --missionpack-benchmark-prepare",
+		)
+	}
+	if missionPackBenchmarkExecute {
+		if missionPackBenchmarkRecurrence ||
+			privateEvalCapsule || completePrivateEvalCapsule ||
+			materializeSelectionValue || comparative || realClaude || realCodex {
+			return errors.New(
+				"Mission Pack benchmark execution cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(benchmarkManifest) == "" {
+			return errors.New(
+				"--benchmark-manifest is required with --missionpack-benchmark-execute",
+			)
+		}
+		if !confirmPaidBenchmarkRun {
+			return errors.New(
+				"--confirm-paid-benchmark-run is required with --missionpack-benchmark-execute",
+			)
+		}
+	} else if strings.TrimSpace(benchmarkManifest) != "" ||
+		confirmPaidBenchmarkRun {
+		return errors.New(
+			"benchmark execution inputs require --missionpack-benchmark-execute",
+		)
+	}
+	if missionPackBenchmarkRecurrence {
+		if privateEvalCapsule || completePrivateEvalCapsule ||
+			materializeSelectionValue || comparative || realClaude || realCodex {
+			return errors.New(
+				"Mission Pack benchmark recurrence analysis cannot be combined with other evaluation modes",
+			)
+		}
+		if strings.TrimSpace(benchmarkRecurrenceInput) == "" {
+			return errors.New(
+				"--benchmark-recurrence-input is required with --missionpack-benchmark-recurrence",
+			)
+		}
+	} else if strings.TrimSpace(benchmarkRecurrenceInput) != "" {
+		return errors.New(
+			"--benchmark-recurrence-input requires --missionpack-benchmark-recurrence",
+		)
+	}
+
 	if completePrivateEvalCapsule {
 		if privateEvalCapsule || materializeSelectionValue ||
-			comparative || realClaude || realCodex {
+			comparative || missionPackBenchmarkPrepare ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
+			realClaude || realCodex {
 			return errors.New(
 				"private eval capsule completion cannot be combined with other evaluation modes",
 			)
@@ -162,7 +387,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if materializeSelectionValue {
 		if privateEvalCapsule || completePrivateEvalCapsule ||
-			comparative || realClaude || realCodex {
+			comparative || missionPackBenchmarkPrepare ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
+			realClaude || realCodex {
 			return errors.New(
 				"selection value materialization cannot be combined with other evaluation modes",
 			)
@@ -178,7 +405,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		)
 	}
 
-	if root == "" && !privateEvalCapsule && !completePrivateEvalCapsule {
+	if root == "" && !privateEvalCapsule && !completePrivateEvalCapsule &&
+		!missionPackBenchmarkSchedule && !missionPackBenchmarkPrepare &&
+		!missionPackBenchmarkExecute && !missionPackBenchmarkRecurrence {
 		value, err := os.MkdirTemp("", "belay-c5-cross-harness-")
 		if err != nil {
 			return err
@@ -186,7 +415,98 @@ func run(args []string, stdout, stderr io.Writer) error {
 		root = value
 	}
 	var result any
-	if materializeSelectionValue {
+	if missionPackBenchmarkSchedule {
+		var input evalrun.MissionPackBenchmarkPlan
+		if err := decodeStrictJSONFile(
+			benchmarkPlan,
+			"Mission Pack benchmark plan",
+			&input,
+		); err != nil {
+			return err
+		}
+		value, err := evalrun.BuildMissionPackBenchmarkSchedule(input)
+		if err != nil {
+			return err
+		}
+		result = value
+	} else if missionPackBenchmarkPrepare {
+		var schedule evalrun.MissionPackBenchmarkSchedule
+		if err := decodeStrictJSONFile(
+			benchmarkSchedule,
+			"Mission Pack benchmark schedule",
+			&schedule,
+		); err != nil {
+			return err
+		}
+		value, err := evalrun.PrepareMissionPackBenchmarkRun(
+			context.Background(),
+			evalrun.MissionPackBenchmarkPrepareOptions{
+				BenchmarkRoot:       benchmarkRoot,
+				RunRoot:             root,
+				GradleCacheTemplate: benchmarkGradleCache,
+				Schedule:            schedule,
+				Sequence:            benchmarkSequence,
+				ClaudeExecutable:    claudeExecutable,
+				CodexExecutable:     codexExecutable,
+				ClaudeModel:         claudeModel,
+				CodexModel:          benchmarkCodexModel,
+				MaxBudgetUSD:        maxBudgetUSD,
+				MaxTokenOperations:  maxTokenOperations,
+				WallTimeoutSeconds:  wallTimeoutSeconds,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		result = value
+	} else if missionPackBenchmarkExecute {
+		var manifest evalrun.MissionPackBenchmarkRunManifest
+		if err := decodeStrictJSONFile(
+			benchmarkManifest,
+			"Mission Pack benchmark run manifest",
+			&manifest,
+		); err != nil {
+			return err
+		}
+		value, err := evalrun.ExecuteMissionPackBenchmarkRun(
+			context.Background(),
+			manifest,
+			confirmPaidBenchmarkRun,
+		)
+		if err != nil {
+			return err
+		}
+		result = value
+	} else if missionPackBenchmarkRecurrence {
+		var input evalrun.MissionPackBenchmarkRecurrenceInput
+		if err := decodeStrictJSONFile(
+			benchmarkRecurrenceInput,
+			"Mission Pack benchmark recurrence input",
+			&input,
+		); err != nil {
+			return err
+		}
+		inputPath, err := filepath.Abs(benchmarkRecurrenceInput)
+		if err != nil {
+			return err
+		}
+		for index := range input.Runs {
+			if !filepath.IsAbs(input.Runs[index].RawEventsPath) {
+				input.Runs[index].RawEventsPath = filepath.Join(
+					filepath.Dir(inputPath),
+					input.Runs[index].RawEventsPath,
+				)
+			}
+		}
+		value, err := evalrun.AnalyzeMissionPackBenchmarkRecurrence(
+			context.Background(),
+			input,
+		)
+		if err != nil {
+			return err
+		}
+		result = value
+	} else if materializeSelectionValue {
 		var input evalrun.SelectionValueInput
 		if err := decodeStrictJSONFile(
 			selectionInput,
@@ -211,7 +531,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		result = value
 	} else if privateEvalCapsule {
-		if comparative || realClaude || realCodex {
+		if comparative || missionPackBenchmarkPrepare ||
+			missionPackBenchmarkExecute || missionPackBenchmarkRecurrence ||
+			realClaude || realCodex {
 			return fmt.Errorf(
 				"private eval capsule export cannot be combined with harness evaluation modes",
 			)
