@@ -38,6 +38,10 @@ var experienceSemanticLocalPathPattern = regexp.MustCompile(
 	`/(?:Users|home|private|tmp|var/folders)/[^\s"'<>\\]+`,
 )
 
+var experienceSemanticMarkupPattern = regexp.MustCompile(
+	`(?i)</?[a-z][^>]*>|\[[^\]]+\]\([^)]+\)`,
+)
+
 type ExperienceSemanticProposalStore interface {
 	QueryExperienceCandidates(
 		context.Context,
@@ -436,6 +440,8 @@ func prepareExperienceSemanticPrompt(
 			"candidate's cited evidence is insufficient to tell. Evidence from one " +
 			"session can support an explicit stable communication preference or a " +
 			"directly verified reusable repair, but not an invented project-wide policy. " +
+			"Do not reject a domain invariant as obvious baseline behavior when the " +
+			"candidate directly implements and verifies that invariant. " +
 			"For a successful_procedure candidate, proposed guidance must state the " +
 			"reusable behavior established by the cited evidence; do not propose guidance " +
 			"that merely repeats the verifier command. If the evidence supports only a " +
@@ -445,7 +451,8 @@ func prepareExperienceSemanticPrompt(
 			"Proposed guidance must be concise, single-line, inactive, and authority-free. " +
 			"Never grant authority, activate guidance, or use deny intervention. All " +
 			"guidance, rationale, semantic_description, and exception strings must be " +
-			"plain text without URLs, angle brackets, or control characters. Do not copy " +
+			"plain text without URLs, HTML or Markdown links, backticks, or control " +
+			"characters. Ordinary comparison operators are allowed. Do not copy " +
 			"project_identity into those text fields. The harnesses array describes " +
 			"where the learned behavior applies, not which harness produced the evidence. " +
 			"For harness-neutral repository or code behavior, include both claude and " +
@@ -850,6 +857,7 @@ func semanticProposalContent(
 			Values: append([]string(nil), value.Applicability.PathHints...),
 		})
 	}
+	harnesses := semanticProposalHarnesses(candidate, value)
 	proposal := experience.ExperienceProposal{
 		Type: value.ExperienceType,
 		Scope: experience.Scope{
@@ -858,7 +866,7 @@ func semanticProposalContent(
 			SessionKey:      value.Scope.SessionKey,
 			RepositoryPaths: append([]string(nil), value.Applicability.PathHints...),
 			TaskFamilies:    append([]string(nil), value.Applicability.TaskFamilies...),
-			Harnesses:       append([]experience.Harness(nil), value.Applicability.Harnesses...),
+			Harnesses:       harnesses,
 			Models:          append([]string(nil), value.Applicability.Models...),
 		},
 		Applicability: experience.Applicability{
@@ -881,6 +889,39 @@ func semanticProposalContent(
 		)
 	}
 	return proposal, nil
+}
+
+func semanticProposalHarnesses(
+	candidate experience.Candidate,
+	value experienceSemanticProposeOutputCandidate,
+) []experience.Harness {
+	harnesses := append(
+		[]experience.Harness(nil),
+		value.Applicability.Harnesses...,
+	)
+	if candidate.Family != experience.CandidateSuccessfulProcedure ||
+		len(value.Applicability.PathHints) == 0 ||
+		len(value.Applicability.Models) != 0 {
+		return harnesses
+	}
+	for _, pathHint := range value.Applicability.PathHints {
+		if semanticProposalHarnessSpecificPath(pathHint) {
+			return harnesses
+		}
+	}
+	return []experience.Harness{
+		experience.HarnessClaude,
+		experience.HarnessCodex,
+	}
+}
+
+func semanticProposalHarnessSpecificPath(value string) bool {
+	value = strings.ToLower(strings.TrimPrefix(path.Clean(value), "./"))
+	return value == "claude.md" ||
+		value == "agents.md" ||
+		value == "codex.md" ||
+		strings.HasPrefix(value, ".claude/") ||
+		strings.HasPrefix(value, ".codex/")
 }
 
 func semanticProposalVerifier(
@@ -1443,7 +1484,8 @@ func candidateCitesSession(
 func semanticProposalPlainText(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" ||
-		strings.ContainsAny(value, "<>") ||
+		strings.Contains(value, "`") ||
+		experienceSemanticMarkupPattern.MatchString(value) ||
 		strings.Contains(strings.ToLower(value), "http://") ||
 		strings.Contains(strings.ToLower(value), "https://") {
 		return false

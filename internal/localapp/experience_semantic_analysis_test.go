@@ -938,11 +938,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV3WithV8Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV8WithV9Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV8 {
-		t.Fatalf("experience prompt version = %q, want v8", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV9 {
+		t.Fatalf("experience prompt version = %q, want v9", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -951,7 +951,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV3WithV8Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV3,
+				experience.SemanticProposalPromptVersionV8,
 			): true,
 		},
 	}
@@ -976,15 +976,64 @@ func TestAnalyzeExperienceCandidatesReanalyzesV3WithV8Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV8 ||
+			experience.SemanticProposalPromptVersionV9 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV8 {
+			experience.SemanticProposalPromptVersionV9 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,
 			store.stored,
 			err,
 		)
+	}
+}
+
+func TestSemanticProposalHarnessesTransferRepositoryProcedures(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("repository-procedure")
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	value := experienceSemanticProposeOutputCandidate{
+		Applicability: experienceSemanticOutputApplicability{
+			PathHints: []string{"task.py"},
+			Harnesses: []experience.Harness{experience.HarnessCodex},
+			Models:    []string{},
+		},
+	}
+	got := semanticProposalHarnesses(candidate, value)
+	if !reflect.DeepEqual(
+		got,
+		[]experience.Harness{
+			experience.HarnessClaude,
+			experience.HarnessCodex,
+		},
+	) {
+		t.Fatalf("repository procedure harnesses = %v", got)
+	}
+
+	value.Applicability.PathHints = []string{".codex/config.toml"}
+	got = semanticProposalHarnesses(candidate, value)
+	if !reflect.DeepEqual(got, []experience.Harness{experience.HarnessCodex}) {
+		t.Fatalf("harness-specific procedure harnesses = %v", got)
+	}
+}
+
+func TestSemanticProposalPlainTextAllowsComparisons(t *testing.T) {
+	for _, value := range []string{
+		"Advance only when incoming version > stored version.",
+		"Select rows observed_at <= example_time.",
+	} {
+		if !semanticProposalPlainText(value) {
+			t.Fatalf("comparison text rejected: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"See https://example.test/rule",
+		"Use <script>alert(1)</script>",
+		"Read [the rule](docs/rule.md)",
+		"Run `go test ./...`",
+	} {
+		if semanticProposalPlainText(value) {
+			t.Fatalf("markup text accepted: %q", value)
+		}
 	}
 }
 
