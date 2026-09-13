@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DoplexLabs/belay-engine/internal/experience"
+	"github.com/DoplexLabs/belay-engine/internal/experience/impact"
 	"github.com/DoplexLabs/belay-engine/internal/storage/local"
 	"github.com/DoplexLabs/belay-engine/internal/transcript"
 )
@@ -22,6 +23,7 @@ type missionPackStatusTestStore struct {
 	experiences  map[experience.ExperienceRef]local.StoredExperience
 	applications map[string]experience.Application
 	evaluations  map[string]*experience.Evaluation
+	impacts      map[string][]local.ExperienceImpactObservation
 }
 
 func (store *missionPackStatusTestStore) GetMissionPackReceipt(
@@ -80,6 +82,21 @@ func (store *missionPackStatusTestStore) GetExperienceApplicationEvaluation(
 	}
 	copy := *value
 	return &copy, nil
+}
+
+func (store *missionPackStatusTestStore) QueryExperienceImpactObservations(
+	_ context.Context,
+	applicationID string,
+	limit int,
+) ([]local.ExperienceImpactObservation, error) {
+	values := append(
+		[]local.ExperienceImpactObservation(nil),
+		store.impacts[applicationID]...,
+	)
+	if len(values) > limit {
+		values = values[:limit]
+	}
+	return values, nil
 }
 
 func TestMissionPackStatusReturnsExactEvaluatedReceiptInReceiptOrder(
@@ -174,6 +191,49 @@ func TestMissionPackStatusReturnsExactEvaluatedReceiptInReceiptOrder(
 		t.Fatal(err)
 	}
 	store.evaluations[application.ApplicationID] = &evaluation
+	priorCorrections := 2.0
+	correctionDelta := -1.0
+	priorFailures := 3.0
+	failureDelta := -2.0
+	store.impacts[application.ApplicationID] = []local.ExperienceImpactObservation{{
+		ObservedAt: evaluatedAt.Add(time.Minute),
+		Observation: impact.Observation{
+			ApplicationID:   application.ApplicationID,
+			Experience:      application.Experience,
+			ProjectIdentity: application.ProjectIdentity,
+			SessionKey:      application.SessionKey,
+			Evidence: impact.EvidenceRange{
+				SessionKey: application.SessionKey,
+				StartTurn:  3,
+				EndTurn:    9,
+			},
+			Current: impact.Metrics{
+				ExplicitCorrections:        1,
+				FailedToolResults:          1,
+				VerificationAfterFinalEdit: impact.VerificationObserved,
+				TaskOutcomeState:           experience.TaskOutcomeUnknown,
+			},
+			Comparison: impact.Comparison{
+				State:              impact.ComparisonMatched,
+				ComparableSessions: 4,
+				MatchBasis: []string{
+					impact.MatchProject,
+					impact.MatchHarness,
+				},
+				BaselineMedian: impact.BaselineMetrics{
+					ExplicitCorrections: &priorCorrections,
+					FailedToolResults:   &priorFailures,
+				},
+				Delta: impact.MetricDeltas{
+					ExplicitCorrections: &correctionDelta,
+					FailedToolResults:   &failureDelta,
+				},
+			},
+			Coverage: impact.Coverage{
+				CurrentTranscript: transcript.CoverageComplete,
+			},
+		},
+	}}
 
 	service := newMissionPackStatusTestService(t, store)
 	result, err := service.Get(context.Background(), receipt.ReceiptID)
@@ -202,6 +262,14 @@ func TestMissionPackStatusReturnsExactEvaluatedReceiptInReceiptOrder(
 		evaluated.VerifierState != experience.VerifierUnknown ||
 		evaluated.TaskOutcomeState != experience.TaskOutcomeUnknown {
 		t.Fatalf("evaluated item = %+v", evaluated)
+	}
+	if evaluated.ObservedAfter == nil ||
+		evaluated.ObservedAfter.MatchedSessions != 4 ||
+		evaluated.ObservedAfter.FailedAttempts.Delta == nil ||
+		*evaluated.ObservedAfter.FailedAttempts.Delta != -2 ||
+		evaluated.ObservedAfter.EvidenceStartTurn != 3 ||
+		evaluated.ObservedAfter.EvidenceEndTurn != 9 {
+		t.Fatalf("observed impact = %+v", evaluated.ObservedAfter)
 	}
 	if !reflect.DeepEqual(
 		evaluated.CoverageGaps,
@@ -406,6 +474,7 @@ func newMissionPackStatusTestStore(
 		experiences:  experiences,
 		applications: make(map[string]experience.Application),
 		evaluations:  make(map[string]*experience.Evaluation),
+		impacts:      make(map[string][]local.ExperienceImpactObservation),
 	}
 }
 

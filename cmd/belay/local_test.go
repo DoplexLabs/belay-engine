@@ -1183,11 +1183,13 @@ func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
 	previousImport := importRecentTranscriptsOnce
 	previousReconcile := reconcileMissionPackReceiptsOnce
 	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousImpact := deriveExperienceImpactsOnce
 	previousTrajectory := deriveSessionTrajectoriesOnce
 	t.Cleanup(func() {
 		importRecentTranscriptsOnce = previousImport
 		reconcileMissionPackReceiptsOnce = previousReconcile
 		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveExperienceImpactsOnce = previousImpact
 		deriveSessionTrajectoriesOnce = previousTrajectory
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1209,6 +1211,12 @@ func TestTranscriptPollingIsIndependentAndPayloadFree(t *testing.T) {
 		return nil
 	}
 	evaluateExperienceApplicationsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		return nil
+	}
+	deriveExperienceImpactsOnce = func(
 		context.Context,
 		*local.Store,
 	) error {
@@ -1248,11 +1256,13 @@ func TestTranscriptPollingImportsDespiteReceiptReconciliationError(t *testing.T)
 	previousImport := importRecentTranscriptsOnce
 	previousReconcile := reconcileMissionPackReceiptsOnce
 	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousImpact := deriveExperienceImpactsOnce
 	previousTrajectory := deriveSessionTrajectoriesOnce
 	t.Cleanup(func() {
 		importRecentTranscriptsOnce = previousImport
 		reconcileMissionPackReceiptsOnce = previousReconcile
 		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveExperienceImpactsOnce = previousImpact
 		deriveSessionTrajectoriesOnce = previousTrajectory
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1289,6 +1299,12 @@ func TestTranscriptPollingImportsDespiteReceiptReconciliationError(t *testing.T)
 		evaluations++
 		return nil
 	}
+	deriveExperienceImpactsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		return nil
+	}
 	warnings := 0
 	pollTranscripts(
 		ctx,
@@ -1323,11 +1339,13 @@ func TestTranscriptPollingEvaluatesAfterMaterializationAndFailsOpen(
 	previousImport := importRecentTranscriptsOnce
 	previousReconcile := reconcileMissionPackReceiptsOnce
 	previousEvaluation := evaluateExperienceApplicationsOnce
+	previousImpact := deriveExperienceImpactsOnce
 	previousTrajectory := deriveSessionTrajectoriesOnce
 	t.Cleanup(func() {
 		importRecentTranscriptsOnce = previousImport
 		reconcileMissionPackReceiptsOnce = previousReconcile
 		evaluateExperienceApplicationsOnce = previousEvaluation
+		deriveExperienceImpactsOnce = previousImpact
 		deriveSessionTrajectoriesOnce = previousTrajectory
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1361,6 +1379,13 @@ func TestTranscriptPollingEvaluatesAfterMaterializationAndFailsOpen(
 		order = append(order, "evaluate")
 		return errors.New("private evaluation payload")
 	}
+	deriveExperienceImpactsOnce = func(
+		context.Context,
+		*local.Store,
+	) error {
+		order = append(order, "impact")
+		return nil
+	}
 	warnings := 0
 	pollTranscripts(
 		ctx,
@@ -1372,7 +1397,7 @@ func TestTranscriptPollingEvaluatesAfterMaterializationAndFailsOpen(
 			cancel()
 		},
 	)
-	if got, want := strings.Join(order, ","), "import,reconcile_materialize,trajectory,evaluate"; got != want {
+	if got, want := strings.Join(order, ","), "import,reconcile_materialize,trajectory,evaluate,impact"; got != want {
 		t.Fatalf("poll order = %q, want %q", got, want)
 	}
 	if warnings != 1 {

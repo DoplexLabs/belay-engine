@@ -40,8 +40,8 @@ func TestMigration010FreshSchemaConstraintsAndIndexes(t *testing.T) {
 	var migrations int
 	if err := store.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM schema_migrations",
-	).Scan(&migrations); err != nil || migrations != 23 {
-		t.Fatalf("migration count/error = %d/%v, want 23", migrations, err)
+	).Scan(&migrations); err != nil || migrations != 24 {
+		t.Fatalf("migration count/error = %d/%v, want 24", migrations, err)
 	}
 
 	now := formatProjectionTime(time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC))
@@ -125,9 +125,9 @@ func TestMigration010UpgradesMigration009AndInstallsConditionalGuards(t *testing
 	).Scan(&triggerCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationsApplied != 23 || triggerCount != 107 {
+	if migrationsApplied != 24 || triggerCount != 110 {
 		t.Fatalf(
-			"upgraded migrations/triggers = %d/%d, want 23/107",
+			"upgraded migrations/triggers = %d/%d, want 24/110",
 			migrationsApplied,
 			triggerCount,
 		)
