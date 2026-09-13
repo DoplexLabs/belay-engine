@@ -1,6 +1,6 @@
 # Belay Local Developer Alpha
 
-Prepared version: `0.0.1-alpha.4`
+Prepared version: `0.0.1-alpha.5`
 
 This is an individual-developer alpha for private, accountless observation of
 local Codex and Claude Code activity. It is Local-only. Belay Teams is not included.
@@ -40,20 +40,20 @@ Use a clean checkout on an Apple Silicon Mac:
 
 ```bash
 make verify
-make preview ALPHA_VERSION=0.0.1-alpha.4 ALPHA_ARCH=arm64
+make preview ALPHA_VERSION=0.0.1-alpha.5 ALPHA_ARCH=arm64
 ```
 
 Or run the complete automated, non-publishing readiness path:
 
 ```bash
-make alpha-readiness ALPHA_VERSION=0.0.1-alpha.4
+make alpha-readiness ALPHA_VERSION=0.0.1-alpha.5
 ```
 
 Expected output:
 
 ```text
-dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
-dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
+dist/belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz
+dist/belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz.sha256
 ```
 
 The commands do not sign, notarize, tag, publish, release, deploy, or contact a
@@ -64,7 +64,7 @@ commit:
 
 ```bash
 scripts/build-developer-preview.sh \
-  --version 0.0.1-alpha.4 \
+  --version 0.0.1-alpha.5 \
   --arch arm64 \
   --numbat-source /absolute/path/to/pristine/numbat \
   --output-dir ./dist
@@ -99,14 +99,14 @@ Keep the archive and companion checksum together:
 ```bash
 cd /path/to/downloads
 shasum -a 256 -c \
-  belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
+  belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz.sha256
 ```
 
 From a source checkout, run the disposable smoke test:
 
 ```bash
 scripts/smoke-developer-preview.sh \
-  ./dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
+  ./dist/belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz
 ```
 
 The smoke test verifies archive paths, internal checksums, architecture, the
@@ -153,8 +153,8 @@ For a local validation artifact, use the manual extraction path below.
 Extract the package and keep both binaries together:
 
 ```bash
-tar -xzf belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
-cd belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64
+tar -xzf belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz
+cd belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64
 
 ./bin/belay quickstart
 ```

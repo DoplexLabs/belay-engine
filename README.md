@@ -13,7 +13,7 @@ separate product and is not included in this Local alpha.
 
 ## Belay Local Developer Alpha
 
-The prepared version is `0.0.1-alpha.4`. This founder-led external alpha is
+The prepared version is `0.0.1-alpha.5`. This founder-led external alpha is
 unsigned, unnotarized, and Apple Silicon-only. Publication remains gated on the
 full test suite, checksum verification, packaged smoke testing, and explicit
 human authorization. A later broadly advertised release remains gated on Apple
@@ -245,13 +245,13 @@ Silicon:
 
 ```bash
 make verify
-make preview ALPHA_VERSION=0.0.1-alpha.4 ALPHA_ARCH=arm64
+make preview ALPHA_VERSION=0.0.1-alpha.5 ALPHA_ARCH=arm64
 ```
 
 Run the complete non-publishing automated readiness path:
 
 ```bash
-make alpha-readiness ALPHA_VERSION=0.0.1-alpha.4
+make alpha-readiness ALPHA_VERSION=0.0.1-alpha.5
 ```
 
 That target verifies source and release-surface checks, builds the arm64
@@ -262,8 +262,8 @@ deploys, or modifies real Belay/harness state.
 The expected files are:
 
 ```text
-dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
-dist/belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
+dist/belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz
+dist/belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz.sha256
 ```
 
 No artifact is published merely by running these commands.
@@ -275,10 +275,10 @@ the directory containing both files:
 
 ```bash
 shasum -a 256 -c \
-  belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
+  belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz.sha256
 
-tar -xzf belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz
-cd belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64
+tar -xzf belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz
+cd belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64
 
 ./bin/belay quickstart
 ```

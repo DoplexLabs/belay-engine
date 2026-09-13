@@ -6,7 +6,7 @@ on:
       version:
         description: Developer Alpha version label
         required: true
-        default: 0.0.1-alpha.4
+        default: 0.0.1-alpha.5
         type: string
       publish:
         description: Publish the verified archive as an unsigned prerelease

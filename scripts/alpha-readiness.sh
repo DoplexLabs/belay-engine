@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly DEFAULT_VERSION="0.0.1-alpha.4"
+readonly DEFAULT_VERSION="0.0.1-alpha.5"
 
 usage() {
   cat <<'EOF'
@@ -11,7 +11,7 @@ usage: scripts/alpha-readiness.sh [options]
 Run non-publishing Apple Silicon Developer Alpha readiness checks.
 
 Options:
-  --version VERSION    Alpha version label (default: 0.0.1-alpha.4)
+  --version VERSION    Alpha version label (default: 0.0.1-alpha.5)
   --output-dir PATH    Artifact output directory (default: ./dist)
   -h, --help           Show this help
 

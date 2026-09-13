@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly DEFAULT_VERSION="0.0.1-alpha.4"
+readonly DEFAULT_VERSION="0.0.1-alpha.5"
 readonly REPOSITORY="DoplexLabs/belay-engine"
 
 die() {
@@ -17,7 +17,7 @@ usage: install.sh [options]
 Install or update Belay for the current macOS user.
 
 Options:
-  --version VERSION             Release version (default: 0.0.1-alpha.4)
+  --version VERSION             Release version (default: 0.0.1-alpha.5)
   --quickstart                  Start private Belay onboarding after install
   --allow-codex-mcp-add         Pass the explicit Codex MCP opt-in to quickstart
   --uninstall                   Remove the program, monitor hooks, and Belay MCP

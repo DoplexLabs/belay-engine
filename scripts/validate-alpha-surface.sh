@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly ALPHA_VERSION="0.0.1-alpha.4"
+readonly ALPHA_VERSION="0.0.1-alpha.5"
 readonly NUMBAT_COMMIT="f0778c09dc48281aa93a3887d05096c0a1f3f9f7"
 
 die() {

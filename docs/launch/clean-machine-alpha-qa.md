@@ -1,7 +1,7 @@
 # Belay Local Developer Alpha clean-machine QA
 
 This checklist is the manual release gate for
-`belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64`.
+`belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64`.
 
 Complete it on a fresh Apple Silicon macOS account with working Codex and Claude
 Code installations and representative local history. Do not use a founder's
@@ -82,7 +82,7 @@ Run from the download directory:
 
 ```bash
 shasum -a 256 -c \
-  belay-local-developer-alpha-v0.0.1-alpha.4-darwin-arm64.tar.gz.sha256
+  belay-local-developer-alpha-v0.0.1-alpha.5-darwin-arm64.tar.gz.sha256
 ```
 
 Pass criteria: exit status `0` and the exact archive reports `OK`.

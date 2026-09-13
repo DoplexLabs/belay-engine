@@ -1,6 +1,6 @@
 # Belay Local Developer Alpha
 
-Version: 0.0.1-alpha.4
+Version: 0.0.1-alpha.5
 License: MIT
 Platform: Apple Silicon macOS only
 Validated harnesses: Codex, Claude Code
