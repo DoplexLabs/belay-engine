@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +32,10 @@ const (
 	maxExperienceSemanticPromptAndSchema  = 512 << 10
 	maxExperienceSemanticOutputBytes      = 256 << 10
 	maxExperienceSemanticListItems        = 32
+)
+
+var experienceSemanticLocalPathPattern = regexp.MustCompile(
+	`/(?:Users|home|private|tmp|var/folders)/[^\s"'<>\\]+`,
 )
 
 type ExperienceSemanticProposalStore interface {
@@ -378,18 +384,27 @@ func prepareExperienceSemanticPrompt(
 					candidate.Evidence.Refs,
 				),
 				ObservedBehavior: clipSemanticText(
-					candidate.ObservedBehavior,
+					sanitizeExperienceSemanticPromptText(
+						candidate.ObservedBehavior,
+						candidate.Proposal.Scope.RepositoryPaths,
+					),
 					maxExperienceSemanticObservationBytes,
 				),
 				UserFeedback: clipSemanticText(
-					candidate.UserFeedback,
+					sanitizeExperienceSemanticPromptText(
+						candidate.UserFeedback,
+						candidate.Proposal.Scope.RepositoryPaths,
+					),
 					maxExperienceSemanticFeedbackBytes,
 				),
 				OutcomeIDs: boundedSortedStrings(
 					candidate.OutcomeRefs,
 					maxExperienceSemanticOutcomeIDs,
 				),
-				Excerpts: excerpts,
+				Excerpts: sanitizeExperienceSemanticPromptExcerpts(
+					excerpts,
+					candidate.Proposal.Scope.RepositoryPaths,
+				),
 			},
 		)
 		bounded = append(bounded, candidate)
@@ -507,6 +522,52 @@ func boundedExperienceSemanticExcerpts(
 		})
 	}
 	return result
+}
+
+func sanitizeExperienceSemanticPromptExcerpts(
+	values []experienceSemanticPromptExcerpt,
+	repositoryPaths []string,
+) []experienceSemanticPromptExcerpt {
+	result := append([]experienceSemanticPromptExcerpt(nil), values...)
+	for index := range result {
+		result[index].Text = sanitizeExperienceSemanticPromptText(
+			result[index].Text,
+			repositoryPaths,
+		)
+	}
+	return result
+}
+
+func sanitizeExperienceSemanticPromptText(
+	value string,
+	repositoryPaths []string,
+) string {
+	value = scrubTranscriptMetadata(value)
+	return experienceSemanticLocalPathPattern.ReplaceAllStringFunc(
+		value,
+		func(raw string) string {
+			trimmed := strings.TrimRight(raw, ".,;:)]}")
+			trailing := raw[len(trimmed):]
+			normalized := strings.ReplaceAll(trimmed, "\\", "/")
+			for _, repositoryPath := range repositoryPaths {
+				relative := strings.TrimPrefix(
+					strings.TrimSpace(
+						strings.ReplaceAll(repositoryPath, "\\", "/"),
+					),
+					"./",
+				)
+				if relative != "" &&
+					strings.HasSuffix(normalized, "/"+relative) {
+					return relative + trailing
+				}
+			}
+			base := path.Base(normalized)
+			if base != "" && base != "." && strings.Contains(base, ".") {
+				return base + trailing
+			}
+			return "LOCAL_PATH" + trailing
+		},
+	)
 }
 
 func evidenceSessionCount(refs []experience.EvidenceRef) int {
