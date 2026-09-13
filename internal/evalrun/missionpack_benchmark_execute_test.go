@@ -53,6 +53,7 @@ func TestExecuteMissionPackBenchmarkRunCapturesAndScores(t *testing.T) {
 		harness,
 		[]byte(strings.Join([]string{
 			"#!/bin/sh",
+			"if [ \"${1:-}\" = \"--version\" ]; then printf '%s\\n' 'fake-codex 1.0'; exit 0; fi",
 			"printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":120,\"cached_input_tokens\":20,\"cache_write_input_tokens\":0,\"output_tokens\":30}}'",
 			"printf '%s\\n' 'fake harness stderr' >&2",
 			"printf '%s\\n' 'implementation' > src/Implementation.kt",
@@ -89,6 +90,10 @@ func TestExecuteMissionPackBenchmarkRunCapturesAndScores(t *testing.T) {
 		result.RawEventsSHA256 == "" ||
 		result.WorkspaceDiffSHA256 == "" {
 		t.Fatalf("result = %+v", result)
+	}
+	if result.HarnessProvenance.Version != "fake-codex 1.0" ||
+		result.HarnessProvenance.ExecutableSHA256 == "" {
+		t.Fatalf("provenance = %+v", result.HarnessProvenance)
 	}
 	if result.Usage.InputTokens != 120 ||
 		result.Usage.CacheReadTokens != 20 ||
@@ -148,7 +153,7 @@ func TestExecuteMissionPackBenchmarkRunRecordsCapHitAsCountedFailure(
 	harness := filepath.Join(t.TempDir(), "fake-codex")
 	if err := os.WriteFile(
 		harness,
-		[]byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":120,\"output_tokens\":30}}'\n"),
+		[]byte("#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then printf '%s\\n' 'fake-codex 1.0'; exit 0; fi\nprintf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":120,\"output_tokens\":30}}'\n"),
 		0o700,
 	); err != nil {
 		t.Fatal(err)

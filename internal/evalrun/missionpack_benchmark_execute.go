@@ -25,32 +25,40 @@ import (
 const MissionPackBenchmarkExecutionSchemaVersion = "belay.missionpack-benchmark-execution.v1"
 
 type MissionPackBenchmarkExecution struct {
-	SchemaVersion       string                              `json:"schema_version"`
-	Entry               MissionPackBenchmarkScheduleEntry   `json:"entry"`
-	StartedAt           time.Time                           `json:"started_at"`
-	EndedAt             time.Time                           `json:"ended_at"`
-	ElapsedMS           int64                               `json:"elapsed_ms"`
-	HarnessExitCode     int                                 `json:"harness_exit_code"`
-	HarnessTimedOut     bool                                `json:"harness_timed_out"`
-	HarnessError        string                              `json:"harness_error,omitempty"`
-	RawEventsPath       string                              `json:"raw_events_path"`
-	RawEventsSHA256     string                              `json:"raw_events_sha256"`
-	StderrPath          string                              `json:"stderr_path"`
-	StderrSHA256        string                              `json:"stderr_sha256"`
-	WorkspaceDiffPath   string                              `json:"workspace_diff_path"`
-	WorkspaceDiffSHA256 string                              `json:"workspace_diff_sha256"`
-	WorkspaceStatusPath string                              `json:"workspace_status_path"`
-	ScorePath           string                              `json:"score_path"`
-	HiddenSuitePassed   bool                                `json:"hidden_suite_passed"`
-	AcceptedCompletion  bool                                `json:"accepted_completion"`
-	UnderCaps           bool                                `json:"under_caps"`
-	WallCapHit          bool                                `json:"wall_cap_hit"`
-	TokenCapHit         bool                                `json:"token_cap_hit"`
-	SpendCapHit         bool                                `json:"spend_cap_hit"`
-	Countable           bool                                `json:"countable"`
-	ExclusionReasons    []string                            `json:"exclusion_reasons,omitempty"`
-	Contamination       []MissionPackBenchmarkContamination `json:"contamination,omitempty"`
-	Usage               MissionPackBenchmarkUsage           `json:"usage"`
+	SchemaVersion       string                                `json:"schema_version"`
+	Entry               MissionPackBenchmarkScheduleEntry     `json:"entry"`
+	StartedAt           time.Time                             `json:"started_at"`
+	EndedAt             time.Time                             `json:"ended_at"`
+	ElapsedMS           int64                                 `json:"elapsed_ms"`
+	HarnessExitCode     int                                   `json:"harness_exit_code"`
+	HarnessTimedOut     bool                                  `json:"harness_timed_out"`
+	HarnessError        string                                `json:"harness_error,omitempty"`
+	RawEventsPath       string                                `json:"raw_events_path"`
+	RawEventsSHA256     string                                `json:"raw_events_sha256"`
+	StderrPath          string                                `json:"stderr_path"`
+	StderrSHA256        string                                `json:"stderr_sha256"`
+	WorkspaceDiffPath   string                                `json:"workspace_diff_path"`
+	WorkspaceDiffSHA256 string                                `json:"workspace_diff_sha256"`
+	WorkspaceStatusPath string                                `json:"workspace_status_path"`
+	ScorePath           string                                `json:"score_path"`
+	HiddenSuitePassed   bool                                  `json:"hidden_suite_passed"`
+	AcceptedCompletion  bool                                  `json:"accepted_completion"`
+	UnderCaps           bool                                  `json:"under_caps"`
+	WallCapHit          bool                                  `json:"wall_cap_hit"`
+	TokenCapHit         bool                                  `json:"token_cap_hit"`
+	SpendCapHit         bool                                  `json:"spend_cap_hit"`
+	Countable           bool                                  `json:"countable"`
+	ExclusionReasons    []string                              `json:"exclusion_reasons,omitempty"`
+	Contamination       []MissionPackBenchmarkContamination   `json:"contamination,omitempty"`
+	HarnessProvenance   MissionPackBenchmarkHarnessProvenance `json:"harness_provenance"`
+	Usage               MissionPackBenchmarkUsage             `json:"usage"`
+}
+
+type MissionPackBenchmarkHarnessProvenance struct {
+	RequestedExecutable string `json:"requested_executable"`
+	ResolvedPath        string `json:"resolved_path"`
+	ExecutableSHA256    string `json:"executable_sha256"`
+	Version             string `json:"version"`
 }
 
 type MissionPackBenchmarkContamination struct {
@@ -80,6 +88,13 @@ func ExecuteMissionPackBenchmarkRun(
 		)
 	}
 	if err := validateExecutableBenchmarkManifest(manifest); err != nil {
+		return MissionPackBenchmarkExecution{}, err
+	}
+	provenance, err := observeMissionPackBenchmarkHarnessProvenance(
+		ctx,
+		manifest,
+	)
+	if err != nil {
 		return MissionPackBenchmarkExecution{}, err
 	}
 
@@ -273,7 +288,68 @@ func ExecuteMissionPackBenchmarkRun(
 		Countable:           len(exclusionReasons) == 0,
 		ExclusionReasons:    exclusionReasons,
 		Contamination:       contamination,
+		HarnessProvenance:   provenance,
 		Usage:               usage,
+	}, nil
+}
+
+func observeMissionPackBenchmarkHarnessProvenance(
+	ctx context.Context,
+	manifest MissionPackBenchmarkRunManifest,
+) (MissionPackBenchmarkHarnessProvenance, error) {
+	requested := strings.TrimSpace(manifest.Command.Executable)
+	resolved, err := exec.LookPath(requested)
+	if err != nil {
+		return MissionPackBenchmarkHarnessProvenance{}, fmt.Errorf(
+			"resolve benchmark harness executable: %w",
+			err,
+		)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return MissionPackBenchmarkHarnessProvenance{}, fmt.Errorf(
+			"resolve benchmark harness path: %w",
+			err,
+		)
+	}
+	if target, evalErr := filepath.EvalSymlinks(resolved); evalErr == nil {
+		resolved = target
+	}
+	digest, err := sha256Path(resolved)
+	if err != nil {
+		return MissionPackBenchmarkHarnessProvenance{}, err
+	}
+	versionContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	versionCommand := exec.CommandContext(versionContext, resolved, "--version")
+	versionCommand.Dir = manifest.WorkspacePath
+	versionCommand.Env = benchmarkEnvironment(
+		os.Environ(),
+		manifest.Environment,
+		manifest.InheritedEnvironmentKeys,
+	)
+	versionOutput, err := versionCommand.CombinedOutput()
+	if err != nil {
+		return MissionPackBenchmarkHarnessProvenance{}, fmt.Errorf(
+			"read benchmark harness version: %w: %s",
+			err,
+			strings.TrimSpace(string(versionOutput)),
+		)
+	}
+	version := strings.TrimSpace(string(versionOutput))
+	if version == "" {
+		return MissionPackBenchmarkHarnessProvenance{}, errors.New(
+			"benchmark harness version is empty",
+		)
+	}
+	if len(version) > 512 {
+		version = version[:512]
+	}
+	return MissionPackBenchmarkHarnessProvenance{
+		RequestedExecutable: requested,
+		ResolvedPath:        resolved,
+		ExecutableSHA256:    digest,
+		Version:             version,
 	}, nil
 }
 
