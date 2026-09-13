@@ -26,6 +26,37 @@ func AnalyzeProject(
 	if err != nil {
 		return issueintel.Analysis{}, err
 	}
+	var issues []issueintel.Issue
+	var candidates []issueintel.CorrectionCandidate
+	var allObservations []observation
+	for _, scoped := range scopedProjects(project) {
+		observations, scopedCandidates, err := analyzePreparedProject(
+			ctx,
+			scoped,
+		)
+		if err != nil {
+			return issueintel.Analysis{}, err
+		}
+		allObservations = append(allObservations, observations...)
+		candidates = append(candidates, scopedCandidates...)
+		issues = append(issues, aggregateIssues(scoped, observations)...)
+	}
+	sortIssues(issues)
+	return issueintel.Analysis{
+		Issues:               issues,
+		CorrectionCandidates: candidates,
+		AttributedCost: attributedCost(
+			project,
+			observationCostSpans(allObservations),
+			observationTimeSpans(allObservations),
+		),
+	}, nil
+}
+
+func analyzePreparedProject(
+	ctx context.Context,
+	project preparedProject,
+) ([]observation, []issueintel.CorrectionCandidate, error) {
 	detectors := []func(context.Context, preparedProject) ([]observation, error){
 		detectRetryLoops,
 		detectRecurringErrors,
@@ -38,23 +69,20 @@ func AnalyzeProject(
 	var observations []observation
 	for _, detector := range detectors {
 		if err := ctx.Err(); err != nil {
-			return issueintel.Analysis{}, err
+			return nil, nil, err
 		}
 		values, err := detector(ctx, project)
 		if err != nil {
-			return issueintel.Analysis{}, err
+			return nil, nil, err
 		}
 		observations = append(observations, values...)
 	}
 	corrections, candidates, err := detectRepeatedCorrections(ctx, project)
 	if err != nil {
-		return issueintel.Analysis{}, err
+		return nil, nil, err
 	}
 	observations = append(observations, corrections...)
-	return issueintel.Analysis{
-		Issues:               aggregateIssues(project, observations),
-		CorrectionCandidates: candidates,
-	}, nil
+	return observations, candidates, nil
 }
 
 func prepareProject(
@@ -67,9 +95,10 @@ func prepareProject(
 		return preparedProject{}, errors.New("invalid transcript issue project")
 	}
 	result := preparedProject{
-		project: input.Project,
-		config:  input.Config,
-		now:     input.Now.UTC(),
+		project:       input.Project,
+		scopeIdentity: input.Project.Identity,
+		config:        input.Config,
+		now:           input.Now.UTC(),
 	}
 	totalTurns := 0
 	for index, session := range input.Sessions {
@@ -148,7 +177,12 @@ func aggregateIssues(
 		} else {
 			group.cost.LowerBound = true
 		}
+		group.costSpans = append(group.costSpans, value.costSpans...)
+		group.timeSpans = append(group.timeSpans, value.timeSpans...)
 		group.sessions[value.session.SessionKey] = value.session
+		for _, span := range value.costSpans {
+			group.sessions[span.session.SessionKey] = span.session
+		}
 		if value.firstSeen.Before(group.firstSeen) {
 			group.firstSeen = value.firstSeen
 		}
@@ -168,6 +202,14 @@ func aggregateIssues(
 		if len(group.excerpts) < 2 {
 			continue
 		}
+		if len(group.costSpans) > 0 {
+			group.cost = attributedCost(
+				project,
+				group.costSpans,
+				group.timeSpans,
+			)
+			group.usdKnown = group.cost.WastedUSD != nil
+		}
 		if !group.usdKnown {
 			group.cost.WastedUSD = nil
 		}
@@ -182,9 +224,13 @@ func aggregateIssues(
 			return sessions[i].SessionKey < sessions[j].SessionKey
 		})
 		result = append(result, issueintel.Issue{
-			IssueID:     issueID(project.project.Identity, group.detectorID, group.fingerprint),
+			IssueID: issueID(
+				effectiveScopeIdentity(project),
+				group.detectorID,
+				group.fingerprint,
+			),
 			DetectorID:  group.detectorID,
-			Fingerprint: group.fingerprint,
+			Fingerprint: scopedFingerprint(project, group.fingerprint),
 			Headline: headline(
 				group.detectorID,
 				group.subject,
@@ -202,6 +248,11 @@ func aggregateIssues(
 			SuggestedFix: group.fix,
 		})
 	}
+	sortIssues(result)
+	return result
+}
+
+func sortIssues(result []issueintel.Issue) {
 	sort.Slice(result, func(i, j int) bool {
 		leftUSD, rightUSD := result[i].Cost.WastedUSD, result[j].Cost.WastedUSD
 		if (leftUSD != nil) != (rightUSD != nil) {
@@ -218,7 +269,37 @@ func aggregateIssues(
 		}
 		return result[i].IssueID < result[j].IssueID
 	})
-	return result
+}
+
+func observationCostSpans(observations []observation) []costSpan {
+	var spans []costSpan
+	for _, value := range observations {
+		spans = append(spans, value.costSpans...)
+	}
+	return spans
+}
+
+func observationTimeSpans(observations []observation) []costSpan {
+	var spans []costSpan
+	for _, value := range observations {
+		spans = append(spans, value.timeSpans...)
+	}
+	return spans
+}
+
+func scopedFingerprint(project preparedProject, fingerprint string) string {
+	scope := effectiveScopeIdentity(project)
+	if scope == project.project.Identity {
+		return fingerprint
+	}
+	return scope + "\x00" + fingerprint
+}
+
+func effectiveScopeIdentity(project preparedProject) string {
+	if project.scopeIdentity != "" {
+		return project.scopeIdentity
+	}
+	return project.project.Identity
 }
 
 func issueID(project, detector, fingerprint string) string {

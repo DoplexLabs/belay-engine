@@ -335,7 +335,8 @@ func costIssueMutationTablesReady(
 			AND name IN (
 				'transcript_project_analysis_state',
 				'cost_issues',
-				'correction_candidates'
+				'correction_candidates',
+				'project_issue_cost_totals'
 			)`,
 		nil,
 	)
@@ -351,7 +352,7 @@ func costIssueMutationTablesReady(
 	if !ok {
 		return false, errors.New("inspect local cost issue mutation schema")
 	}
-	return count == 3, nil
+	return count == 4, nil
 }
 
 func insightMutationTablesReady(
@@ -787,6 +788,36 @@ const costIssueMutationTriggerSQL = `
 	)
 	BEGIN
 		SELECT RAISE(ABORT, 'correction candidate deletion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_project_issue_cost_totals_insert
+	BEFORE INSERT ON main.project_issue_cost_totals
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'project issue cost insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_project_issue_cost_totals_update
+	BEFORE UPDATE ON main.project_issue_cost_totals
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'cost_issue_analysis'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'project issue cost mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_project_issue_cost_totals_delete
+	BEFORE DELETE ON main.project_issue_cost_totals
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('cost_issue_analysis', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'project issue cost deletion is not authorized');
 	END;
 
 	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_transcript_project_state_insert

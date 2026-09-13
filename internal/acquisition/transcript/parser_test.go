@@ -178,7 +178,7 @@ func TestParseCodexUsesDeltaUsageAndSuppressesDuplicateRepresentations(t *testin
 	for _, turn := range result.Turns {
 		if turn.InputTokens != nil {
 			billed++
-			if *turn.InputTokens != 100 ||
+			if *turn.InputTokens != 70 ||
 				turn.OutputTokens == nil || *turn.OutputTokens != 20 ||
 				turn.CacheReadTokens == nil || *turn.CacheReadTokens != 25 ||
 				turn.CacheWriteTokens == nil || *turn.CacheWriteTokens != 5 {
@@ -249,7 +249,7 @@ func TestParseCodexTokenCountFallbackUsesLastDeltaOnly(t *testing.T) {
 	}
 	if len(result.Turns) != 2 ||
 		billed == nil ||
-		*billed.InputTokens != 7 ||
+		*billed.InputTokens != 4 ||
 		billed.CostUSD != nil {
 		t.Fatalf("fallback turn = %+v", result.Turns)
 	}
@@ -407,7 +407,7 @@ func TestCodexLiveUsageWaitsForExactDeltaAcrossPolls(t *testing.T) {
 	}
 	if len(exact.Turns) != 1 ||
 		exact.Turns[0].InputTokens == nil ||
-		*exact.Turns[0].InputTokens != 100 ||
+		*exact.Turns[0].InputTokens != 75 ||
 		len(exact.State.PendingCodexUsage) != 0 {
 		t.Fatalf("exact live usage = %+v", exact)
 	}

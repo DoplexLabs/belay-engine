@@ -467,7 +467,10 @@
     missionPackMetadata: document.querySelector("#mission-pack-metadata"),
     missionPackSections: document.querySelector("#mission-pack-sections"),
     missionPackSize: document.querySelector("#mission-pack-size"),
-    missionPackCopy: document.querySelector("#mission-pack-copy"),
+    missionPackCopyClaude: document.querySelector(
+      "#mission-pack-copy-claude",
+    ),
+    missionPackCopyCodex: document.querySelector("#mission-pack-copy-codex"),
     missionPackShowEvidence: document.querySelector(
       "#mission-pack-show-evidence",
     ),
@@ -480,8 +483,11 @@
     ),
     reportEvidenceClose: document.querySelector("#report-evidence-close"),
     reportEvidenceDone: document.querySelector("#report-evidence-done"),
-    reportEvidenceFixCommand: document.querySelector(
-      "#report-evidence-fix-command",
+    reportEvidenceCopyClaude: document.querySelector(
+      "#report-evidence-copy-claude",
+    ),
+    reportEvidenceCopyCodex: document.querySelector(
+      "#report-evidence-copy-codex",
     ),
     reportEvidenceExcerpts: document.querySelector(
       "#report-evidence-excerpts",
@@ -1524,7 +1530,7 @@
     state.activeModal = "mission-pack";
     state.missionPackIssue = issue;
     state.missionPack = null;
-    elements.missionPackTitle.textContent = "Mission Pack";
+    elements.missionPackTitle.textContent = "Agent guidance";
     resetMissionPackDrawer();
     openModalLayer(
       elements.missionPackModalLayer,
@@ -1542,7 +1548,8 @@
     elements.missionPackMetadata.replaceChildren();
     elements.missionPackSections.replaceChildren();
     elements.missionPackSize.textContent = "";
-    elements.missionPackCopy.disabled = true;
+    elements.missionPackCopyClaude.disabled = true;
+    elements.missionPackCopyCodex.disabled = true;
     elements.missionPackShowEvidence.disabled = !readText(
       state.missionPackIssue && state.missionPackIssue.issue_id,
     );
@@ -1637,10 +1644,11 @@
     elements.missionPackLoading.hidden = true;
     elements.missionPackError.hidden = true;
     elements.missionPackContent.hidden = false;
-    elements.missionPackCopy.disabled = isEmpty;
+    elements.missionPackCopyClaude.disabled = isEmpty;
+    elements.missionPackCopyCodex.disabled = isEmpty;
     const fragment = document.createDocumentFragment();
     if (isEmpty) {
-      elements.missionPackTitle.textContent = "Mission Pack";
+      elements.missionPackTitle.textContent = "Agent guidance";
       elements.missionPackMetadata.replaceChildren();
       fragment.append(
         createElement(
@@ -1650,8 +1658,10 @@
         ),
       );
     } else {
-      elements.missionPackTitle.textContent =
-        readText(pack.project.label) || "Mission Pack";
+      const projectLabel = readText(pack.project.label);
+      elements.missionPackTitle.textContent = projectLabel
+        ? `Guidance for ${projectLabel}`
+        : "Agent guidance";
       renderMissionPackMetadata(pack);
       if (pack.known_traps.length) {
         appendMissionPackGuidanceSection(
@@ -1763,7 +1773,7 @@
         createElement(
           "span",
           "mission-pack-badge",
-          `Target: ${readText(value.target_file)}`,
+          `Target: ${compactDisplayPath(value.target_file)}`,
         ),
       );
     }
@@ -1842,7 +1852,8 @@
     }
     elements.reportEvidenceExcerpts.replaceChildren(excerptFragment);
     renderReportEvidenceFix(issue && issue.suggested_fix);
-    elements.reportEvidenceFixCommand.disabled = !issueID;
+    elements.reportEvidenceCopyClaude.disabled = !issueID;
+    elements.reportEvidenceCopyCodex.disabled = !issueID;
     openModalLayer(
       elements.reportEvidenceModalLayer,
       elements.reportEvidenceDialog,
@@ -1994,7 +2005,7 @@
           : waste && waste.total_incomplete === true
             ? "Attributed waste; total spend is incomplete, so no percentage is shown."
             : waste && waste.overlap_capped === true
-              ? "Attributed costs overlap total spend, so no percentage is shown."
+              ? "Attributed spend exceeds currently known priced spend, so no percentage is shown."
               : "Attributed to detected issues.",
       ),
     );
@@ -2615,21 +2626,22 @@
       resetMissionPackDrawer();
       void loadMissionPack(issueID);
     });
-    elements.missionPackCopy.addEventListener("click", () => {
+    elements.missionPackCopyClaude.addEventListener("click", () => {
       const issueID = readText(
         state.missionPackIssue && state.missionPackIssue.issue_id,
       );
-      const claudeCommand = issueID
-        ? `/belay start --issue ${issueID}`
-        : "";
-      const codexCommand = issueID
-        ? `$belay start --issue ${issueID}`
-        : "";
       void copyText(
-        issueID
-          ? `Claude Code: ${claudeCommand}\nCodex: ${codexCommand}`
-          : "",
-        elements.missionPackCopy,
+        agentIssueCommand("claude", issueID),
+        elements.missionPackCopyClaude,
+      );
+    });
+    elements.missionPackCopyCodex.addEventListener("click", () => {
+      const issueID = readText(
+        state.missionPackIssue && state.missionPackIssue.issue_id,
+      );
+      void copyText(
+        agentIssueCommand("codex", issueID),
+        elements.missionPackCopyCodex,
       );
     });
     elements.missionPackShowEvidence.addEventListener("click", () => {
@@ -2648,13 +2660,18 @@
     elements.reportEvidenceDone.addEventListener("click", () => {
       closeReportEvidenceDrawer(true);
     });
-    elements.reportEvidenceFixCommand.addEventListener("click", () => {
+    elements.reportEvidenceCopyClaude.addEventListener("click", () => {
       const issueID = state.reportEvidenceIssueID;
       void copyText(
-        issueID
-          ? `Claude Code: /belay ${issueID}\nCodex: $belay ${issueID}`
-          : "",
-        elements.reportEvidenceFixCommand,
+        agentIssueCommand("claude", issueID),
+        elements.reportEvidenceCopyClaude,
+      );
+    });
+    elements.reportEvidenceCopyCodex.addEventListener("click", () => {
+      const issueID = state.reportEvidenceIssueID;
+      void copyText(
+        agentIssueCommand("codex", issueID),
+        elements.reportEvidenceCopyCodex,
       );
     });
     elements.reportEvidenceModalLayer.addEventListener(
@@ -3222,7 +3239,7 @@
     const minutes = Math.max(0, toFiniteNumber(cost && cost.wasted_minutes));
     const formatted =
       minutes >= 10 ? formatNumber(Math.round(minutes)) : minutes.toFixed(1);
-    return `${cost && cost.lower_bound ? "At least " : ""}${formatted} min`;
+    return `${cost && cost.lower_bound ? "At least " : ""}${formatted} active min`;
   }
 
   function formatIssueTokens(cost) {
@@ -3233,7 +3250,9 @@
   function projectDisplayName(project) {
     const identity = readText(project && project.identity);
     const path = readText(project && project.path);
-    const candidate = identity || path;
+    const localIdentity = /^(?:\/|[A-Za-z]:[\\/])/.test(identity);
+    const candidate =
+      localIdentity && path && path !== identity ? path : identity || path;
     if (!candidate) return "Project unavailable";
     const parts = candidate.split(/[/:\\]/).filter(Boolean);
     return (parts[parts.length - 1] || candidate).replace(/\.git$/i, "");
@@ -10235,6 +10254,14 @@
     } catch {
       button.title = "Clipboard access was unavailable.";
     }
+  }
+
+  function agentIssueCommand(agent, issueID) {
+    const selector = readText(issueID);
+    if (!selector) return "";
+    return agent === "codex"
+      ? `$belay start --issue ${selector}`
+      : `/belay start --issue ${selector}`;
   }
 
   function resolveToken(bootstrapConfig) {

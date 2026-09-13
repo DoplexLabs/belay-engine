@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,6 +27,8 @@ const (
 	maxRepairCommandBytes      = 16 * 1024
 	maxRepairCommandTokens     = 64
 	maxRepairCommandTokenBytes = 1024
+	maxErrorLineRunes          = 2048
+	maxErrorSignatureRunes     = 512
 )
 
 var (
@@ -36,6 +39,7 @@ var (
 	absolutePathPattern     = regexp.MustCompile(`(?:[A-Za-z]:\\|/)[^\s"'` + "`" + `:]+`)
 	spacePattern            = regexp.MustCompile(`\s+`)
 	errorMarkerPattern      = regexp.MustCompile(`(?i)\b(error|failed|failure|fatal|panic|exception|denied|not found|timed out)\b`)
+	genericExitPattern      = regexp.MustCompile(`(?i)^(?:process |command )?(?:exited|failed)(?: with)?(?: exit)? code \d+\b|^exit code \d+\b`)
 	completionPattern       = regexp.MustCompile(`(?i)\b(done|complete|completed|implemented|finished|tests? pass(?:ed)?)\b`)
 	correctionPattern       = regexp.MustCompile(`(?i)\b(no|don't|do not|stop|wrong|not that|i said|again|undo|revert)\b|(?i)\buse\b.+\bnot\b`)
 	strongCorrectionPattern = regexp.MustCompile(
@@ -641,12 +645,24 @@ func turnFailed(turn transcript.Turn) bool {
 	if turn.Payload.ExitCode != nil && *turn.Payload.ExitCode != 0 {
 		return true
 	}
+	if failed, structured, _ := structuredResultFailure(
+		turn.Payload.ToolResult,
+	); structured {
+		return failed
+	}
 	return errorMarkerPattern.MatchString(firstMeaningfulLine(turn.Payload.ToolResult))
 }
 
 func normalizedErrorSignature(turn transcript.Turn) string {
-	line := firstMeaningfulLine(turn.Payload.ToolResult)
-	if line == "" || !errorMarkerPattern.MatchString(line) {
+	line := firstSpecificErrorLine(turn.Payload.ToolResult)
+	failed, _, structuredText := structuredResultFailure(
+		turn.Payload.ToolResult,
+	)
+	if failed && structuredText != "" {
+		line = structuredText
+	}
+	if line == "" || genericExitPattern.MatchString(line) ||
+		!errorMarkerPattern.MatchString(line) {
 		return ""
 	}
 	line = strings.ToLower(line)
@@ -655,17 +671,82 @@ func normalizedErrorSignature(turn transcript.Turn) string {
 	line = hashPattern.ReplaceAllString(line, "<hash>")
 	line = numberPattern.ReplaceAllString(line, "<n>")
 	line = spacePattern.ReplaceAllString(line, " ")
-	return strings.TrimSpace(line)
+	return truncateRunes(strings.TrimSpace(line), maxErrorSignatureRunes)
+}
+
+func firstSpecificErrorLine(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" ||
+			genericExitPattern.MatchString(line) ||
+			strings.EqualFold(line, "final output:") {
+			continue
+		}
+		if errorMarkerPattern.MatchString(line) {
+			return truncateRunes(line, maxErrorLineRunes)
+		}
+	}
+	return ""
 }
 
 func firstMeaningfulLine(value string) string {
 	for _, line := range strings.Split(value, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			return line
+			return truncateRunes(line, maxErrorLineRunes)
 		}
 	}
 	return ""
+}
+
+func structuredResultFailure(value string) (bool, bool, string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" ||
+		(!strings.HasPrefix(trimmed, "{") &&
+			!strings.HasPrefix(trimmed, "[")) {
+		return false, false, ""
+	}
+	var decoded any
+	if json.Unmarshal([]byte(trimmed), &decoded) != nil {
+		return false, false, ""
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return false, true, ""
+	}
+	if raw, exists := object["error"]; exists && raw != nil {
+		text := strings.TrimSpace(fmt.Sprint(raw))
+		if text != "" && text != "<nil>" {
+			return true, true, text
+		}
+	}
+	if raw, ok := object["is_error"].(bool); ok {
+		return raw, true, ""
+	}
+	if raw, ok := object["success"].(bool); ok {
+		return !raw, true, ""
+	}
+	if raw, ok := object["exit_code"].(float64); ok {
+		return raw != 0, true, ""
+	}
+	if raw, ok := object["status"].(string); ok {
+		status := strings.ToLower(strings.TrimSpace(raw))
+		switch status {
+		case "error", "failed", "failure", "fatal":
+			return true, true, raw
+		case "ok", "success", "succeeded", "complete", "completed":
+			return false, true, ""
+		}
+	}
+	return false, true, ""
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:limit]))
 }
 
 func isCompletionClaim(turn transcript.Turn) bool {

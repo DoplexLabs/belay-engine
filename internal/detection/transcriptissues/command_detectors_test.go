@@ -82,6 +82,33 @@ func TestCommandDetectorFixtures(t *testing.T) {
 	}
 }
 
+func TestMatchingToolResultRejectsNearbyDifferentTool(t *testing.T) {
+	turns := []transcript.Turn{
+		{
+			TurnID:   "call",
+			Role:     transcript.RoleToolCall,
+			ToolName: "exec_command",
+			Payload: transcript.Payload{
+				ToolCallID: "call-1",
+			},
+		},
+		{
+			TurnID:   "wrong",
+			Role:     transcript.RoleToolResult,
+			ToolName: "apply_patch",
+		},
+		{
+			TurnID:   "right",
+			Role:     transcript.RoleToolResult,
+			ToolName: "exec_command",
+		},
+	}
+	index, result, ok := matchingToolResult(turns, 0, turns[0])
+	if !ok || index != 2 || result.TurnID != "right" {
+		t.Fatalf("matched result = %d/%+v/%t", index, result, ok)
+	}
+}
+
 func commandFixtureInput(
 	t *testing.T,
 	sessions []struct {

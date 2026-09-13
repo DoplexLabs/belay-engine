@@ -77,7 +77,7 @@
         }
       ],
       "want_observations": 1,
-      "want_wasted_tokens": 600,
+      "want_wasted_tokens": 300,
       "want_excerpt": "No, this still fails when the queue is empty.",
       "want_min_excerpts": 4
     },
@@ -125,6 +125,57 @@
               "cost_usd": 0.1,
               "payload": {
                 "text": "Implementation complete."
+              }
+            }
+          ]
+        }
+      ],
+      "want_observations": 0,
+      "want_wasted_tokens": 0,
+      "want_min_excerpts": 0
+    },
+    {
+      "name": "completion for a later non-code task does not attach to a stale edit",
+      "sessions": [
+        {
+          "metadata": {
+            "session_key": "done-stale-edit",
+            "agent": "codex"
+          },
+          "turns": [
+            {
+              "occurred_at": "2026-09-04T11:00:00Z",
+              "role": "user",
+              "payload": {
+                "text": "Update the worker."
+              }
+            },
+            {
+              "occurred_at": "2026-09-04T11:01:00Z",
+              "role": "tool_call",
+              "tool_name": "apply_patch",
+              "payload": {
+                "tool_input": {
+                  "file_path": "internal/worker.go",
+                  "patch": "*** Update File: internal/worker.go\n@@\n"
+                }
+              }
+            },
+            {
+              "occurred_at": "2026-09-04T11:02:00Z",
+              "role": "user",
+              "payload": {
+                "text": "Now create the tracking tickets."
+              }
+            },
+            {
+              "occurred_at": "2026-09-04T11:03:00Z",
+              "role": "assistant",
+              "input_tokens": 100,
+              "output_tokens": 20,
+              "cost_usd": 0.12,
+              "payload": {
+                "text": "Done — all tracking tickets were created."
               }
             }
           ]

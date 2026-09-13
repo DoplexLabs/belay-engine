@@ -22,23 +22,67 @@ const reportSessionCTE = `
 		FROM events
 		GROUP BY session_key
 	),
-	report_sessions AS (
+	turn_usage AS (
 		SELECT
 			session_key,
-			agent,
-			COALESCE(ended_at, started_at, updated_at) AS activity_at,
-			wall_duration_ms,
-			total_tokens,
-			total_cost_usd
-		FROM transcript_sessions
+			SUM(cost_usd) AS known_cost_usd,
+			COALESCE(SUM(
+				CASE
+					WHEN cost_usd IS NULL
+						AND (
+							COALESCE(input_tokens, 0) > 0
+							OR COALESCE(output_tokens, 0) > 0
+							OR COALESCE(cache_read_tokens, 0) > 0
+							OR COALESCE(cache_write_tokens, 0) > 0
+						)
+					THEN 1
+					ELSE 0
+				END
+			), 0) AS unpriced_turns
+		FROM transcript_turns
+		GROUP BY session_key
+	),
+	report_sessions AS (
+		SELECT
+			session.session_key,
+			session.agent,
+			COALESCE(
+				session.ended_at,
+				session.started_at,
+				session.updated_at
+			) AS activity_at,
+			session.wall_duration_ms,
+			CASE WHEN session.coverage = 'partial' THEN 1 ELSE 0 END
+				AS wall_duration_lower_bound,
+			session.total_tokens,
+			CASE
+				WHEN session.total_tokens IS NULL
+					OR session.coverage = 'partial'
+				THEN 1
+				ELSE 0
+			END AS tokens_lower_bound,
+			usage.known_cost_usd AS total_cost_usd,
+			CASE
+				WHEN usage.known_cost_usd IS NULL
+					OR usage.unpriced_turns > 0
+					OR session.coverage = 'partial'
+				THEN 1
+				ELSE 0
+			END AS cost_lower_bound
+		FROM transcript_sessions session
+		LEFT JOIN turn_usage usage
+			ON usage.session_key = session.session_key
 		UNION ALL
 		SELECT
 			canonical.session_key,
 			canonical.agent,
 			COALESCE(canonical.ended_at, canonical.started_at) AS activity_at,
 			NULL AS wall_duration_ms,
+			1 AS wall_duration_lower_bound,
 			NULL AS total_tokens,
-			NULL AS total_cost_usd
+			1 AS tokens_lower_bound,
+			NULL AS total_cost_usd,
+			1 AS cost_lower_bound
 		FROM canonical_sessions canonical
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -57,27 +101,27 @@ func (s *Store) ReadUsageSnapshot(
 		},
 		Weeks: make([]issueintel.UsageWeek, 0),
 	}
-	var durationKnown, tokenKnown, costKnown int
+	var durationLowerBound, tokenLowerBound, costLowerBound int
 	var firstValue, lastValue sql.NullString
 	err := s.db.QueryRowContext(ctx, reportSessionCTE+`
 		SELECT COUNT(*),
 			COALESCE(SUM(wall_duration_ms), 0),
-			COUNT(wall_duration_ms),
+			COALESCE(SUM(wall_duration_lower_bound), 0),
 			COALESCE(SUM(total_tokens), 0),
-			COUNT(total_tokens),
+			COALESCE(SUM(tokens_lower_bound), 0),
 			COALESCE(SUM(total_cost_usd), 0),
-			COUNT(total_cost_usd),
+			COALESCE(SUM(cost_lower_bound), 0),
 			MIN(activity_at),
 			MAX(activity_at)
 		FROM report_sessions`,
 	).Scan(
 		&result.Totals.SessionCount,
 		&result.Totals.WallDurationMS,
-		&durationKnown,
+		&durationLowerBound,
 		&result.Totals.TotalTokens,
-		&tokenKnown,
+		&tokenLowerBound,
 		&result.Totals.TotalCostUSD,
-		&costKnown,
+		&costLowerBound,
 		&firstValue,
 		&lastValue,
 	)
@@ -86,12 +130,9 @@ func (s *Store) ReadUsageSnapshot(
 			"read report usage totals",
 		)
 	}
-	result.Totals.WallDurationLowerBound =
-		durationKnown < result.Totals.SessionCount
-	result.Totals.TokensLowerBound =
-		tokenKnown < result.Totals.SessionCount
-	result.Totals.CostLowerBound =
-		costKnown < result.Totals.SessionCount
+	result.Totals.WallDurationLowerBound = durationLowerBound > 0
+	result.Totals.TokensLowerBound = tokenLowerBound > 0
+	result.Totals.CostLowerBound = costLowerBound > 0
 	if firstValue.Valid {
 		value, err := parseProjectionTime(firstValue.String)
 		if err != nil {
@@ -151,11 +192,11 @@ func (s *Store) ReadUsageSnapshot(
 			) AS week_start,
 			COUNT(*),
 			COALESCE(SUM(wall_duration_ms), 0),
-			COUNT(wall_duration_ms),
+			COALESCE(SUM(wall_duration_lower_bound), 0),
 			COALESCE(SUM(total_tokens), 0),
-			COUNT(total_tokens),
+			COALESCE(SUM(tokens_lower_bound), 0),
 			COALESCE(SUM(total_cost_usd), 0),
-			COUNT(total_cost_usd)
+			COALESCE(SUM(cost_lower_bound), 0)
 		FROM report_sessions
 		WHERE activity_at >= ? AND activity_at < ?
 		GROUP BY week_start
@@ -175,11 +216,11 @@ func (s *Store) ReadUsageSnapshot(
 			&weekStart,
 			&week.SessionCount,
 			&week.WallDurationMS,
-			&durationKnown,
+			&durationLowerBound,
 			&week.TotalTokens,
-			&tokenKnown,
+			&tokenLowerBound,
 			&week.TotalCostUSD,
-			&costKnown,
+			&costLowerBound,
 		); err != nil {
 			rows.Close()
 			return issueintel.UsageSnapshot{}, errors.New(
@@ -193,9 +234,9 @@ func (s *Store) ReadUsageSnapshot(
 				"parse report usage week",
 			)
 		}
-		week.WallDurationLowerBound = durationKnown < week.SessionCount
-		week.TokensLowerBound = tokenKnown < week.SessionCount
-		week.CostLowerBound = costKnown < week.SessionCount
+		week.WallDurationLowerBound = durationLowerBound > 0
+		week.TokensLowerBound = tokenLowerBound > 0
+		week.CostLowerBound = costLowerBound > 0
 		result.Weeks = append(result.Weeks, week)
 	}
 	if err := rows.Close(); err != nil {
@@ -253,15 +294,15 @@ func (s *Store) ReadCostIssueTotals(
 	var lowerBoundCount int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(SUM(wasted_usd), 0),
+			COALESCE(SUM(attributed_usd), 0),
 			COALESCE(SUM(
 				CASE
-					WHEN wasted_usd_known = 0 OR lower_bound = 1 THEN 1
+					WHEN attributed_usd_known = 0 OR lower_bound = 1 THEN 1
 					ELSE 0
 				END
 			), 0),
-			COUNT(*)
-		FROM cost_issues`,
+			(SELECT COUNT(*) FROM cost_issues)
+		FROM project_issue_cost_totals`,
 	).Scan(
 		&result.AttributedUSD,
 		&lowerBoundCount,

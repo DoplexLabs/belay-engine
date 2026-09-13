@@ -662,9 +662,13 @@ func recomputeTranscriptSessionTx(
 			return errors.New("invalid transcript session duration")
 		}
 	}
-	if inputTokens.Valid || outputTokens.Valid {
+	if inputTokens.Valid || outputTokens.Valid ||
+		cacheReadTokens.Valid || cacheWriteTokens.Valid {
 		totalTokens.Valid = true
-		totalTokens.Int64 = inputTokens.Int64 + outputTokens.Int64
+		totalTokens.Int64 = inputTokens.Int64 +
+			outputTokens.Int64 +
+			cacheReadTokens.Int64 +
+			cacheWriteTokens.Int64
 	}
 	if unpricedBillableTurns > 0 {
 		costUSD = sql.NullFloat64{}

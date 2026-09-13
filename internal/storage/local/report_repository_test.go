@@ -125,3 +125,64 @@ func TestReadCostIssueTotalsReturnsEmptyAggregate(t *testing.T) {
 		t.Fatalf("issue cost totals = %+v", totals)
 	}
 }
+
+func TestUsageSnapshotKeepsKnownCostWhenSessionAlsoHasUnpricedUsage(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	store := openStorageTestStore(t)
+	store.clock = func() time.Time {
+		return time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	}
+	session := transcript.Session{
+		SessionKey:      "ses_report_mixed_price",
+		Agent:           "codex",
+		NativeSessionID: "mixed-price",
+		ProjectPath:     "/private/report",
+		ProjectIdentity: "project-report",
+		Coverage:        transcript.CoverageComplete,
+	}
+	start := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	tokens := int64(100)
+	knownCost := 1.25
+	turns := []transcript.Turn{
+		{
+			TurnID:          "turn_report_priced",
+			SourceRecordKey: "report:priced",
+			SessionKey:      session.SessionKey,
+			TurnIndex:       0,
+			OccurredAt:      start,
+			Role:            transcript.RoleAssistant,
+			InputTokens:     &tokens,
+			CostUSD:         &knownCost,
+			Payload: transcript.Payload{
+				SourceFileID:  "source-report",
+				ParserVersion: "test",
+			},
+		},
+		{
+			TurnID:          "turn_report_unpriced",
+			SourceRecordKey: "report:unpriced",
+			SessionKey:      session.SessionKey,
+			TurnIndex:       1,
+			OccurredAt:      start.Add(time.Minute),
+			Role:            transcript.RoleAssistant,
+			InputTokens:     &tokens,
+			Payload: transcript.Payload{
+				SourceFileID:  "source-report",
+				ParserVersion: "test",
+			},
+		},
+	}
+	if _, err := store.AppendTranscriptBatch(ctx, session, turns); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.ReadUsageSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Totals.TotalCostUSD != knownCost ||
+		!snapshot.Totals.CostLowerBound {
+		t.Fatalf("mixed-price totals = %+v", snapshot.Totals)
+	}
+}

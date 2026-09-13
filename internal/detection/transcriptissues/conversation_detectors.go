@@ -86,10 +86,13 @@ func detectRepeatedCorrections(
 				fingerprint: conversationCorrectionFingerprint(text),
 				subject:     conversationCorrectionSubject(text),
 				cost:        windowCost(session.turns, start, turnIndex),
-				session:     sessionRef(session),
-				firstSeen:   first,
-				lastSeen:    last,
-				occurredAt:  conversationOccurredAt(project, session, turnIndex),
+				costSpans: []costSpan{
+					windowSpan(session, start, turnIndex),
+				},
+				session:    sessionRef(session),
+				firstSeen:  first,
+				lastSeen:   last,
+				occurredAt: conversationOccurredAt(project, session, turnIndex),
 				excerpts: conversationExcerpts(
 					session.turns,
 					turnIndex-1,
@@ -122,17 +125,23 @@ func detectDoneWithoutVerification(
 				return nil, err
 			}
 		}
-		lastEdit := conversationLastEdit(session.turns)
-		if lastEdit < 0 ||
-			conversationHasVerificationAfter(
-				session.turns,
-				lastEdit,
-				project.config,
-			) {
-			continue
-		}
 		for _, claimIndex := range conversationCompletionClaims(session.turns) {
-			if claimIndex <= lastEdit {
+			phaseStart := conversationTaskPhaseStart(
+				session.turns,
+				claimIndex,
+			)
+			lastEdit := conversationLastEditBetween(
+				session.turns,
+				phaseStart,
+				claimIndex,
+			)
+			if lastEdit < 0 ||
+				conversationHasVerificationBetween(
+					session.turns,
+					lastEdit+1,
+					claimIndex,
+					project.config,
+				) {
 				continue
 			}
 			first, last := conversationWindowBounds(
@@ -160,11 +169,14 @@ func detectDoneWithoutVerification(
 					fingerprint: "completion-claim-without-verification",
 					subject:     "completion",
 					cost:        windowCost(session.turns, lastEdit, claimIndex),
-					session:     sessionRef(session),
-					firstSeen:   first,
-					lastSeen:    last,
-					occurredAt:  conversationOccurredAt(project, session, claimIndex),
-					excerpts:    conversationExcerpts(session.turns, indexes...),
+					costSpans: []costSpan{
+						windowSpan(session, lastEdit, claimIndex),
+					},
+					session:    sessionRef(session),
+					firstSeen:  first,
+					lastSeen:   last,
+					occurredAt: conversationOccurredAt(project, session, claimIndex),
+					excerpts:   conversationExcerpts(session.turns, indexes...),
 					fix: issueintel.SuggestedFix{
 						Kind:       "workflow",
 						TargetFile: instructionTarget(project),
@@ -200,10 +212,6 @@ func detectDoneWithoutVerification(
 		if target < 0 {
 			continue
 		}
-		detected[target].observation.cost = mergeCost(
-			detected[target].observation.cost,
-			windowCost(session.turns, 0, phaseEnd),
-		)
 		detected[target].observation.excerpts = conversationMergeExcerpts(
 			detected[target].observation.excerpts,
 			conversationExcerpts(
@@ -318,9 +326,12 @@ func detectColdStartCost(
 			fingerprint: "project-cold-start",
 			subject:     "project startup",
 			cost:        start.cost,
-			session:     sessionRef(start.session),
-			firstSeen:   first,
-			lastSeen:    last,
+			costSpans: []costSpan{
+				windowSpan(start.session, 0, start.prefixEnd),
+			},
+			session:   sessionRef(start.session),
+			firstSeen: first,
+			lastSeen:  last,
 			occurredAt: conversationOccurredAt(
 				project,
 				start.session,
@@ -352,6 +363,7 @@ func detectCompactionBeforeCompletion(
 				return nil, err
 			}
 		}
+		var qualifying []int
 		for turnIndex, turn := range session.turns {
 			if turnIndex&255 == 0 {
 				if err := ctx.Err(); err != nil {
@@ -366,6 +378,9 @@ func detectCompactionBeforeCompletion(
 				) {
 				continue
 			}
+			qualifying = append(qualifying, turnIndex)
+		}
+		for qualifyingIndex, turnIndex := range qualifying {
 			end := len(session.turns) - 1
 			first, last := conversationWindowBounds(
 				project,
@@ -382,11 +397,20 @@ func detectCompactionBeforeCompletion(
 				indexes = append(indexes, verification)
 			}
 			indexes = append(indexes, end)
+			cost := issueintel.Cost{}
+			var spans []costSpan
+			if qualifyingIndex == len(qualifying)-1 {
+				cost = windowCost(session.turns, turnIndex, end)
+				spans = []costSpan{
+					windowSpan(session, turnIndex, end),
+				}
+			}
 			result = append(result, observation{
 				detectorID:  issueintel.DetectorCompactionBeforeCompletion,
 				fingerprint: "compaction-without-successful-verification",
 				subject:     "context compaction",
-				cost:        windowCost(session.turns, turnIndex, end),
+				cost:        cost,
+				costSpans:   spans,
 				session:     sessionRef(session),
 				firstSeen:   first,
 				lastSeen:    last,
@@ -448,8 +472,36 @@ func conversationCompletionClaims(turns []transcript.Turn) []int {
 	return result
 }
 
-func conversationLastEdit(turns []transcript.Turn) int {
-	for index := len(turns) - 1; index >= 0; index-- {
+func conversationTaskPhaseStart(
+	turns []transcript.Turn,
+	end int,
+) int {
+	if end > len(turns) {
+		end = len(turns)
+	}
+	for index := end - 1; index >= 0; index-- {
+		if turns[index].Role != transcript.RoleUser {
+			continue
+		}
+		if isApprovalText(turns[index].Payload.Text) {
+			continue
+		}
+		return index + 1
+	}
+	return 0
+}
+
+func conversationLastEditBetween(
+	turns []transcript.Turn,
+	start, end int,
+) int {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(turns) {
+		end = len(turns)
+	}
+	for index := end - 1; index >= start; index-- {
 		if len(editedFiles(turns[index])) > 0 {
 			return index
 		}
@@ -457,12 +509,23 @@ func conversationLastEdit(turns []transcript.Turn) int {
 	return -1
 }
 
-func conversationHasVerificationAfter(
+func conversationHasVerificationBetween(
 	turns []transcript.Turn,
-	index int,
+	start, end int,
 	config issueintel.ProjectConfig,
 ) bool {
-	return conversationFirstVerification(turns, index+1, config) >= 0
+	if start < 0 {
+		start = 0
+	}
+	if end > len(turns) {
+		end = len(turns)
+	}
+	for index := start; index < end; index++ {
+		if isVerificationTurn(turns[index], config) {
+			return true
+		}
+	}
+	return false
 }
 
 func conversationFirstVerification(

@@ -55,6 +55,7 @@ func TestReplaceProjectIssueAnalysisEncryptsReplacesAndAdvancesGeneration(
 	}
 
 	knownUSD := 6.40
+	attributedUSD := 5.25
 	issue := costIssueTestIssue(
 		"issue-retry-loop",
 		issueintel.DetectorRetryLoop,
@@ -88,6 +89,11 @@ func TestReplaceProjectIssueAnalysisEncryptsReplacesAndAdvancesGeneration(
 		issueintel.Analysis{
 			Issues:               []issueintel.Issue{issue},
 			CorrectionCandidates: []issueintel.CorrectionCandidate{candidate},
+			AttributedCost: issueintel.Cost{
+				WastedMinutes: 8,
+				WastedTokens:  3600,
+				WastedUSD:     &attributedUSD,
+			},
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -158,6 +164,15 @@ func TestReplaceProjectIssueAnalysisEncryptsReplacesAndAdvancesGeneration(
 			transcriptGeneration,
 			analyzedGeneration,
 		)
+	}
+	totals, err := store.ReadCostIssueTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totals.AttributedUSD != attributedUSD ||
+		totals.LowerBound ||
+		totals.IssueCount != 1 {
+		t.Fatalf("union issue totals = %+v", totals)
 	}
 
 	replacement := costIssueTestIssue(

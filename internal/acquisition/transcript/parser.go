@@ -16,7 +16,7 @@ import (
 	belaytranscript "github.com/DoplexLabs/belay-engine/internal/transcript"
 )
 
-const ParserVersion = "belay.native-transcript.v2"
+const ParserVersion = "belay.native-transcript.v3"
 
 type parser struct {
 	source          Source
@@ -222,11 +222,26 @@ func (p *parser) attachUsage(index int, value usage, model string) {
 	}
 	turn := &p.result.Turns[index]
 	turn.Model = p.scrub(model)
-	turn.InputTokens = cloneInt64(value.InputTokens)
+	turn.InputTokens = normalizedInputTokens(value)
 	turn.OutputTokens = cloneInt64(value.OutputTokens)
 	turn.CacheReadTokens = cloneInt64(value.CacheReadTokens)
 	turn.CacheWriteTokens = cloneInt64(value.CacheWriteTokens)
 	turn.CostUSD = calculateCost(model, value)
+}
+
+func normalizedInputTokens(value usage) *int64 {
+	if value.InputTokens == nil {
+		return nil
+	}
+	result := *value.InputTokens
+	if value.InputIncludesRead {
+		result -= int64(count(value.CacheReadTokens))
+		result -= int64(count(value.CacheWriteTokens))
+		if result < 0 {
+			result = 0
+		}
+	}
+	return &result
 }
 
 func (p *parser) parentToolUseID(explicit, sourceAssistantUUID string) string {
