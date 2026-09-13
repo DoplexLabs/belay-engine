@@ -1,6 +1,6 @@
 # Contributing to Belay Local
 
-Belay Local is an Apache-2.0 open-source edge project. Contributions should
+Belay Local is an MIT-licensed open-source edge project. Contributions should
 preserve its endpoint-first, local-only, fail-open design.
 
 ## Before starting

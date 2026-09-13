@@ -80,7 +80,7 @@ The archive contains:
 
 - `bin/belay`
 - `bin/numbat`
-- Belay's Apache-2.0 `LICENSE`
+- Belay's MIT `LICENSE`
 - Numbat's exact `LICENSE` and `THIRD_PARTY_LICENSES.txt`
 - `BUILD-INFO.txt`
 - internal `SHA256SUMS`
@@ -462,4 +462,4 @@ published even when checksum and smoke checks pass.
 - Intel, Linux, and broader harness clean-machine validation
 - Formal release/tag and supported-upgrade policy
 
-Apache-2.0 license selection is complete and is not a remaining blocker.
+MIT license selection is complete and is not a remaining blocker.

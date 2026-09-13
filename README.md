@@ -8,7 +8,7 @@ governed workflows can record narrowly scoped fixes, Mission Pack acceptance,
 and experience-learning decisions; Belay does not execute a command or write a
 proposed change to a project.
 
-This repository contains the Apache-2.0-licensed Belay edge. Belay Teams is a
+This repository contains the MIT-licensed Belay edge. Belay Teams is a
 separate product and is not included in this Local alpha.
 
 ## Belay Local Developer Alpha
@@ -506,7 +506,7 @@ The packaging script:
   stamping;
 - builds Numbat first and embeds its exact binary SHA-256 plus version marker in
   Belay so packaged first use needs no manual pin flags;
-- includes both binaries, Belay's Apache-2.0 license, and Numbat's exact license
+- includes both binaries, Belay's MIT license, and Numbat's exact Apache-2.0 license
   and third-party attribution;
 - creates internal `SHA256SUMS` plus an archive checksum;
 - emits deterministic archive metadata from `SOURCE_DATE_EPOCH`.

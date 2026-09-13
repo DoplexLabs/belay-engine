@@ -484,7 +484,7 @@ without exposing browser-only fix recording or P0-04 recurrence monitoring.
 
 ## Alpha and production gates
 
-- Belay is licensed under Apache-2.0; license selection is complete.
+- Belay is licensed under MIT; license selection is complete. Numbat remains under its own Apache-2.0 license, vendored in `licenses/numbat`.
 - The checksum-verified Numbat research commit is an explicit Developer Alpha
   exception. A released upstream tag with schema 0.3.0, or a renewed exception,
   remains a production gate.
