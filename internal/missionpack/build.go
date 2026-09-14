@@ -1481,7 +1481,10 @@ func renderExperienceMarkdown(pack Pack) string {
 			builder.WriteString(markdownText(exception))
 		}
 		builder.WriteString(
-			"\n  Execution: Before editing, map the rule and each exception to concrete current inputs or states. Preserve an exception only when its stated predicate is established.",
+			"\n  Plan: Before editing, map the rule and each exception to an explicit code predicate and required behavior.",
+		)
+		builder.WriteString(
+			"\n  Proof: Verify the main rule and every exception path separately; an exception is required behavior, not permission to skip the rule.",
 		)
 		builder.WriteString(
 			"\n  Boundary: Preserve existing behavior outside this rule and make the narrowest relevant change.",

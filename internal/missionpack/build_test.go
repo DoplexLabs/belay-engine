@@ -59,7 +59,7 @@ func TestBuildIsDeterministicAndRanksBoundedInputs(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("Build() is not deterministic:\nfirst=%#v\nsecond=%#v", first, second)
 	}
-	if first.GeneratorVersion != "mission-pack.det.v5" {
+	if first.GeneratorVersion != "mission-pack.det.v6" {
 		t.Fatalf("generator version = %q", first.GeneratorVersion)
 	}
 	if got := trapIssueIDs(first.KnownTraps); !reflect.DeepEqual(
@@ -1630,12 +1630,14 @@ func TestBuildExperiencePackIsDeterministicAndExperienceFirst(t *testing.T) {
 
 - Rule: Edit the schema source before regenerating clients.
   Apply when: The current task matches this approved project experience.
-  Execution: Before editing, map the rule and each exception to concrete current inputs or states. Preserve an exception only when its stated predicate is established.
+  Plan: Before editing, map the rule and each exception to an explicit code predicate and required behavior.
+  Proof: Verify the main rule and every exception path separately; an exception is required behavior, not permission to skip the rule.
   Boundary: Preserve existing behavior outside this rule and make the narrowest relevant change.
   Verify: Run the schema regeneration check successfully.
 - Rule: Run project verification after the final edit.
   Apply when: The current task matches this approved project experience.
-  Execution: Before editing, map the rule and each exception to concrete current inputs or states. Preserve an exception only when its stated predicate is established.
+  Plan: Before editing, map the rule and each exception to an explicit code predicate and required behavior.
+  Proof: Verify the main rule and every exception path separately; an exception is required behavior, not permission to skip the rule.
   Boundary: Preserve existing behavior outside this rule and make the narrowest relevant change.
   Verify: Observe a successful verification after the last edit.
 

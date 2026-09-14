@@ -17,7 +17,7 @@ var (
 
 const (
 	SchemaVersion          = "belay.mission-pack.v1"
-	GeneratorVersion       = "mission-pack.det.v5"
+	GeneratorVersion       = "mission-pack.det.v6"
 	legacyGeneratorVersion = "mission-pack.det.v3"
 
 	MaxKnownTraps           = 3
