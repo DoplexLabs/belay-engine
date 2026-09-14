@@ -27,6 +27,8 @@ const (
 	maxExperienceIDRunes            = 256
 	maxExperienceTypeRunes          = 64
 	maxExperienceGuidanceBytes      = 2 * 1024
+	maxExperienceApplicabilityBytes = 2 * 1024
+	maxExperienceExceptions         = 8
 	maxExperienceRationaleBytes     = 8 * 1024
 	maxExperienceVerifierRunes      = 300
 	experienceAuthorityUserApproved = "user_approved"
@@ -203,6 +205,40 @@ func normalizeExperienceItem(
 			"Mission Pack experience guidance is invalid",
 		)
 	}
+	value.Applicability = strings.TrimSpace(value.Applicability)
+	if value.Applicability == "" ||
+		strings.ContainsAny(value.Applicability, "\r\n") ||
+		len([]byte(value.Applicability)) > maxExperienceApplicabilityBytes {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience applicability is invalid",
+		)
+	}
+	if len(value.Exceptions) > maxExperienceExceptions {
+		return ExperienceItem{}, 0, errors.New(
+			"Mission Pack experience has too many exceptions",
+		)
+	}
+	seenExceptions := make(map[string]bool, len(value.Exceptions))
+	exceptions := make([]string, 0, len(value.Exceptions))
+	for _, exception := range value.Exceptions {
+		exception = strings.TrimSpace(exception)
+		if exception == "" ||
+			strings.ContainsAny(exception, "\r\n") ||
+			len([]byte(exception)) > maxExperienceGuidanceBytes {
+			return ExperienceItem{}, 0, errors.New(
+				"Mission Pack experience exception is invalid",
+			)
+		}
+		normalized := strings.ToLower(exception)
+		if seenExceptions[normalized] {
+			return ExperienceItem{}, 0, errors.New(
+				"Mission Pack experience exceptions are duplicated",
+			)
+		}
+		seenExceptions[normalized] = true
+		exceptions = append(exceptions, exception)
+	}
+	value.Exceptions = exceptions
 	value.Rationale = strings.TrimSpace(value.Rationale)
 	if value.Rationale == "" ||
 		len([]byte(value.Rationale)) > maxExperienceRationaleBytes {
@@ -242,9 +278,13 @@ func normalizeExperienceItem(
 	value.Sources = normalizeSources(value.Sources, MaxSourcesPerItem)
 
 	itemBytes := len([]byte(value.Guidance)) +
+		len([]byte(value.Applicability)) +
 		len([]byte(value.Rationale)) +
 		len([]byte(value.Verifier.Kind)) +
 		len([]byte(value.Verifier.Summary))
+	for _, exception := range value.Exceptions {
+		itemBytes += len([]byte(exception))
+	}
 	return value, itemBytes, nil
 }
 
@@ -1432,8 +1472,17 @@ func renderExperienceMarkdown(pack Pack) string {
 	builder.WriteString(markdownText(pack.Project.Label))
 	builder.WriteString("\n\n## Project guidance\n\n")
 	for _, item := range pack.Experiences {
-		builder.WriteString("- ")
+		builder.WriteString("- Rule: ")
 		builder.WriteString(markdownText(item.Guidance))
+		builder.WriteString("\n  Apply when: ")
+		builder.WriteString(markdownText(item.Applicability))
+		for _, exception := range item.Exceptions {
+			builder.WriteString("\n  Do not apply when: ")
+			builder.WriteString(markdownText(exception))
+		}
+		builder.WriteString(
+			"\n  Boundary: Preserve existing behavior outside this rule and make the narrowest relevant change.",
+		)
 		builder.WriteString("\n  Verify: ")
 		builder.WriteString(markdownText(item.Verifier.Summary))
 		builder.WriteByte('\n')
@@ -1488,9 +1537,13 @@ func truncateMarkdown(value string) string {
 
 func derivePackID(input BuildInput, pack Pack) string {
 	taskSum := sha256.Sum256([]byte(input.Request.TaskHint))
+	idGeneratorVersion := GeneratorVersion
+	if len(pack.Experiences) == 0 {
+		idGeneratorVersion = legacyGeneratorVersion
+	}
 	values := []string{
 		SchemaVersion,
-		GeneratorVersion,
+		idGeneratorVersion,
 		input.Project.Identity,
 		strings.TrimSpace(input.Request.IssueID),
 		string(input.Request.Intent),
@@ -1738,6 +1791,9 @@ func ensureNonNil(pack *Pack) {
 		pack.Warnings = make([]Warning, 0)
 	}
 	for index := range pack.Experiences {
+		if pack.Experiences[index].Exceptions == nil {
+			pack.Experiences[index].Exceptions = make([]string, 0)
+		}
 		if pack.Experiences[index].Sources == nil {
 			pack.Experiences[index].Sources = make([]SourceRef, 0)
 		}

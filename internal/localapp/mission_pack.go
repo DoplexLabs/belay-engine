@@ -367,13 +367,15 @@ func missionPackExperienceItem(
 		return missionpack.ExperienceItem{}, err
 	}
 	return missionpack.ExperienceItem{
-		ExperienceID: value.ExperienceID,
-		Version:      value.Version,
-		Type:         string(value.Type),
-		Guidance:     value.Guidance.Instruction,
-		Rationale:    value.Guidance.Rationale,
-		Verifier:     verifier,
-		Authority:    "user_approved",
+		ExperienceID:  value.ExperienceID,
+		Version:       value.Version,
+		Type:          string(value.Type),
+		Guidance:      value.Guidance.Instruction,
+		Applicability: value.Applicability.SemanticDescription,
+		Exceptions:    append([]string(nil), value.Guidance.Exceptions...),
+		Rationale:     value.Guidance.Rationale,
+		Verifier:      verifier,
+		Authority:     "user_approved",
 		Sources: missionPackExperienceSources(
 			value.Provenance.SourceCandidateID,
 			value.Evidence.Refs,

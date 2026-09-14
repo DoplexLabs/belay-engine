@@ -541,10 +541,19 @@ func TestMissionPackToolReturnsApprovedExperiences(t *testing.T) {
 		experience["type"] != "procedure" ||
 		experience["guidance"] !=
 			"Run project verification after the final edit." ||
+		experience["applicability"] !=
+			"Use this rule when the task changes project files." ||
 		experience["rationale"] !=
 			"Prior sessions regressed after unverified edits." ||
 		experience["authority"] != "user_approved" {
 		t.Fatalf("experience = %#v", experience)
+	}
+	exceptions, ok := experience["exceptions"].([]any)
+	if !ok || !reflect.DeepEqual(
+		exceptions,
+		[]any{"Do not apply it to read-only review tasks."},
+	) {
+		t.Fatalf("experience exceptions = %#v", experience["exceptions"])
 	}
 	verifier := asObject(t, experience["verifier"])
 	if verifier["kind"] != "command_succeeded" ||
@@ -1195,11 +1204,15 @@ func testExperienceMissionPack() missionpack.Pack {
 	pack := testMissionPack()
 	pack.ExperienceGeneration = 7
 	pack.Experiences = []missionpack.ExperienceItem{{
-		ExperienceID: "exp_verify_after_edit",
-		Version:      2,
-		Type:         "procedure",
-		Guidance:     "Run project verification after the final edit.",
-		Rationale:    "Prior sessions regressed after unverified edits.",
+		ExperienceID:  "exp_verify_after_edit",
+		Version:       2,
+		Type:          "procedure",
+		Guidance:      "Run project verification after the final edit.",
+		Applicability: "Use this rule when the task changes project files.",
+		Exceptions: []string{
+			"Do not apply it to read-only review tasks.",
+		},
+		Rationale: "Prior sessions regressed after unverified edits.",
 		Verifier: missionpack.VerifierSummary{
 			Kind:    "command_succeeded",
 			Summary: "Observe a successful verification after the last edit.",
