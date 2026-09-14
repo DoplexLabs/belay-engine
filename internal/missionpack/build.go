@@ -1477,9 +1477,12 @@ func renderExperienceMarkdown(pack Pack) string {
 		builder.WriteString("\n  Apply when: ")
 		builder.WriteString(markdownText(item.Applicability))
 		for _, exception := range item.Exceptions {
-			builder.WriteString("\n  Do not apply when: ")
+			builder.WriteString("\n  Exception: ")
 			builder.WriteString(markdownText(exception))
 		}
+		builder.WriteString(
+			"\n  Execution: Before editing, map the rule and each exception to concrete current inputs or states. Preserve an exception only when its stated predicate is established.",
+		)
 		builder.WriteString(
 			"\n  Boundary: Preserve existing behavior outside this rule and make the narrowest relevant change.",
 		)

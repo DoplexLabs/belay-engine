@@ -10,7 +10,7 @@ Product telemetry: none
 Browser mutation capability: fixed-schema fix-attempt declarations only
 Execution or remediation capability: none
 MCP implementation: 1.7.0
-Mission Pack generator: mission-pack.det.v4
+Mission Pack generator: mission-pack.det.v5
 
 Belay Local combines minimized canonical AI-agent activity with
 secret-scrubbed transcript content in an encrypted one-machine store. It
