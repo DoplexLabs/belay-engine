@@ -199,6 +199,77 @@ func TestPrepareExperienceSemanticPromptIsBoundedAndCandidateOnly(
 	}
 }
 
+func TestBoundedExperienceSemanticExcerptsPrioritizesEvidenceRoles(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("role-aware")
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	ref := func(
+		index int64,
+		role experience.EvidenceTurnRole,
+		toolName string,
+		text string,
+	) experience.EvidenceRef {
+		occurredAt := base.Add(time.Duration(index) * time.Second)
+		return experience.EvidenceRef{
+			Kind:       experience.EvidenceTranscriptTurn,
+			SessionKey: "ses_role_aware",
+			TurnIndex:  &index,
+			TurnRole:   role,
+			ToolName:   toolName,
+			OccurredAt: &occurredAt,
+			Excerpt:    text,
+		}
+	}
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	candidate.Proposal.Verifier = experience.Verifier{
+		Kind: experience.VerifierCommandSucceeded,
+		Command: &experience.CommandVerifierSpec{
+			Command:          "go test ./...",
+			CommandClass:     "test",
+			ScrubbingVersion: "belay.redaction.v1",
+		},
+	}
+	candidate.Evidence.Refs = []experience.EvidenceRef{
+		ref(8, experience.EvidenceTurnAssistant, "", "Explain the reusable rule."),
+		ref(11, experience.EvidenceTurnToolResult, "Bash", "ok"),
+		ref(0, experience.EvidenceTurnUser, "", "Implement the bounded change."),
+		ref(12, experience.EvidenceTurnAssistant, "", "Implemented and verified."),
+		ref(2, experience.EvidenceTurnUser, "", "Keep retries idempotent."),
+		ref(10, experience.EvidenceTurnToolCall, "Bash", "go test ./..."),
+		ref(1, experience.EvidenceTurnToolCall, "Edit", `{"file_path":"a.go"}`),
+		ref(4, experience.EvidenceTurnUser, "", "Except when the request is read-only."),
+		ref(9, experience.EvidenceTurnSystem, "", "system noise"),
+	}
+
+	got := boundedExperienceSemanticExcerpts(candidate)
+	if len(got) != maxExperienceSemanticExcerpts {
+		t.Fatalf(
+			"role-aware excerpts = %d, want %d: %+v",
+			len(got),
+			maxExperienceSemanticExcerpts,
+			got,
+		)
+	}
+	wantTurns := map[int64]bool{
+		0:  true,
+		1:  true,
+		2:  true,
+		4:  true,
+		8:  true,
+		10: true,
+		11: true,
+		12: true,
+	}
+	for _, excerpt := range got {
+		if excerpt.TurnIndex == nil || !wantTurns[*excerpt.TurnIndex] {
+			t.Fatalf("unexpected role-aware excerpt: %+v", excerpt)
+		}
+		delete(wantTurns, *excerpt.TurnIndex)
+	}
+	if len(wantTurns) != 0 {
+		t.Fatalf("role-aware excerpts omitted turns: %+v", wantTurns)
+	}
+}
+
 func TestExperienceSemanticInputHashCoversCompleteModelInput(t *testing.T) {
 	prompt := []byte("prompt")
 	schema := []byte(`{"type":"object"}`)
@@ -500,6 +571,9 @@ func TestExperienceSemanticOutputSchemaMatchesDomainStructure(t *testing.T) {
 				{
 					CandidateID:     candidate.CandidateID,
 					ProjectIdentity: candidate.ProjectIdentity,
+					Excerpts: boundedExperienceSemanticExcerpts(
+						candidate,
+					),
 				},
 			},
 		},
@@ -664,6 +738,9 @@ func TestExperienceSemanticOutputSchemaAllowsEmptyCorrectionParameters(
 				{
 					CandidateID:     candidate.CandidateID,
 					ProjectIdentity: candidate.ProjectIdentity,
+					Excerpts: boundedExperienceSemanticExcerpts(
+						candidate,
+					),
 				},
 			},
 		},
@@ -698,6 +775,41 @@ func TestExperienceSemanticOutputSchemaAllowsEmptyCorrectionParameters(
 			"schema rejected user_correction_absent parameters {}: %v",
 			err,
 		)
+	}
+}
+
+func TestCompileExperienceSemanticResultsDefersUnknownEvidenceSupport(
+	t *testing.T,
+) {
+	candidate := experienceSemanticTestCandidate("unknown-support")
+	output, err := decodeExperienceSemanticOutput(
+		experienceSemanticValidOutput(candidate),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output[0].Proposal.GuidanceSupportRefs = []string{"evr_unknown"}
+	results, counts, err := compileExperienceSemanticResults(
+		[]experience.Candidate{candidate},
+		output,
+		SemanticHarnessClaude,
+		"claude-test",
+		sha256Prefixed([]byte("input")),
+		sha256Prefixed([]byte("output")),
+		time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 ||
+		results[0].Proposal != nil ||
+		results[0].Decision.Disposition !=
+			experience.SemanticDispositionDefer ||
+		results[0].Decision.ReasonCode !=
+			experience.SemanticReasonInsufficientContext ||
+		counts.Deferred != 1 ||
+		counts.Proposed != 0 {
+		t.Fatalf("unsupported proposal did not fail soft: %+v / %+v", results, counts)
 	}
 }
 
@@ -833,7 +945,7 @@ func TestAnalyzeExperienceCandidatesStoresExactlyOneResultPerBranch(
 				prompt,
 				[]byte("necessary exact command or path"),
 			) {
-				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+				t.Fatalf("v11 exact-detail instruction missing: %s", prompt)
 			}
 			return ExperienceSemanticHarnessResult{
 				Output: output,
@@ -883,7 +995,7 @@ func TestAnalyzeExperienceCandidatesReportsDispositionReplays(t *testing.T) {
 				prompt,
 				[]byte("necessary exact command or path"),
 			) {
-				t.Fatalf("v10 exact-detail instruction missing: %s", prompt)
+				t.Fatalf("v11 exact-detail instruction missing: %s", prompt)
 			}
 			return ExperienceSemanticHarnessResult{
 				Output: experienceSemanticValidOutput(candidate),
@@ -950,11 +1062,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV11WithV12Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV10 {
-		t.Fatalf("experience prompt version = %q, want v10", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV12 {
+		t.Fatalf("experience prompt version = %q, want v12", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -963,7 +1075,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV9,
+				experience.SemanticProposalPromptVersionV11,
 			): true,
 		},
 	}
@@ -988,15 +1100,76 @@ func TestAnalyzeExperienceCandidatesReanalyzesV9WithV10Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV10 ||
+			experience.SemanticProposalPromptVersionV12 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV10 {
+			experience.SemanticProposalPromptVersionV12 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,
 			store.stored,
 			err,
 		)
+	}
+}
+
+func TestSemanticProposalPreservesUserRuleAndExceptionBoundary(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("boundary")
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	candidate.Evidence.Refs[0].TurnRole = experience.EvidenceTurnUser
+	candidate.Evidence.Refs[0].Excerpt =
+		"Rule: Every lease-protected write must carry a monotonically increasing fencing token. " +
+			"Exception: A passive observer that performs no protected write does not require a fencing token."
+	candidate.Evidence.Refs[1].TurnRole = experience.EvidenceTurnAssistant
+	candidate.Evidence.Refs[1].Excerpt =
+		"Fence writes, but observers must accept and ignore stale tokens."
+	candidate.Evidence.EvidenceSetID = candidate.Evidence.DeterministicID()
+
+	excerpts := boundedExperienceSemanticExcerpts(candidate)
+	if len(excerpts) != 2 {
+		t.Fatalf("boundary excerpts = %+v", excerpts)
+	}
+	userRef := excerpts[0].EvidenceRefID
+	assistantRef := excerpts[1].EvidenceRefID
+	if excerpts[0].TurnRole != experience.EvidenceTurnUser {
+		userRef, assistantRef = assistantRef, userRef
+	}
+
+	supported := experienceSemanticProposeOutputCandidate{
+		Guidance: "Every lease-protected write must carry a monotonically increasing fencing token.",
+		Exceptions: []string{
+			"A passive observer that performs no protected write does not require a fencing token.",
+		},
+	}
+	support := &experience.EvidenceSupport{
+		GuidanceRefs:  []string{userRef},
+		ExceptionRefs: [][]string{{userRef}},
+		VerifierRefs:  []string{assistantRef},
+	}
+	if err := semanticProposalPreservesEvidenceBoundaries(
+		candidate,
+		supported,
+		support,
+	); err != nil {
+		t.Fatalf("exact user boundary rejected: %v", err)
+	}
+
+	harmful := supported
+	harmful.Guidance =
+		"Fence every write, but accept and ignore any token passed to an observer."
+	harmful.Exceptions = []string{
+		"A passive observer must not reject a stale token.",
+	}
+	harmfulSupport := &experience.EvidenceSupport{
+		GuidanceRefs:  []string{assistantRef},
+		ExceptionRefs: [][]string{{assistantRef}},
+		VerifierRefs:  []string{assistantRef},
+	}
+	if err := semanticProposalPreservesEvidenceBoundaries(
+		candidate,
+		harmful,
+		harmfulSupport,
+	); !errors.Is(err, errExperienceSemanticEvidenceSupport) {
+		t.Fatalf("strengthened assistant restatement error = %v", err)
 	}
 }
 
@@ -1359,6 +1532,14 @@ func experienceSemanticValidOutputs(
 ) []byte {
 	values := make([]any, 0, len(candidates))
 	for _, candidate := range candidates {
+		excerpts := boundedExperienceSemanticExcerpts(candidate)
+		if len(excerpts) == 0 {
+			panic("semantic test candidate has no evidence excerpts")
+		}
+		guidanceSupport := []any{excerpts[0].EvidenceRefID}
+		verifierSupport := []any{
+			excerpts[len(excerpts)-1].EvidenceRefID,
+		}
 		values = append(values, map[string]any{
 			"candidate_id":    candidate.CandidateID,
 			"disposition":     "propose",
@@ -1376,8 +1557,11 @@ func experienceSemanticValidOutputs(
 				"models":               []any{},
 				"semantic_description": "Tasks that modify generated code.",
 			},
-			"exceptions":            []any{},
-			"intervention_strength": "advise",
+			"exceptions":             []any{},
+			"guidance_support_refs":  guidanceSupport,
+			"exception_support_refs": []any{},
+			"verifier_support_refs":  verifierSupport,
+			"intervention_strength":  "advise",
 			"verifier": map[string]any{
 				"kind":                  "path_pattern_not_modified",
 				"coverage_requirements": []any{"workspace_state_captured"},

@@ -162,13 +162,19 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	followingUser := candidateTurn("ses_success", 4, transcript.RoleUser)
 	followingUser.Payload.Text =
 		"No partial migrations. Keep the schema change atomic."
-	followingAssistant := candidateTurn(
+	ruleAssistant := candidateTurn(
 		"ses_success",
 		5,
 		transcript.RoleAssistant,
 	)
-	followingAssistant.Payload.Text =
+	ruleAssistant.Payload.Text =
 		"The reusable convention is one rollback-safe migration transaction."
+	finalAssistant := candidateTurn(
+		"ses_success",
+		6,
+		transcript.RoleAssistant,
+	)
+	finalAssistant.Payload.Text = "Implemented and verified."
 	editRef := candidateTurnRef(edit)
 	verifyRef := candidateTurnRef(verify)
 	resultRef := candidateTurnRef(result)
@@ -202,7 +208,8 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 			verify,
 			result,
 			followingUser,
-			followingAssistant,
+			ruleAssistant,
+			finalAssistant,
 		},
 		Edges:    []trajectory.Edge{verifies},
 		Outcomes: []trajectory.Outcome{pass},
@@ -221,7 +228,7 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 			contextIndexes[*ref.TurnIndex] = true
 		}
 	}
-	for _, want := range []int64{0, 4, 5} {
+	for _, want := range []int64{0, 4, 5, 6} {
 		if !contextIndexes[want] {
 			t.Fatalf(
 				"successful procedure evidence lacks context turn %d: %+v",
@@ -256,6 +263,96 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	}
 	if len(ordinary.Candidates) != 0 {
 		t.Fatalf("ordinary command success produced %+v", ordinary.Candidates)
+	}
+
+	verifyAgain := candidateTurn("ses_success", 6, transcript.RoleToolCall)
+	verifyAgain.Payload.ToolCallID = "verify_2"
+	verifyAgain.Payload.RawCommand = "go test ./internal/..."
+	resultAgain := candidateTurn("ses_success", 7, transcript.RoleToolResult)
+	resultAgain.Payload.ToolCallID = "verify_2"
+	resultAgain.Payload.ToolIsError = &notError
+	resultAgain.Payload.ToolResult = "ok"
+	continuationUser := candidateTurn(
+		"ses_success",
+		4,
+		transcript.RoleUser,
+	)
+	continuationUser.Payload.Text =
+		"Tests pass. Document the rollback rule, then rerun verification."
+	editAgain := candidateTurn("ses_success", 5, transcript.RoleToolCall)
+	editAgain.ToolName = "Edit"
+	editAgain.Payload.ToolCallID = "edit_2"
+	editAgain.Payload.ToolInput =
+		json.RawMessage(`{"file_path":"internal/example.go"}`)
+	editAgainRef := candidateTurnRef(editAgain)
+	verifyAgainRef := candidateTurnRef(verifyAgain)
+	resultAgainRef := candidateTurnRef(resultAgain)
+	passAgain := candidateOutcome(
+		testProject,
+		"ses_success",
+		trajectory.OutcomeVerificationPass,
+		trajectory.ResultSucceeded,
+		resultAgain.OccurredAt,
+		[]trajectory.NodeRef{verifyAgainRef, resultAgainRef},
+	)
+	verifiesAgain := candidateEdge(
+		testProject,
+		"ses_success",
+		verifyAgainRef,
+		trajectory.RelationVerifies,
+		eventRef,
+		verifyAgain.OccurredAt,
+		[]trajectory.NodeRef{verifyAgainRef, editAgainRef, eventRef},
+	)
+	grouped, err := Compile(Input{
+		ProjectIdentity: testProject,
+		Turns: []transcript.Turn{
+			edit,
+			verify,
+			result,
+			continuationUser,
+			editAgain,
+			verifyAgain,
+			resultAgain,
+		},
+		Edges:    []trajectory.Edge{verifies, verifiesAgain},
+		Outcomes: []trajectory.Outcome{pass, passAgain},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grouped.Candidates) != 1 {
+		t.Fatalf("shared mutation produced %+v", grouped.Candidates)
+	}
+	groupedCandidate := grouped.Candidates[0]
+	if len(groupedCandidate.OutcomeRefs) != 2 ||
+		groupedCandidate.Proposal.Verifier.Command == nil ||
+		groupedCandidate.Proposal.Verifier.Command.Command !=
+			"go test ./internal/..." {
+		t.Fatalf("grouped candidate = %+v", groupedCandidate)
+	}
+
+	newTaskUser := continuationUser
+	newTaskUser.Payload.Text = "Implement the next unrelated change."
+	separate, err := Compile(Input{
+		ProjectIdentity: testProject,
+		Turns: []transcript.Turn{
+			edit,
+			verify,
+			result,
+			newTaskUser,
+			editAgain,
+			verifyAgain,
+			resultAgain,
+		},
+		Edges:    []trajectory.Edge{verifies, verifiesAgain},
+		Outcomes: []trajectory.Outcome{pass, passAgain},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(separate.Candidates) != 2 {
+		t.Fatalf("new task was incorrectly grouped: %+v", separate.Candidates)
 	}
 }
 

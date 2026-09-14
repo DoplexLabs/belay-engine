@@ -422,6 +422,17 @@ func TestMissionPackServiceMapsSelectedExperiencesInStableOrder(t *testing.T) {
 		pack.Experiences[1].ExperienceID != "exp_first" {
 		t.Fatalf("mapped experiences = %#v", pack.Experiences)
 	}
+	if pack.Experiences[0].Applicability !=
+		"Use this workflow when changing project code." ||
+		!reflect.DeepEqual(
+			pack.Experiences[0].Exceptions,
+			[]string{"Do not apply it to read-only review tasks."},
+		) {
+		t.Fatalf(
+			"mapped experience boundary = %#v",
+			pack.Experiences[0],
+		)
+	}
 	sources := pack.Experiences[0].Sources
 	if len(sources) != 2 {
 		t.Fatalf("mapped sources = %#v, want two", sources)
@@ -839,9 +850,15 @@ func missionPackSelectedExperience(
 			ExperienceID: experienceID,
 			Version:      version,
 			Type:         experience.ExperienceProcedure,
+			Applicability: experience.Applicability{
+				SemanticDescription: "Use this workflow when changing project code.",
+			},
 			Guidance: experience.Guidance{
 				Instruction: "Use the project verification workflow.",
 				Rationale:   "The approved experience requires it.",
+				Exceptions: []string{
+					"Do not apply it to read-only review tasks.",
+				},
 			},
 			Verifier: experience.Verifier{
 				Kind: verifierKind,

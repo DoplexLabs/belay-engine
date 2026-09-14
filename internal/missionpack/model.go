@@ -16,8 +16,9 @@ var (
 )
 
 const (
-	SchemaVersion    = "belay.mission-pack.v1"
-	GeneratorVersion = "mission-pack.det.v3"
+	SchemaVersion          = "belay.mission-pack.v1"
+	GeneratorVersion       = "mission-pack.det.v6"
+	legacyGeneratorVersion = "mission-pack.det.v3"
 
 	MaxKnownTraps           = 3
 	MaxOperatingRules       = 3
@@ -151,14 +152,16 @@ type SourceRef struct {
 }
 
 type ExperienceItem struct {
-	ExperienceID string          `json:"experience_id"`
-	Version      int             `json:"version"`
-	Type         string          `json:"type"`
-	Guidance     string          `json:"guidance"`
-	Rationale    string          `json:"rationale"`
-	Verifier     VerifierSummary `json:"verifier"`
-	Authority    string          `json:"authority"`
-	Sources      []SourceRef     `json:"sources"`
+	ExperienceID  string          `json:"experience_id"`
+	Version       int             `json:"version"`
+	Type          string          `json:"type"`
+	Guidance      string          `json:"guidance"`
+	Applicability string          `json:"applicability"`
+	Exceptions    []string        `json:"exceptions,omitempty"`
+	Rationale     string          `json:"rationale"`
+	Verifier      VerifierSummary `json:"verifier"`
+	Authority     string          `json:"authority"`
+	Sources       []SourceRef     `json:"sources"`
 }
 
 type VerifierSummary struct {

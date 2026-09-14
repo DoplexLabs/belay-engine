@@ -22,15 +22,16 @@ import (
 )
 
 const (
-	ExtractorVersion         = "belay.experience-candidate.det.v3"
-	maxCandidateEvidenceRefs = 32
-	maxCandidateOutcomeRefs  = 16
-	maxCandidateExcerptBytes = 16 * 1024
-	commandScrubbingVersion  = "belay.redaction.v1"
-	pendingSemanticGuidance  = "Pending semantic compilation; do not apply as agent guidance."
-	pendingSemanticRationale = "Deterministic evidence establishes a candidate family only; semantic guidance has not been generated."
-	pendingSemanticScope     = "Applicability has not yet been semantically compiled beyond the cited project evidence."
-	observationOnlyVerifier  = "Retain the cited observations for later semantic compilation and user review."
+	ExtractorVersion              = "belay.experience-candidate.det.v6"
+	maxCandidateEvidenceRefs      = 32
+	maxCandidateOutcomeRefs       = 16
+	maxCandidateExcerptBytes      = 16 * 1024
+	maxProcedureContinuationTurns = 64
+	commandScrubbingVersion       = "belay.redaction.v1"
+	pendingSemanticGuidance       = "Pending semantic compilation; do not apply as agent guidance."
+	pendingSemanticRationale      = "Deterministic evidence establishes a candidate family only; semantic guidance has not been generated."
+	pendingSemanticScope          = "Applicability has not yet been semantically compiled beyond the cited project evidence."
+	observationOnlyVerifier       = "Retain the cited observations for later semantic compilation and user review."
 )
 
 type Input struct {
@@ -199,6 +200,7 @@ func (value *compiler) compileCorrections() error {
 }
 
 func (value *compiler) compileSuccessfulProcedures() error {
+	records := make([]successfulProcedureRecord, 0)
 	for _, outcome := range value.outcomes {
 		if !qualifyingOutcome(
 			outcome,
@@ -223,43 +225,85 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		if len(verifies) == 0 {
 			continue
 		}
-		sourceRefs := []trajectory.NodeRef{callRef, resultRef}
+		evidenceRefs := []trajectory.NodeRef{callRef, resultRef}
+		mutationRefs := make([]trajectory.NodeRef, 0)
+		mutationPaths := make([]string, 0)
 		generatedAt := maxTime(outcome.OccurredAt, call.OccurredAt, result.OccurredAt)
 		for _, edge := range verifies {
-			sourceRefs = append(sourceRefs, edge.SourceRefs...)
+			evidenceRefs = append(evidenceRefs, edge.SourceRefs...)
 			generatedAt = maxTime(generatedAt, edge.OccurredAt)
+			for _, ref := range edge.SourceRefs {
+				turn, ok := value.turn(ref)
+				if ok && turn.Role == transcript.RoleToolCall &&
+					len(transcriptissues.ExtractEditedFiles(turn)) > 0 {
+					mutationRefs = append(mutationRefs, ref)
+					mutationPaths = append(
+						mutationPaths,
+						transcriptissues.ExtractEditedFiles(turn)...,
+					)
+				}
+			}
 		}
+		records = append(records, successfulProcedureRecord{
+			SessionKey:        outcome.SessionKey,
+			OutcomeID:         outcome.OutcomeID,
+			VerifierCallRef:   callRef,
+			VerifierResultRef: resultRef,
+			VerifierTurn:      call.TurnIndex,
+			CommandClass:      commandClass,
+			RawCommand:        rawCommand,
+			MutationRefs:      mutationRefs,
+			MutationPaths:     mutationPaths,
+			EvidenceRefs:      evidenceRefs,
+			GeneratedAt:       generatedAt,
+		})
+	}
+
+	records = value.linkAdjacentProcedureRecords(records)
+	for _, episode := range buildEvidenceEpisodes(records) {
+		sourceRefs := append(
+			[]trajectory.NodeRef(nil),
+			episode.EvidenceRefs...,
+		)
 		sourceRefs = append(
 			sourceRefs,
 			value.successfulProcedureContextRefs(
-				outcome.SessionKey,
+				episode.SessionKey,
 				sourceRefs,
 			)...,
 		)
-		evidence, ok := value.evidenceSet(sourceRefs, []trajectory.Outcome{outcome})
+		outcomes := value.outcomesByID(episode.OutcomeIDs)
+		if len(outcomes) != len(episode.OutcomeIDs) {
+			continue
+		}
+		evidence, ok := value.evidenceSet(sourceRefs, outcomes)
 		if !ok {
 			continue
+		}
+		observedBehavior := "The cited verification command succeeded after the cited file mutations."
+		if len(episode.Supporting) > 0 {
+			observedBehavior = "The cited verification commands succeeded after the same cited file mutations."
 		}
 		candidate, err := newCandidate(
 			experience.CandidateSuccessfulProcedure,
 			value.projectIdentity,
-			"The cited verification command succeeded after the cited file mutations.",
+			observedBehavior,
 			"",
 			evidence,
-			[]string{outcome.OutcomeID},
+			episode.OutcomeIDs,
 			pendingProposal(
 				experience.ExperienceProcedure,
 				value.projectIdentity,
 				experience.Verifier{
 					Kind: experience.VerifierCommandSucceeded,
 					Command: &experience.CommandVerifierSpec{
-						Command:          rawCommand,
-						CommandClass:     commandClass,
+						Command:          episode.Anchor.RawCommand,
+						CommandClass:     episode.Anchor.CommandClass,
 						ScrubbingVersion: commandScrubbingVersion,
 					},
 				},
 			),
-			generatedAt,
+			episode.GeneratedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("compile successful-procedure candidate: %w", err)
@@ -267,6 +311,142 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		value.candidates[candidate.CandidateID] = candidate
 	}
 	return nil
+}
+
+func (value *compiler) linkAdjacentProcedureRecords(
+	records []successfulProcedureRecord,
+) []successfulProcedureRecord {
+	result := append([]successfulProcedureRecord(nil), records...)
+	sort.Slice(result, func(i, j int) bool {
+		return procedureRecordLess(result[i], result[j])
+	})
+	for index := 1; index < len(result); index++ {
+		previous := result[index-1]
+		current := result[index]
+		gap := current.VerifierTurn - previous.VerifierTurn
+		if previous.SessionKey != current.SessionKey ||
+			gap <= 0 ||
+			gap > maxProcedureContinuationTurns ||
+			!stringSetsOverlap(
+				previous.MutationPaths,
+				current.MutationPaths,
+			) {
+			continue
+		}
+		bridge, ok := value.procedureContinuationTurn(
+			previous,
+			current,
+		)
+		if !ok {
+			continue
+		}
+		bridgeRef := transcriptTurnNodeRef(bridge)
+		result[index].ContinuesOutcomeID = previous.OutcomeID
+		result[index].ContinuityRefs = append(
+			result[index].ContinuityRefs,
+			bridgeRef,
+		)
+		result[index].EvidenceRefs = append(
+			result[index].EvidenceRefs,
+			bridgeRef,
+		)
+	}
+	return result
+}
+
+func (value *compiler) procedureContinuationTurn(
+	previous successfulProcedureRecord,
+	current successfulProcedureRecord,
+) (transcript.Turn, bool) {
+	if previous.VerifierResultRef.TurnIndex == nil {
+		return transcript.Turn{}, false
+	}
+	turns := make([]transcript.Turn, 0)
+	for key, turn := range value.turns {
+		if key.sessionKey == current.SessionKey &&
+			turn.Role == transcript.RoleUser &&
+			strings.TrimSpace(turn.Payload.ParentToolUseID) == "" &&
+			turn.TurnIndex > *previous.VerifierResultRef.TurnIndex &&
+			turn.TurnIndex < current.VerifierTurn &&
+			procedureContinuationText(turn.Payload.Text) {
+			turns = append(turns, turn)
+		}
+	}
+	sort.Slice(turns, func(i, j int) bool {
+		return turns[i].TurnIndex < turns[j].TurnIndex
+	})
+	if len(turns) == 0 {
+		return transcript.Turn{}, false
+	}
+	return turns[0], true
+}
+
+func procedureContinuationText(value string) bool {
+	if transcriptissues.HighConfidenceCorrectionMarker(value) != "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, marker := range []string{
+		"rerun",
+		"run verification again",
+		"run the verification again",
+		"tests pass",
+		"test passes",
+		"still ",
+		"still\n",
+		"incorrectly",
+		"you missed",
+		"not fixed",
+		"failed again",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSetsOverlap(left, right []string) bool {
+	values := make(map[string]bool, len(left))
+	for _, value := range left {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			values[value] = true
+		}
+	}
+	for _, value := range right {
+		value = strings.TrimSpace(value)
+		if value != "" && values[value] {
+			return true
+		}
+	}
+	return false
+}
+
+func transcriptTurnNodeRef(turn transcript.Turn) trajectory.NodeRef {
+	index := turn.TurnIndex
+	return trajectory.NodeRef{
+		Kind:       trajectory.NodeTranscriptTurn,
+		SessionKey: turn.SessionKey,
+		TurnIndex:  &index,
+	}
+}
+
+func (value *compiler) outcomesByID(ids []string) []trajectory.Outcome {
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	result := make([]trajectory.Outcome, 0, len(ids))
+	for _, outcome := range value.outcomes {
+		if wanted[outcome.OutcomeID] {
+			result = append(result, outcome)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].OutcomeID < result[j].OutcomeID
+	})
+	return result
 }
 
 func (value *compiler) compileFailedApproaches() error {
@@ -547,6 +727,7 @@ func (value *compiler) successfulProcedureContextRefs(
 	})
 	var priorUser *transcript.Turn
 	var followingUser *transcript.Turn
+	var firstFollowingAssistant *transcript.Turn
 	var followingAssistant *transcript.Turn
 	for index := range turns {
 		turn := turns[index]
@@ -567,22 +748,30 @@ func (value *compiler) successfulProcedureContextRefs(
 			usefulProcedureContextText(turn.Payload.Text):
 			copyValue := turn
 			followingUser = &copyValue
+			firstFollowingAssistant = nil
+			followingAssistant = nil
 		case turn.Role == transcript.RoleAssistant &&
 			turn.TurnIndex > maximum &&
 			turn.TurnIndex-maximum <= 64 &&
 			usefulProcedureContextText(turn.Payload.Text):
-			if followingUser != nil &&
-				turn.TurnIndex < followingUser.TurnIndex {
-				continue
+			if followingUser != nil {
+				if turn.TurnIndex < followingUser.TurnIndex {
+					continue
+				}
+				if firstFollowingAssistant == nil {
+					copyValue := turn
+					firstFollowingAssistant = &copyValue
+				}
 			}
 			copyValue := turn
 			followingAssistant = &copyValue
 		}
 	}
-	result := make([]trajectory.NodeRef, 0, 3)
+	result := make([]trajectory.NodeRef, 0, 4)
 	for _, turn := range []*transcript.Turn{
 		priorUser,
 		followingUser,
+		firstFollowingAssistant,
 		followingAssistant,
 	} {
 		if turn != nil {
@@ -709,6 +898,8 @@ func (value *compiler) evidenceRef(
 			Kind:       experience.EvidenceTranscriptTurn,
 			SessionKey: turn.SessionKey,
 			TurnIndex:  &turnIndex,
+			TurnRole:   experience.EvidenceTurnRole(turn.Role),
+			ToolName:   turn.ToolName,
 			OccurredAt: &occurredAt,
 			Excerpt:    turnExcerpt(turn),
 		}, true

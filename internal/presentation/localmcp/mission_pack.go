@@ -545,8 +545,14 @@ func missionPackExperienceSchema() *jsonschema.Schema {
 				Type:    "integer",
 				Minimum: jsonNumberPointer(1),
 			},
-			"type":      boundedTextSchema(1, 64),
-			"guidance":  boundedTextSchema(1, 2*1024),
+			"type":          boundedTextSchema(1, 64),
+			"guidance":      boundedTextSchema(1, 2*1024),
+			"applicability": boundedTextSchema(1, 2*1024),
+			"exceptions": arraySchema(
+				boundedTextSchema(1, 2*1024),
+				0,
+				8,
+			),
 			"rationale": boundedTextSchema(1, 8*1024),
 			"verifier": closedObjectSchema(
 				map[string]*jsonschema.Schema{
@@ -567,6 +573,7 @@ func missionPackExperienceSchema() *jsonschema.Schema {
 		"version",
 		"type",
 		"guidance",
+		"applicability",
 		"rationale",
 		"verifier",
 		"authority",
