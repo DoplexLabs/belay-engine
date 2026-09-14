@@ -19,18 +19,21 @@ var evidenceEpisodeIDEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 // Semantic guidance is deliberately absent: this record only connects a
 // successful verifier to the mutation evidence it checked.
 type successfulProcedureRecord struct {
-	SessionKey        string
-	OutcomeID         string
-	VerifierCallRef   trajectory.NodeRef
-	VerifierResultRef trajectory.NodeRef
-	VerifierTurn      int64
-	CommandClass      string
-	RawCommand        string
-	UserRequested     bool
-	ProjectConfigured bool
-	MutationRefs      []trajectory.NodeRef
-	EvidenceRefs      []trajectory.NodeRef
-	GeneratedAt       time.Time
+	SessionKey         string
+	OutcomeID          string
+	ContinuesOutcomeID string
+	VerifierCallRef    trajectory.NodeRef
+	VerifierResultRef  trajectory.NodeRef
+	VerifierTurn       int64
+	CommandClass       string
+	RawCommand         string
+	UserRequested      bool
+	ProjectConfigured  bool
+	MutationRefs       []trajectory.NodeRef
+	MutationPaths      []string
+	ContinuityRefs     []trajectory.NodeRef
+	EvidenceRefs       []trajectory.NodeRef
+	GeneratedAt        time.Time
 }
 
 type evidenceEpisode struct {
@@ -77,10 +80,14 @@ func buildEvidenceEpisodes(
 	for left := range records {
 		for right := left + 1; right < len(records); right++ {
 			if records[left].SessionKey == records[right].SessionKey &&
-				nodeRefsOverlap(
+				(nodeRefsOverlap(
 					records[left].MutationRefs,
 					records[right].MutationRefs,
-				) {
+				) ||
+					records[right].ContinuesOutcomeID ==
+						records[left].OutcomeID ||
+					records[left].ContinuesOutcomeID ==
+						records[right].OutcomeID) {
 				union(left, right)
 			}
 		}
@@ -121,6 +128,9 @@ func normalizeProcedureRecords(
 	for _, record := range input {
 		record.SessionKey = strings.TrimSpace(record.SessionKey)
 		record.OutcomeID = strings.TrimSpace(record.OutcomeID)
+		record.ContinuesOutcomeID = strings.TrimSpace(
+			record.ContinuesOutcomeID,
+		)
 		record.CommandClass = strings.TrimSpace(record.CommandClass)
 		record.RawCommand = strings.TrimSpace(record.RawCommand)
 		record.GeneratedAt = record.GeneratedAt.UTC().Round(0)
@@ -131,6 +141,13 @@ func normalizeProcedureRecords(
 		record.VerifierTurn = *record.VerifierCallRef.TurnIndex
 		record.MutationRefs = normalizeEpisodeNodeRefs(
 			record.MutationRefs,
+			func(ref trajectory.NodeRef) bool {
+				return validEpisodeTurnRef(ref, record.SessionKey)
+			},
+		)
+		record.MutationPaths = normalizeStrings(record.MutationPaths)
+		record.ContinuityRefs = normalizeEpisodeNodeRefs(
+			record.ContinuityRefs,
 			func(ref trajectory.NodeRef) bool {
 				return validEpisodeTurnRef(ref, record.SessionKey)
 			},
@@ -178,6 +195,7 @@ func newEvidenceEpisode(
 	for _, record := range records {
 		mutationRefs = append(mutationRefs, record.MutationRefs...)
 		evidenceRefs = append(evidenceRefs, record.EvidenceRefs...)
+		evidenceRefs = append(evidenceRefs, record.ContinuityRefs...)
 		evidenceRefs = append(
 			evidenceRefs,
 			record.VerifierCallRef,
@@ -301,31 +319,37 @@ func procedureRecordLess(
 
 func procedureRecordKey(record successfulProcedureRecord) string {
 	encoded, err := json.Marshal(struct {
-		SessionKey        string
-		OutcomeID         string
-		VerifierCallRef   trajectory.NodeRef
-		VerifierResultRef trajectory.NodeRef
-		VerifierTurn      int64
-		CommandClass      string
-		RawCommand        string
-		UserRequested     bool
-		ProjectConfigured bool
-		MutationRefs      []trajectory.NodeRef
-		EvidenceRefs      []trajectory.NodeRef
-		GeneratedAt       time.Time
+		SessionKey         string
+		OutcomeID          string
+		ContinuesOutcomeID string
+		VerifierCallRef    trajectory.NodeRef
+		VerifierResultRef  trajectory.NodeRef
+		VerifierTurn       int64
+		CommandClass       string
+		RawCommand         string
+		UserRequested      bool
+		ProjectConfigured  bool
+		MutationRefs       []trajectory.NodeRef
+		MutationPaths      []string
+		ContinuityRefs     []trajectory.NodeRef
+		EvidenceRefs       []trajectory.NodeRef
+		GeneratedAt        time.Time
 	}{
-		SessionKey:        record.SessionKey,
-		OutcomeID:         record.OutcomeID,
-		VerifierCallRef:   record.VerifierCallRef,
-		VerifierResultRef: record.VerifierResultRef,
-		VerifierTurn:      record.VerifierTurn,
-		CommandClass:      record.CommandClass,
-		RawCommand:        record.RawCommand,
-		UserRequested:     record.UserRequested,
-		ProjectConfigured: record.ProjectConfigured,
-		MutationRefs:      record.MutationRefs,
-		EvidenceRefs:      record.EvidenceRefs,
-		GeneratedAt:       record.GeneratedAt,
+		SessionKey:         record.SessionKey,
+		OutcomeID:          record.OutcomeID,
+		ContinuesOutcomeID: record.ContinuesOutcomeID,
+		VerifierCallRef:    record.VerifierCallRef,
+		VerifierResultRef:  record.VerifierResultRef,
+		VerifierTurn:       record.VerifierTurn,
+		CommandClass:       record.CommandClass,
+		RawCommand:         record.RawCommand,
+		UserRequested:      record.UserRequested,
+		ProjectConfigured:  record.ProjectConfigured,
+		MutationRefs:       record.MutationRefs,
+		MutationPaths:      record.MutationPaths,
+		ContinuityRefs:     record.ContinuityRefs,
+		EvidenceRefs:       record.EvidenceRefs,
+		GeneratedAt:        record.GeneratedAt,
 	})
 	if err != nil {
 		panic(err)

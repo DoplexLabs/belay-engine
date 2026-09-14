@@ -22,15 +22,16 @@ import (
 )
 
 const (
-	ExtractorVersion         = "belay.experience-candidate.det.v5"
-	maxCandidateEvidenceRefs = 32
-	maxCandidateOutcomeRefs  = 16
-	maxCandidateExcerptBytes = 16 * 1024
-	commandScrubbingVersion  = "belay.redaction.v1"
-	pendingSemanticGuidance  = "Pending semantic compilation; do not apply as agent guidance."
-	pendingSemanticRationale = "Deterministic evidence establishes a candidate family only; semantic guidance has not been generated."
-	pendingSemanticScope     = "Applicability has not yet been semantically compiled beyond the cited project evidence."
-	observationOnlyVerifier  = "Retain the cited observations for later semantic compilation and user review."
+	ExtractorVersion              = "belay.experience-candidate.det.v6"
+	maxCandidateEvidenceRefs      = 32
+	maxCandidateOutcomeRefs       = 16
+	maxCandidateExcerptBytes      = 16 * 1024
+	maxProcedureContinuationTurns = 64
+	commandScrubbingVersion       = "belay.redaction.v1"
+	pendingSemanticGuidance       = "Pending semantic compilation; do not apply as agent guidance."
+	pendingSemanticRationale      = "Deterministic evidence establishes a candidate family only; semantic guidance has not been generated."
+	pendingSemanticScope          = "Applicability has not yet been semantically compiled beyond the cited project evidence."
+	observationOnlyVerifier       = "Retain the cited observations for later semantic compilation and user review."
 )
 
 type Input struct {
@@ -226,6 +227,7 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		}
 		evidenceRefs := []trajectory.NodeRef{callRef, resultRef}
 		mutationRefs := make([]trajectory.NodeRef, 0)
+		mutationPaths := make([]string, 0)
 		generatedAt := maxTime(outcome.OccurredAt, call.OccurredAt, result.OccurredAt)
 		for _, edge := range verifies {
 			evidenceRefs = append(evidenceRefs, edge.SourceRefs...)
@@ -235,6 +237,10 @@ func (value *compiler) compileSuccessfulProcedures() error {
 				if ok && turn.Role == transcript.RoleToolCall &&
 					len(transcriptissues.ExtractEditedFiles(turn)) > 0 {
 					mutationRefs = append(mutationRefs, ref)
+					mutationPaths = append(
+						mutationPaths,
+						transcriptissues.ExtractEditedFiles(turn)...,
+					)
 				}
 			}
 		}
@@ -247,11 +253,13 @@ func (value *compiler) compileSuccessfulProcedures() error {
 			CommandClass:      commandClass,
 			RawCommand:        rawCommand,
 			MutationRefs:      mutationRefs,
+			MutationPaths:     mutationPaths,
 			EvidenceRefs:      evidenceRefs,
 			GeneratedAt:       generatedAt,
 		})
 	}
 
+	records = value.linkAdjacentProcedureRecords(records)
 	for _, episode := range buildEvidenceEpisodes(records) {
 		sourceRefs := append(
 			[]trajectory.NodeRef(nil),
@@ -303,6 +311,125 @@ func (value *compiler) compileSuccessfulProcedures() error {
 		value.candidates[candidate.CandidateID] = candidate
 	}
 	return nil
+}
+
+func (value *compiler) linkAdjacentProcedureRecords(
+	records []successfulProcedureRecord,
+) []successfulProcedureRecord {
+	result := append([]successfulProcedureRecord(nil), records...)
+	sort.Slice(result, func(i, j int) bool {
+		return procedureRecordLess(result[i], result[j])
+	})
+	for index := 1; index < len(result); index++ {
+		previous := result[index-1]
+		current := result[index]
+		gap := current.VerifierTurn - previous.VerifierTurn
+		if previous.SessionKey != current.SessionKey ||
+			gap <= 0 ||
+			gap > maxProcedureContinuationTurns ||
+			!stringSetsOverlap(
+				previous.MutationPaths,
+				current.MutationPaths,
+			) {
+			continue
+		}
+		bridge, ok := value.procedureContinuationTurn(
+			previous,
+			current,
+		)
+		if !ok {
+			continue
+		}
+		bridgeRef := transcriptTurnNodeRef(bridge)
+		result[index].ContinuesOutcomeID = previous.OutcomeID
+		result[index].ContinuityRefs = append(
+			result[index].ContinuityRefs,
+			bridgeRef,
+		)
+		result[index].EvidenceRefs = append(
+			result[index].EvidenceRefs,
+			bridgeRef,
+		)
+	}
+	return result
+}
+
+func (value *compiler) procedureContinuationTurn(
+	previous successfulProcedureRecord,
+	current successfulProcedureRecord,
+) (transcript.Turn, bool) {
+	if previous.VerifierResultRef.TurnIndex == nil {
+		return transcript.Turn{}, false
+	}
+	turns := make([]transcript.Turn, 0)
+	for key, turn := range value.turns {
+		if key.sessionKey == current.SessionKey &&
+			turn.Role == transcript.RoleUser &&
+			strings.TrimSpace(turn.Payload.ParentToolUseID) == "" &&
+			turn.TurnIndex > *previous.VerifierResultRef.TurnIndex &&
+			turn.TurnIndex < current.VerifierTurn &&
+			procedureContinuationText(turn.Payload.Text) {
+			turns = append(turns, turn)
+		}
+	}
+	sort.Slice(turns, func(i, j int) bool {
+		return turns[i].TurnIndex < turns[j].TurnIndex
+	})
+	if len(turns) == 0 {
+		return transcript.Turn{}, false
+	}
+	return turns[0], true
+}
+
+func procedureContinuationText(value string) bool {
+	if transcriptissues.HighConfidenceCorrectionMarker(value) != "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, marker := range []string{
+		"rerun",
+		"run verification again",
+		"run the verification again",
+		"tests pass",
+		"test passes",
+		"still ",
+		"still\n",
+		"incorrectly",
+		"you missed",
+		"not fixed",
+		"failed again",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSetsOverlap(left, right []string) bool {
+	values := make(map[string]bool, len(left))
+	for _, value := range left {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			values[value] = true
+		}
+	}
+	for _, value := range right {
+		value = strings.TrimSpace(value)
+		if value != "" && values[value] {
+			return true
+		}
+	}
+	return false
+}
+
+func transcriptTurnNodeRef(turn transcript.Turn) trajectory.NodeRef {
+	index := turn.TurnIndex
+	return trajectory.NodeRef{
+		Kind:       trajectory.NodeTranscriptTurn,
+		SessionKey: turn.SessionKey,
+		TurnIndex:  &index,
+	}
 }
 
 func (value *compiler) outcomesByID(ids []string) []trajectory.Outcome {
