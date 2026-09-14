@@ -1062,11 +1062,11 @@ func TestAnalyzeExperienceCandidatesRequestedHarnessIsIndependent(
 	}
 }
 
-func TestAnalyzeExperienceCandidatesReanalyzesV10WithV11Provenance(
+func TestAnalyzeExperienceCandidatesReanalyzesV11WithV12Provenance(
 	t *testing.T,
 ) {
-	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV11 {
-		t.Fatalf("experience prompt version = %q, want v11", ExperiencePromptVersion)
+	if ExperiencePromptVersion != experience.SemanticProposalPromptVersionV12 {
+		t.Fatalf("experience prompt version = %q, want v12", ExperiencePromptVersion)
 	}
 	candidate := experienceSemanticTestCandidate("prompt-upgrade")
 	store := &experienceSemanticTestStore{
@@ -1075,7 +1075,7 @@ func TestAnalyzeExperienceCandidatesReanalyzesV10WithV11Provenance(
 			experienceSemanticExistingKey(
 				candidate.CandidateID,
 				experience.HarnessClaude,
-				experience.SemanticProposalPromptVersionV10,
+				experience.SemanticProposalPromptVersionV11,
 			): true,
 		},
 	}
@@ -1100,15 +1100,76 @@ func TestAnalyzeExperienceCandidatesReanalyzesV10WithV11Provenance(
 		report.ProposalsInserted != 1 || len(store.stored) != 1 ||
 		store.stored[0].Proposal == nil ||
 		store.stored[0].Proposal.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV11 ||
+			experience.SemanticProposalPromptVersionV12 ||
 		store.stored[0].Decision.Provenance.PromptVersion !=
-			experience.SemanticProposalPromptVersionV11 {
+			experience.SemanticProposalPromptVersionV12 {
 		t.Fatalf(
 			"prompt-upgrade report/store/error = %+v/%+v/%v",
 			report,
 			store.stored,
 			err,
 		)
+	}
+}
+
+func TestSemanticProposalPreservesUserRuleAndExceptionBoundary(t *testing.T) {
+	candidate := experienceSemanticTestCandidate("boundary")
+	candidate.Family = experience.CandidateSuccessfulProcedure
+	candidate.Evidence.Refs[0].TurnRole = experience.EvidenceTurnUser
+	candidate.Evidence.Refs[0].Excerpt =
+		"Rule: Every lease-protected write must carry a monotonically increasing fencing token. " +
+			"Exception: A passive observer that performs no protected write does not require a fencing token."
+	candidate.Evidence.Refs[1].TurnRole = experience.EvidenceTurnAssistant
+	candidate.Evidence.Refs[1].Excerpt =
+		"Fence writes, but observers must accept and ignore stale tokens."
+	candidate.Evidence.EvidenceSetID = candidate.Evidence.DeterministicID()
+
+	excerpts := boundedExperienceSemanticExcerpts(candidate)
+	if len(excerpts) != 2 {
+		t.Fatalf("boundary excerpts = %+v", excerpts)
+	}
+	userRef := excerpts[0].EvidenceRefID
+	assistantRef := excerpts[1].EvidenceRefID
+	if excerpts[0].TurnRole != experience.EvidenceTurnUser {
+		userRef, assistantRef = assistantRef, userRef
+	}
+
+	supported := experienceSemanticProposeOutputCandidate{
+		Guidance: "Every lease-protected write must carry a monotonically increasing fencing token.",
+		Exceptions: []string{
+			"A passive observer that performs no protected write does not require a fencing token.",
+		},
+	}
+	support := &experience.EvidenceSupport{
+		GuidanceRefs:  []string{userRef},
+		ExceptionRefs: [][]string{{userRef}},
+		VerifierRefs:  []string{assistantRef},
+	}
+	if err := semanticProposalPreservesEvidenceBoundaries(
+		candidate,
+		supported,
+		support,
+	); err != nil {
+		t.Fatalf("exact user boundary rejected: %v", err)
+	}
+
+	harmful := supported
+	harmful.Guidance =
+		"Fence every write, but accept and ignore any token passed to an observer."
+	harmful.Exceptions = []string{
+		"A passive observer must not reject a stale token.",
+	}
+	harmfulSupport := &experience.EvidenceSupport{
+		GuidanceRefs:  []string{assistantRef},
+		ExceptionRefs: [][]string{{assistantRef}},
+		VerifierRefs:  []string{assistantRef},
+	}
+	if err := semanticProposalPreservesEvidenceBoundaries(
+		candidate,
+		harmful,
+		harmfulSupport,
+	); !errors.Is(err, errExperienceSemanticEvidenceSupport) {
+		t.Fatalf("strengthened assistant restatement error = %v", err)
 	}
 }
 

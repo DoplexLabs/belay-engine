@@ -464,6 +464,12 @@ func prepareExperienceSemanticPrompt(
 			"repository checks. " +
 			"Preserve every explicit qualification or exception that materially limits " +
 			"the reusable behavior; never broaden a rule by dropping its exception. " +
+			"For successful_procedure candidates, copy the reusable rule into guidance " +
+			"as an exact contiguous quote from its cited evidence. Put limiting " +
+			"exceptions only in exceptions, each as an exact contiguous quote from its " +
+			"cited evidence. When a user excerpt explicitly labels a Rule or Exception, " +
+			"that user wording is authoritative: do not merge it with an assistant " +
+			"restatement, add consequences, or strengthen the exception. " +
 			"Every proposed guidance clause, every exception, and the verifier must cite " +
 			"evidence_ref_id values from that same candidate. Never cite another " +
 			"candidate, invent an ID, or emit an unsupported clause. If the candidate " +
@@ -1120,6 +1126,13 @@ func semanticProposalContent(
 	if err != nil {
 		return experience.ExperienceProposal{}, err
 	}
+	if err := semanticProposalPreservesEvidenceBoundaries(
+		candidate,
+		value,
+		evidenceSupport,
+	); err != nil {
+		return experience.ExperienceProposal{}, err
+	}
 	conditions := make([]experience.DeterministicCondition, 0, 1)
 	if len(value.Applicability.PathHints) > 0 {
 		conditions = append(conditions, experience.DeterministicCondition{
@@ -1160,6 +1173,130 @@ func semanticProposalContent(
 		)
 	}
 	return proposal, nil
+}
+
+func semanticProposalPreservesEvidenceBoundaries(
+	candidate experience.Candidate,
+	value experienceSemanticProposeOutputCandidate,
+	support *experience.EvidenceSupport,
+) error {
+	if support == nil {
+		return fmt.Errorf(
+			"%w: support map is required",
+			errExperienceSemanticEvidenceSupport,
+		)
+	}
+	excerpts := boundedExperienceSemanticExcerpts(candidate)
+	byID := make(
+		map[string]experienceSemanticPromptExcerpt,
+		len(excerpts),
+	)
+	for _, excerpt := range excerpts {
+		byID[excerpt.EvidenceRefID] = excerpt
+	}
+
+	if candidate.Family == experience.CandidateSuccessfulProcedure {
+		authoritative := authoritativeSemanticBoundaryRefs(
+			excerpts,
+			"rule:",
+		)
+		refs := support.GuidanceRefs
+		if len(authoritative) > 0 {
+			refs = intersectSemanticEvidenceRefs(refs, authoritative)
+		}
+		if !semanticTextQuotedByEvidence(value.Guidance, refs, byID) {
+			return fmt.Errorf(
+				"%w: successful-procedure guidance is not an exact cited evidence quote",
+				errExperienceSemanticEvidenceSupport,
+			)
+		}
+	}
+
+	authoritativeExceptions := authoritativeSemanticBoundaryRefs(
+		excerpts,
+		"exception:",
+	)
+	for index, exception := range value.Exceptions {
+		refs := support.ExceptionRefs[index]
+		if len(authoritativeExceptions) > 0 {
+			refs = intersectSemanticEvidenceRefs(
+				refs,
+				authoritativeExceptions,
+			)
+		}
+		if !semanticTextQuotedByEvidence(exception, refs, byID) {
+			return fmt.Errorf(
+				"%w: exception %d is not an exact cited evidence quote",
+				errExperienceSemanticEvidenceSupport,
+				index,
+			)
+		}
+	}
+	return nil
+}
+
+func authoritativeSemanticBoundaryRefs(
+	excerpts []experienceSemanticPromptExcerpt,
+	marker string,
+) []string {
+	marker = strings.ToLower(strings.TrimSpace(marker))
+	refs := make([]string, 0)
+	for _, excerpt := range excerpts {
+		if excerpt.TurnRole != experience.EvidenceTurnUser ||
+			!strings.Contains(
+				strings.ToLower(excerpt.Text),
+				marker,
+			) {
+			continue
+		}
+		refs = append(refs, excerpt.EvidenceRefID)
+	}
+	return refs
+}
+
+func intersectSemanticEvidenceRefs(
+	refs []string,
+	allowed []string,
+) []string {
+	allow := make(map[string]bool, len(allowed))
+	for _, ref := range allowed {
+		allow[ref] = true
+	}
+	result := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if allow[ref] {
+			result = append(result, ref)
+		}
+	}
+	return result
+}
+
+func semanticTextQuotedByEvidence(
+	value string,
+	refs []string,
+	excerpts map[string]experienceSemanticPromptExcerpt,
+) bool {
+	value = normalizeSemanticEvidenceQuote(value)
+	if value == "" {
+		return false
+	}
+	for _, ref := range refs {
+		excerpt, found := excerpts[ref]
+		if !found {
+			continue
+		}
+		if strings.Contains(
+			normalizeSemanticEvidenceQuote(excerpt.Text),
+			value,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeSemanticEvidenceQuote(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func semanticProposalEvidenceSupport(
