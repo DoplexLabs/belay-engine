@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	ExtractorVersion         = "belay.experience-candidate.det.v4"
+	ExtractorVersion         = "belay.experience-candidate.det.v5"
 	maxCandidateEvidenceRefs = 32
 	maxCandidateOutcomeRefs  = 16
 	maxCandidateExcerptBytes = 16 * 1024
@@ -600,6 +600,7 @@ func (value *compiler) successfulProcedureContextRefs(
 	})
 	var priorUser *transcript.Turn
 	var followingUser *transcript.Turn
+	var firstFollowingAssistant *transcript.Turn
 	var followingAssistant *transcript.Turn
 	for index := range turns {
 		turn := turns[index]
@@ -620,22 +621,30 @@ func (value *compiler) successfulProcedureContextRefs(
 			usefulProcedureContextText(turn.Payload.Text):
 			copyValue := turn
 			followingUser = &copyValue
+			firstFollowingAssistant = nil
+			followingAssistant = nil
 		case turn.Role == transcript.RoleAssistant &&
 			turn.TurnIndex > maximum &&
 			turn.TurnIndex-maximum <= 64 &&
 			usefulProcedureContextText(turn.Payload.Text):
-			if followingUser != nil &&
-				turn.TurnIndex < followingUser.TurnIndex {
-				continue
+			if followingUser != nil {
+				if turn.TurnIndex < followingUser.TurnIndex {
+					continue
+				}
+				if firstFollowingAssistant == nil {
+					copyValue := turn
+					firstFollowingAssistant = &copyValue
+				}
 			}
 			copyValue := turn
 			followingAssistant = &copyValue
 		}
 	}
-	result := make([]trajectory.NodeRef, 0, 3)
+	result := make([]trajectory.NodeRef, 0, 4)
 	for _, turn := range []*transcript.Turn{
 		priorUser,
 		followingUser,
+		firstFollowingAssistant,
 		followingAssistant,
 	} {
 		if turn != nil {

@@ -595,13 +595,10 @@ func boundedExperienceSemanticExcerpts(
 	if len(assistantRefs) > 0 {
 		appendRef(assistantRefs[len(assistantRefs)-1])
 	}
-	if anchorFound {
-		if explanation, ok := preVerifierAssistantEvidenceRef(
-			anchorCall,
-			values,
-		); ok {
-			appendRef(explanation)
-		}
+	if explanation, ok := assistantResponseToLatestUserEvidenceRef(
+		values,
+	); ok {
+		appendRef(explanation)
 	}
 
 	for _, ref := range values {
@@ -760,21 +757,17 @@ func verifierResultEvidenceRef(
 	return experience.EvidenceRef{}, false
 }
 
-func preVerifierAssistantEvidenceRef(
-	call experience.EvidenceRef,
+func assistantResponseToLatestUserEvidenceRef(
 	refs []experience.EvidenceRef,
 ) (experience.EvidenceRef, bool) {
-	if call.TurnIndex == nil {
-		return experience.EvidenceRef{}, false
-	}
+	sessionKey := ""
 	var latestUserTurn int64
 	userFound := false
 	for _, ref := range refs {
-		if ref.SessionKey == call.SessionKey &&
-			ref.TurnRole == experience.EvidenceTurnUser &&
+		if ref.TurnRole == experience.EvidenceTurnUser &&
 			ref.TurnIndex != nil &&
-			*ref.TurnIndex < *call.TurnIndex &&
 			(!userFound || *ref.TurnIndex > latestUserTurn) {
+			sessionKey = ref.SessionKey
 			latestUserTurn = *ref.TurnIndex
 			userFound = true
 		}
@@ -782,13 +775,11 @@ func preVerifierAssistantEvidenceRef(
 	if !userFound {
 		return experience.EvidenceRef{}, false
 	}
-	for index := len(refs) - 1; index >= 0; index-- {
-		ref := refs[index]
-		if ref.SessionKey == call.SessionKey &&
+	for _, ref := range refs {
+		if ref.SessionKey == sessionKey &&
 			ref.TurnRole == experience.EvidenceTurnAssistant &&
 			ref.TurnIndex != nil &&
-			*ref.TurnIndex > latestUserTurn &&
-			*ref.TurnIndex < *call.TurnIndex {
+			*ref.TurnIndex > latestUserTurn {
 			return ref, true
 		}
 	}

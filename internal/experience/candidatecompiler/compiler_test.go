@@ -162,13 +162,19 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 	followingUser := candidateTurn("ses_success", 4, transcript.RoleUser)
 	followingUser.Payload.Text =
 		"No partial migrations. Keep the schema change atomic."
-	followingAssistant := candidateTurn(
+	ruleAssistant := candidateTurn(
 		"ses_success",
 		5,
 		transcript.RoleAssistant,
 	)
-	followingAssistant.Payload.Text =
+	ruleAssistant.Payload.Text =
 		"The reusable convention is one rollback-safe migration transaction."
+	finalAssistant := candidateTurn(
+		"ses_success",
+		6,
+		transcript.RoleAssistant,
+	)
+	finalAssistant.Payload.Text = "Implemented and verified."
 	editRef := candidateTurnRef(edit)
 	verifyRef := candidateTurnRef(verify)
 	resultRef := candidateTurnRef(result)
@@ -202,7 +208,8 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 			verify,
 			result,
 			followingUser,
-			followingAssistant,
+			ruleAssistant,
+			finalAssistant,
 		},
 		Edges:    []trajectory.Edge{verifies},
 		Outcomes: []trajectory.Outcome{pass},
@@ -221,7 +228,7 @@ func TestCompileSuccessfulProcedureRequiresVerificationPassAndMutationSequence(t
 			contextIndexes[*ref.TurnIndex] = true
 		}
 	}
-	for _, want := range []int64{0, 4, 5} {
+	for _, want := range []int64{0, 4, 5, 6} {
 		if !contextIndexes[want] {
 			t.Fatalf(
 				"successful procedure evidence lacks context turn %d: %+v",
