@@ -229,9 +229,8 @@ func TestBoundedExperienceSemanticExcerptsPrioritizesEvidenceRoles(t *testing.T)
 		},
 	}
 	candidate.Evidence.Refs = []experience.EvidenceRef{
-		ref(8, experience.EvidenceTurnAssistant, "", "intermediate noise"),
+		ref(8, experience.EvidenceTurnAssistant, "", "Explain the reusable rule."),
 		ref(11, experience.EvidenceTurnToolResult, "Bash", "ok"),
-		ref(3, experience.EvidenceTurnToolCall, "Write", `{"file_path":"b.go"}`),
 		ref(0, experience.EvidenceTurnUser, "", "Implement the bounded change."),
 		ref(12, experience.EvidenceTurnAssistant, "", "Implemented and verified."),
 		ref(2, experience.EvidenceTurnUser, "", "Keep retries idempotent."),
@@ -254,8 +253,8 @@ func TestBoundedExperienceSemanticExcerptsPrioritizesEvidenceRoles(t *testing.T)
 		0:  true,
 		1:  true,
 		2:  true,
-		3:  true,
 		4:  true,
+		8:  true,
 		10: true,
 		11: true,
 		12: true,
