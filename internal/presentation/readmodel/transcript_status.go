@@ -59,6 +59,10 @@ func WithTranscriptRepository(repository TranscriptRepository) Option {
 	return func(service *Service) {
 		if service != nil {
 			service.transcriptRepository = repository
+			if insights, ok := repository.(UserInsightRepository); ok &&
+				service.userInsightRepository == nil {
+				service.userInsightRepository = insights
+			}
 		}
 	}
 }

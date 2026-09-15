@@ -53,6 +53,13 @@
           >
             <span id="nav-sessions-label">Sessions</span>
           </button>
+          <button
+            class="primary-nav-button"
+            id="nav-habits"
+            type="button"
+          >
+            <span id="nav-habits-label">Habits</span>
+          </button>
         </nav>
 
         <div
@@ -1290,6 +1297,63 @@
           </div>
 
         </section>
+        </section>
+
+        <section
+          class="brief-workspace habits-workspace"
+          id="habits-view"
+          aria-labelledby="habits-heading"
+          hidden
+        >
+          <div class="brief-scroll">
+            <header class="brief-header">
+              <div>
+                <p class="eyebrow" id="habits-eyebrow">Belay Habits</p>
+                <h1 id="habits-heading" tabindex="-1">How you work with your agent</h1>
+                <p id="habits-window">
+                  Plain-language debriefs of your recent sessions, compared only with your own history
+                </p>
+              </div>
+              <p
+                class="brief-status"
+                id="habits-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </header>
+
+            <div class="brief-loading" id="habits-loading">
+              <span class="spinner" aria-hidden="true"></span>
+              <p id="habits-loading-text">Reading your recent sessions…</p>
+            </div>
+
+            <div class="brief-error" id="habits-error" role="alert" hidden>
+              <h2 id="habits-error-title">Habits unavailable</h2>
+              <p id="habits-error-detail">
+                Belay could not prepare your debriefs. Report, Patterns, and Sessions remain available.
+              </p>
+              <button class="secondary-button" id="habits-retry" type="button">
+                Try again
+              </button>
+            </div>
+
+            <div class="brief-content" id="habits-content" hidden>
+              <div class="brief-empty" id="habits-empty" hidden>
+                <p>No finished sessions to debrief yet</p>
+                <small>
+                  Belay debriefs a session once its transcript is complete and it has at least two of your messages.
+                </small>
+              </div>
+              <div class="habits-list" id="habits-list"></div>
+              <details class="habits-about" id="habits-about" hidden>
+                <summary>About this data</summary>
+                <ul id="habits-limitations"></ul>
+                <p>
+                  Belay only reads your own encrypted local history. Nothing here is compared with other people, and nothing here is sent to your agent.
+                </p>
+              </details>
+            </div>
+          </div>
         </section>
 
         <div class="error-banner" id="error-banner" role="alert" hidden>

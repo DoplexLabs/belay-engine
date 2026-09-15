@@ -956,6 +956,7 @@ func newLocalHTTPServer(
 		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithFixMonitoringRepository(store),
 		readmodel.WithTranscriptRepository(store),
+		readmodel.WithUserInsightRepository(store),
 		readmodel.WithCostIssueRepository(store),
 	}
 	if len(providers) > 0 && providers[0] != nil {

@@ -130,6 +130,7 @@ func (s *Server) handler(trustedListener string) http.Handler {
 	mux.Handle("GET /v1/transcript-status", s.authorize(http.HandlerFunc(s.getTranscriptStatus)))
 	mux.Handle("GET /v1/developer-brief", s.authorize(http.HandlerFunc(s.getDeveloperBrief)))
 	mux.Handle("GET /v1/report", s.authorize(http.HandlerFunc(s.getReport)))
+	mux.Handle("GET /v1/user-insights", s.authorize(http.HandlerFunc(s.getUserInsights)))
 	if s.missionPacks != nil {
 		mux.Handle(
 			"GET /v1/mission-pack",

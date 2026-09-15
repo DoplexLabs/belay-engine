@@ -33,6 +33,7 @@ similarity, resolution, prevention, or fix success and are not exposed to MCP.
 |---|---|
 | `GET /healthz` | loopback health response |
 | `GET /v1/developer-brief` | fixed, bounded 24-hour composition over sessions and reviewed Attention |
+| `GET /v1/user-insights` | bounded per-session Habits debriefs for the human operator, read from retained transcripts only |
 | `GET /v1/sessions` | filtered, cursor-paginated local sessions |
 | `GET /v1/sessions/{id}` | one local session, metadata-only overview, and additive deterministic diagnosis |
 | `GET /v1/sessions/{id}/events` | cursor-paginated local timeline |
@@ -205,6 +206,42 @@ The top-level shape is:
 Action-card kinds are `reviewed_finding`, `evidence_gap`, `session_outcome`,
 and `failed_activity`. Next-step kinds are `open_attention_family`,
 `open_issue`, and `open_session`.
+
+## Habits (user insights)
+
+`GET /v1/user-insights` serves the browser's Habits view. It accepts only an
+optional `limit` query parameter between 1 and 25 (default 8). Any other
+parameter, a non-numeric limit, or a limit outside that range returns the
+standard `400` invalid-request problem.
+
+The response uses `schema_version=belay.read.v1`,
+`projection_version=belay.user-insights.v1`, and an `analysis_version` that
+changes whenever a rule, threshold, or piece of copy changes. It evaluates at
+most 100 recent transcript sessions and returns a debrief for at most `limit`
+of them. A session is debriefed only when its transcript coverage is
+`complete` and it holds at least two real user messages. Each debrief reads at
+most 10,000 turns of its own session; longer sessions are reported under
+`coverage.turns_truncated`.
+
+Habits is deliberately separate from issues, Attention, the Report, Mission
+Packs, and experience learning:
+
+- it reads only the encrypted transcript store and never issue projections;
+- its only comparison (`baseline`) is against the same developer's other
+  complete sessions in the same project, and it is `null` below three such
+  sessions;
+- it never writes, never feeds the agent, and is not exposed over MCP.
+
+Each session carries `outcome`, a plain-language `verdict`, at most three
+`findings`, an optional ready-made `opener`, deterministic `measurements`, and
+the `baseline`. Findings carry `tone` (`improve` or `keep`),
+`evidence_class` (`measurement` or `judgment`), plain-sentence `evidence`,
+and nullable `time_cost_ms` and `dollar_cost`. Output contains no raw
+commands, arguments, file paths, transcript prose, or event payloads.
+
+When Local has no transcript repository it returns the fixed
+`503 belay.local/user-insights-unavailable` problem with detail:
+`Belay could not read retained transcript sessions for a debrief.`
 
 ## Local session list
 
