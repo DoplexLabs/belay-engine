@@ -4799,3 +4799,196 @@ h1 {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Habits: plain-language debriefs for the human operator.
+ * Fully separate from Report, Patterns, and Sessions.
+ */
+.habits-list {
+  display: grid;
+  gap: 16px;
+}
+
+.habits-card {
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+.habits-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.habits-card-header h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.habits-card-meta {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.habits-outcome {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.habits-outcome-verified-pass {
+  border-color: var(--success-line);
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.habits-outcome-verified-fail,
+.habits-outcome-unverified-changes {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.habits-verdict {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.habits-quiet {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.habits-finding {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.habits-finding-keep {
+  border-color: var(--success-line);
+  background: var(--success-soft);
+}
+
+.habits-finding h4 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.habits-cost {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.habits-finding p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.habits-next {
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-line);
+}
+
+.habits-next strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.habits-evidence {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.habits-evidence summary {
+  color: var(--subtle);
+  cursor: pointer;
+}
+
+.habits-evidence ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.habits-evidence li {
+  margin: 2px 0;
+}
+
+.habits-judgment {
+  margin: 6px 0 0;
+  font-style: italic;
+}
+
+.habits-opener {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+
+.habits-opener h4 {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.habits-opener-text {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.habits-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.habits-about {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.habits-about summary {
+  cursor: pointer;
+}
+
+.habits-about ul {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+
+.habits-about p {
+  margin: 6px 0 0;
+}

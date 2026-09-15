@@ -112,6 +112,9 @@ boundary. The current product direction is documented in
 - `internal/storage/local`: encrypted SQLite persistence, migrations, and
   projections.
 - `internal/presentation/readmodel`: bounded product read models.
+- `internal/userinsights`: plain-language Habits debriefs for the human
+  operator, computed from one session's own turns and compared only with the
+  same developer's other sessions in the same project.
 - `internal/presentation/localhttp`: authenticated loopback API and embedded
   vanilla JavaScript browser.
 - `internal/presentation/localmcp`: local stdio MCP server and tool contracts.

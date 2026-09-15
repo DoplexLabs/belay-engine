@@ -21,6 +21,7 @@
       navBrief: "Report",
       navAttention: "Patterns",
       navSessions: "Sessions",
+      navHabits: "Habits",
       briefEyebrow: "Belay Report",
       briefLoading: "Preparing your report…",
       briefErrorTitle: "Report unavailable",
@@ -44,6 +45,7 @@
       navBrief: "Report",
       navAttention: "Patterns",
       navSessions: "Sessions",
+      navHabits: "Habits",
       briefEyebrow: "Belay Report",
       briefLoading: "Preparing your report…",
       briefErrorTitle: "Report unavailable",
@@ -275,6 +277,10 @@
     briefError: "",
     briefRequestGeneration: 0,
     briefSelectionID: "",
+    userInsights: null,
+    habitsStatus: "idle",
+    habitsError: "",
+    habitsRequestGeneration: 0,
     missionPackRequestGeneration: 0,
     missionPackCacheGeneration: 0,
     missionPackRequestController: null,
@@ -496,6 +502,20 @@
     attentionNavCount: document.querySelector("#attention-nav-count"),
     attentionView: document.querySelector("#attention-view"),
     sessionsView: document.querySelector("#sessions-view"),
+    navHabits: document.querySelector("#nav-habits"),
+    navHabitsLabel: document.querySelector("#nav-habits-label"),
+    habitsView: document.querySelector("#habits-view"),
+    habitsHeading: document.querySelector("#habits-heading"),
+    habitsStatus: document.querySelector("#habits-status"),
+    habitsLoading: document.querySelector("#habits-loading"),
+    habitsError: document.querySelector("#habits-error"),
+    habitsErrorDetail: document.querySelector("#habits-error-detail"),
+    habitsRetry: document.querySelector("#habits-retry"),
+    habitsContent: document.querySelector("#habits-content"),
+    habitsEmpty: document.querySelector("#habits-empty"),
+    habitsList: document.querySelector("#habits-list"),
+    habitsAbout: document.querySelector("#habits-about"),
+    habitsLimitations: document.querySelector("#habits-limitations"),
     attentionListPane: document.querySelector("#attention-list-pane"),
     attentionModeIssues: document.querySelector("#attention-mode-issues"),
     attentionModeSafety: document.querySelector("#attention-mode-safety"),
@@ -942,6 +962,7 @@
     elements.navBriefLabel.textContent = copy.navBrief;
     elements.navAttentionLabel.textContent = copy.navAttention;
     elements.navSessionsLabel.textContent = copy.navSessions;
+    elements.navHabitsLabel.textContent = copy.navHabits;
     elements.briefEyebrow.textContent = copy.briefEyebrow;
     elements.briefLoadingText.textContent = copy.briefLoading;
     elements.briefErrorTitle.textContent = copy.briefErrorTitle;
@@ -2590,6 +2611,13 @@
       setActiveView("sessions", true);
       if (!state.sessions.length) refreshSessions(false);
     });
+    elements.navHabits.addEventListener("click", () => {
+      setActiveView("habits", true);
+      if (state.habitsStatus === "idle") void loadUserInsights();
+    });
+    elements.habitsRetry.addEventListener("click", () => {
+      void loadUserInsights();
+    });
     elements.briefRetry.addEventListener("click", () => {
       void loadDeveloperBrief();
     });
@@ -2918,6 +2946,10 @@
     try {
       if (state.activeView === "brief") {
         await loadDeveloperBrief();
+        return;
+      }
+      if (state.activeView === "habits") {
+        await loadUserInsights();
         return;
       }
       if (state.activeView === "attention") {
@@ -3279,7 +3311,7 @@
   }
 
   function setActiveView(view, moveFocus) {
-    const next = ["brief", "attention", "sessions"].includes(view)
+    const next = ["brief", "attention", "sessions", "habits"].includes(view)
       ? view
       : "brief";
     if (next !== "attention" && state.activeView === "attention") {
@@ -3292,12 +3324,15 @@
     const briefActive = next === "brief";
     const attentionActive = next === "attention";
     const sessionsActive = next === "sessions";
+    const habitsActive = next === "habits";
     setViewVisibility(elements.briefView, briefActive);
     setViewVisibility(elements.attentionView, attentionActive);
     setViewVisibility(elements.sessionsView, sessionsActive);
+    setViewVisibility(elements.habitsView, habitsActive);
     setCurrentNavigation(elements.navBrief, briefActive);
     setCurrentNavigation(elements.navAttention, attentionActive);
     setCurrentNavigation(elements.navSessions, sessionsActive);
+    setCurrentNavigation(elements.navHabits, habitsActive);
     applyPaneAccessibility();
     if (moveFocus) {
       focusCurrentElement(
@@ -3305,7 +3340,9 @@
           ? elements.navBrief
           : attentionActive
             ? elements.navAttention
-            : elements.navSessions,
+            : sessionsActive
+              ? elements.navSessions
+              : elements.navHabits,
       );
     }
   }
@@ -10101,6 +10138,10 @@
       void loadDeveloperBrief();
       return;
     }
+    if (state.activeView === "habits") {
+      void loadUserInsights();
+      return;
+    }
     if (state.activeView === "attention") {
       refreshAttention(false);
       return;
@@ -10332,6 +10373,252 @@
   function hideError() {
     elements.errorBanner.hidden = true;
     elements.errorDetail.textContent = "";
+  }
+
+  const habitsErrorFallback =
+    "Belay could not prepare your debriefs. Report, Patterns, and Sessions remain available.";
+
+  async function loadUserInsights() {
+    const generation = ++state.habitsRequestGeneration;
+    state.habitsStatus = "loading";
+    state.habitsError = "";
+    renderUserInsights();
+    try {
+      const response = await apiGet("/v1/user-insights");
+      if (generation !== state.habitsRequestGeneration) return false;
+      state.userInsights = requireUserInsights(response);
+      state.habitsStatus = "ready";
+      renderUserInsights();
+      return true;
+    } catch (error) {
+      if (generation !== state.habitsRequestGeneration) return false;
+      state.userInsights = null;
+      state.habitsStatus = "error";
+      state.habitsError = customerErrorMessage(error, habitsErrorFallback);
+      renderUserInsights();
+      return false;
+    }
+  }
+
+  function requireUserInsights(response) {
+    if (
+      !isRecord(response) ||
+      readText(response.projection_version) !== "belay.user-insights.v1" ||
+      !Array.isArray(response.sessions) ||
+      !isRecord(response.coverage)
+    ) {
+      throw new Error("Local API returned invalid habits.");
+    }
+    const sessions = response.sessions
+      .slice(0, 25)
+      .filter(isRecord)
+      .map((session) => ({
+        ...session,
+        findings: Array.isArray(session.findings)
+          ? session.findings.filter(isRecord).slice(0, 3)
+          : [],
+        baseline: isRecord(session.baseline) ? session.baseline : null,
+      }));
+    const limitations = Array.isArray(response.limitations)
+      ? response.limitations.filter((note) => typeof note === "string" && note)
+      : [];
+    return { ...response, sessions, limitations };
+  }
+
+  function renderUserInsights() {
+    const loading = state.habitsStatus === "loading";
+    const failed = state.habitsStatus === "error";
+    const insights = state.userInsights;
+    elements.habitsLoading.hidden = !loading;
+    elements.habitsError.hidden = !failed;
+    elements.habitsContent.hidden = !insights || loading || failed;
+    elements.habitsErrorDetail.textContent =
+      state.habitsError || habitsErrorFallback;
+    if (!insights) {
+      elements.habitsStatus.textContent = "";
+      return;
+    }
+    const count = insights.sessions.length;
+    elements.habitsHeading.textContent =
+      count === 0
+        ? "No finished sessions to debrief yet"
+        : count === 1
+          ? "Your last session, debriefed"
+          : `Your last ${count} sessions, debriefed`;
+    elements.habitsStatus.textContent = habitsCoverageText(insights.coverage);
+    elements.habitsEmpty.hidden = count > 0;
+    const cards = document.createDocumentFragment();
+    insights.sessions.forEach((session) => {
+      cards.appendChild(renderHabitsSession(session));
+    });
+    elements.habitsList.replaceChildren(cards);
+    const notes = document.createDocumentFragment();
+    insights.limitations.forEach((note) => {
+      notes.appendChild(createElement("li", "", note));
+    });
+    elements.habitsLimitations.replaceChildren(notes);
+    elements.habitsAbout.hidden = insights.limitations.length === 0;
+  }
+
+  function habitsCoverageText(coverage) {
+    const evaluated = Number(coverage.evaluated_sessions);
+    const candidates = Number(coverage.candidate_sessions);
+    if (!Number.isFinite(evaluated) || !Number.isFinite(candidates)) return "";
+    const parts = [`${evaluated} of ${candidates} recent sessions debriefed`];
+    const inProgress = Number(coverage.skipped_incomplete);
+    if (Number.isFinite(inProgress) && inProgress > 0) {
+      parts.push(`${inProgress} still in progress`);
+    }
+    return parts.join(" · ");
+  }
+
+  function renderHabitsSession(session) {
+    const card = createElement("article", "habits-card");
+    card.dataset.sessionKey = readText(session.session_key);
+    const header = createElement("header", "habits-card-header");
+    const identity = createElement("div");
+    identity.appendChild(
+      createElement("h3", "", readText(session.project) || "Untitled project"),
+    );
+    const finished = parseDate(session.ended_at || session.started_at);
+    const meta = [
+      displayHarness(session.agent),
+      finished && finished.getFullYear() > 2000 ? formatRelativeTime(finished) : "",
+      habitsDuration(session.duration_ms),
+      habitsDollars(session.cost_usd),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    identity.appendChild(createElement("p", "habits-card-meta", meta));
+    header.appendChild(identity);
+    header.appendChild(
+      createElement(
+        "span",
+        `habits-outcome habits-outcome-${habitsOutcomeClass(session.outcome)}`,
+        habitsOutcomeLabel(session.outcome),
+      ),
+    );
+    card.appendChild(header);
+    card.appendChild(createElement("p", "habits-verdict", readText(session.verdict)));
+    if (!session.findings.length) {
+      card.appendChild(
+        createElement("p", "habits-quiet", "Nothing stood out in this session."),
+      );
+    }
+    session.findings.forEach((finding) => {
+      card.appendChild(renderHabitsFinding(finding));
+    });
+    const opener = readText(session.opener);
+    if (opener) {
+      const block = createElement("div", "habits-opener");
+      block.appendChild(
+        createElement("h4", "", "Ready-made opening for your next session"),
+      );
+      block.appendChild(createElement("p", "habits-opener-text", opener));
+      const actions = createElement("div", "habits-actions");
+      const copy = createElement("button", "secondary-button", "Copy opening");
+      copy.type = "button";
+      copy.addEventListener("click", () => {
+        void copyText(opener, copy);
+      });
+      actions.appendChild(copy);
+      block.appendChild(actions);
+      card.appendChild(block);
+    }
+    return card;
+  }
+
+  function renderHabitsFinding(finding) {
+    const tone = readText(finding.tone) === "keep" ? "keep" : "improve";
+    const block = createElement("section", `habits-finding habits-finding-${tone}`);
+    const heading = createElement("h4");
+    heading.appendChild(createElement("span", "", readText(finding.title)));
+    const cost = habitsCostLabel(finding);
+    if (cost) heading.appendChild(createElement("span", "habits-cost", cost));
+    block.appendChild(heading);
+    block.appendChild(createElement("p", "", readText(finding.summary)));
+    const next = createElement("p", "habits-next");
+    next.appendChild(
+      createElement("strong", "", tone === "keep" ? "Keep it up: " : "Next time: "),
+    );
+    next.appendChild(document.createTextNode(readText(finding.next_time)));
+    block.appendChild(next);
+    const evidence = Array.isArray(finding.evidence)
+      ? finding.evidence.filter((line) => typeof line === "string" && line.trim())
+      : [];
+    if (evidence.length) {
+      const details = createElement("details", "habits-evidence");
+      details.appendChild(createElement("summary", "", "How Belay knows"));
+      const list = createElement("ul");
+      evidence.forEach((line) => {
+        list.appendChild(createElement("li", "", line));
+      });
+      details.appendChild(list);
+      if (readText(finding.evidence_class) === "judgment") {
+        details.appendChild(
+          createElement(
+            "p",
+            "habits-judgment",
+            "This one is partly a judgment call. If the time was spent on purpose, ignore it.",
+          ),
+        );
+      }
+      block.appendChild(details);
+    }
+    return block;
+  }
+
+  function habitsCostLabel(finding) {
+    const parts = [];
+    const milliseconds = Number(finding.time_cost_ms);
+    if (Number.isFinite(milliseconds) && milliseconds >= 60000) {
+      parts.push(`~${habitsDuration(milliseconds)}`);
+    }
+    const dollars = Number(finding.dollar_cost);
+    if (Number.isFinite(dollars) && dollars >= 0.5) {
+      parts.push(`~${formatReportDollars(dollars)}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function habitsDuration(value) {
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "";
+    const minutes = Math.round(milliseconds / 60000);
+    if (minutes < 1) return "under a minute";
+    const hours = Math.floor(minutes / 60);
+    if (hours) return `${hours}h ${minutes % 60}m`;
+    return `${minutes}m`;
+  }
+
+  function habitsDollars(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount <= 0) return "";
+    return formatReportDollars(amount);
+  }
+
+  function habitsOutcomeLabel(value) {
+    switch (readText(value)) {
+      case "verified_pass":
+        return "Checks passed";
+      case "verified_fail":
+        return "Last check failed";
+      case "unverified_changes":
+        return "Unchecked changes";
+      case "no_changes":
+        return "No file changes";
+      default:
+        return "Outcome not reported";
+    }
+  }
+
+  function habitsOutcomeClass(value) {
+    const outcome = readText(value);
+    return ["verified_pass", "verified_fail", "unverified_changes", "no_changes"].includes(
+      outcome,
+    )
+      ? outcome.replace(/_/g, "-")
+      : "unknown";
   }
 
   function createElement(tagName, className, text) {
