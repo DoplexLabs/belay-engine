@@ -1,22 +1,25 @@
 # Belay Engine
 
-Belay Local is private, endpoint-first observability for an individual developer
-using AI coding agents. It combines minimized canonical activity with
+Belay Engine is the open-source core of Belay Local: private, endpoint-first
+observability for an individual developer using AI coding agents. It combines minimized canonical activity with
 secret-scrubbed transcript content in an encrypted on-device store, then
 exposes bounded evidence through a loopback browser and local stdio MCP. Its
 governed workflows can record narrowly scoped fixes, Mission Pack acceptance,
 and experience-learning decisions; Belay does not execute a command or write a
 proposed change to a project.
 
-This repository contains the MIT-licensed Belay edge. Belay Teams is a
-separate product and is not included in this Local alpha.
+This repository is MIT-licensed and developed in the open. Issues, design
+discussions, and pull requests are welcome; see `CONTRIBUTING.md` for the
+boundaries that keep Belay local-only and fail-open. Belay Teams is a separate
+product and is not included in this Local alpha.
 
 ## Belay Local Developer Alpha
 
-The prepared version is `0.0.1-alpha.5`. This founder-led external alpha is
-unsigned, unnotarized, and Apple Silicon-only. Publication remains gated on the
-full test suite, checksum verification, packaged smoke testing, and explicit
-human authorization. A later broadly advertised release remains gated on Apple
+The prepared version is `0.0.1-alpha.5`. This open-source community alpha is
+unsigned, unnotarized, and Apple Silicon-only. Anyone can build it from source,
+review the release scripts, and report what they find. Publication remains
+gated on the full test suite, checksum verification, packaged smoke testing,
+and explicit maintainer authorization. A later broadly advertised release remains gated on Apple
 Developer ID signing and notarization.
 
 ### Install
