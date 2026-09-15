@@ -33,7 +33,8 @@ similarity, resolution, prevention, or fix success and are not exposed to MCP.
 |---|---|
 | `GET /healthz` | loopback health response |
 | `GET /v1/developer-brief` | fixed, bounded 24-hour composition over sessions and reviewed Attention |
-| `GET /v1/user-insights` | bounded per-session Habits debriefs for the human operator, read from retained transcripts only |
+| `GET /v1/user-insights` | bounded Habits session list with any stored harness-written debriefs |
+| `GET /v1/user-insights/{session_key}/debrief` | one stored debrief; with `generate=1` runs the user's own installed harness first |
 | `GET /v1/sessions` | filtered, cursor-paginated local sessions |
 | `GET /v1/sessions/{id}` | one local session, metadata-only overview, and additive deterministic diagnosis |
 | `GET /v1/sessions/{id}/events` | cursor-paginated local timeline |
@@ -223,6 +224,34 @@ of them. A session is debriefed only when its transcript coverage is
 most 10,000 turns of its own session; longer sessions are reported under
 `coverage.turns_truncated`.
 
+Each session carries `debrief_status` (`missing`, `ready`, or `stale`) and a
+nullable `debrief`: the record written by the user's own installed Claude Code
+or Codex for that session. The top-level `harness` object reports whether such
+a harness is installed and which one.
+
+`GET /v1/user-insights/{session_key}/debrief` returns the stored debrief
+(`404` when none exists). With `generate=1` it first builds a scrubbed,
+bounded evidence packet from that one session (user messages, condensed
+assistant text, collapsed tool-call runs, failing check output, timings, and
+per-turn cost), runs the installed harness with a fixed instruction prompt and
+JSON schema, sanitizes the output against the packet, stores it encrypted, and
+returns it. `refresh=1` regenerates even when a current debrief exists. Any
+other parameter returns the standard `400` problem. Generation can take
+minutes and is only triggered by an explicit browser action or `belay
+analyze`. Fixed problems: `503 belay.local/habits-harness-unavailable`,
+`409 belay.local/habits-session-not-ready`, `502
+belay.local/habits-generation-failed`, and `504
+belay.local/habits-generation-timeout`.
+
+A debrief holds `headline`, `task_summary`, ordered `phases` with a verdict
+each, one to five `insights` (kind, title, what_you_did, what_it_cost,
+ideal_path, say_this_instead, evidence_turns, confidence), `keep_doing`,
+`prompt_length_read`, and `next_session_opener`, plus provenance (`harness`,
+`model`, `prompt_version`, `input_hash`, `generated_at`) and any
+`sanitization` notes. Evidence turn references are validated against the
+packet; unknown references are dropped. The raw project identity is stripped
+before the record leaves the read model.
+
 Habits is deliberately separate from issues, Attention, the Report, Mission
 Packs, and experience learning:
 
@@ -230,7 +259,8 @@ Packs, and experience learning:
 - its only comparison (`baseline`) is against the same developer's other
   complete sessions in the same project, and it is `null` below three such
   sessions;
-- it never writes, never feeds the agent, and is not exposed over MCP.
+- its only writes are its own encrypted debrief records;
+- it never feeds the agent and is not exposed over MCP.
 
 Each session carries `outcome`, a plain-language `verdict`, at most three
 `findings`, an optional ready-made `opener`, deterministic `measurements`, and

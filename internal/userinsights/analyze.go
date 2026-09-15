@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DoplexLabs/belay-engine/internal/canonical/model"
 	"github.com/DoplexLabs/belay-engine/internal/detection/transcriptissues"
 	"github.com/DoplexLabs/belay-engine/internal/issueintel"
 	"github.com/DoplexLabs/belay-engine/internal/transcript"
@@ -134,6 +135,18 @@ func Analyze(
 	turns []transcript.Turn,
 	config issueintel.ProjectConfig,
 ) Measurements {
+	return AnalyzeSession(session, turns, nil, config)
+}
+
+// AnalyzeSession is Analyze with the session's canonical Numbat events, which
+// carry file writes that some harnesses do not expose as edit tools (Codex
+// apply_patch, shell redirections). Events may be nil.
+func AnalyzeSession(
+	session transcript.Session,
+	turns []transcript.Turn,
+	events []model.Event,
+	config issueintel.ProjectConfig,
+) Measurements {
 	result := Measurements{
 		Compactions: session.CompactionSummaryCount,
 		CostUSD:     copyFloat(session.TotalCostUSD),
@@ -160,12 +173,30 @@ func Analyze(
 		}
 	}
 
+	mutationCalls := make(map[string]bool)
+	unmatchedMutations := 0
+	var firstMutationEvent *time.Time
+	for _, event := range events {
+		if event.Observation.Type != "file.write" && event.Observation.Type != "file.delete" {
+			continue
+		}
+		if !event.OccurredAt.IsZero() && (firstMutationEvent == nil || event.OccurredAt.Before(*firstMutationEvent)) {
+			at := event.OccurredAt
+			firstMutationEvent = &at
+		}
+		if event.Observation.Details != nil && strings.TrimSpace(event.Observation.Details.ToolCallID) != "" {
+			mutationCalls[strings.TrimSpace(event.Observation.Details.ToolCallID)] = true
+		} else {
+			unmatchedMutations++
+		}
+	}
 	var firstChange *time.Time
 	var firstVerification *time.Time
 	var planningCost float64
 	planningCostKnown := false
 	firstPromptSeen := false
-	for index, turn := range turns {
+	previousWasBehavior := false
+	for _, turn := range turns {
 		switch turn.Role {
 		case transcript.RoleUser:
 			text := strings.TrimSpace(turn.Payload.Text)
@@ -183,18 +214,22 @@ func Analyze(
 			if firstChange == nil {
 				result.UserTurnsBeforeFirstChange++
 			}
-			if index > 0 &&
-				behaviorRole(turns[index-1].Role) &&
+			if previousWasBehavior &&
 				transcriptissues.HighConfidenceCorrectionMarker(text) != "" {
 				result.Corrections++
 				if firstVerification == nil {
 					result.CorrectionsBeforeFirstVerification++
 				}
 			}
+			previousWasBehavior = false
 		case transcript.RoleAssistant:
 			result.AssistantTurns++
+			previousWasBehavior = true
+		case transcript.RoleToolResult:
+			previousWasBehavior = true
 		case transcript.RoleToolCall:
-			if len(transcriptissues.ExtractEditedFiles(turn)) > 0 {
+			previousWasBehavior = true
+			if len(editedFilesForTurn(turn)) > 0 || mutationCalls[strings.TrimSpace(turn.Payload.ToolCallID)] {
 				result.FileChangeTurns++
 				if firstChange == nil {
 					at := turn.OccurredAt
@@ -233,6 +268,12 @@ func Analyze(
 		}
 	}
 
+	if unmatchedMutations > 0 && result.FileChangeTurns == 0 {
+		result.FileChangeTurns = unmatchedMutations
+		if firstChange == nil && firstMutationEvent != nil {
+			firstChange = firstMutationEvent
+		}
+	}
 	result.DurationMS = sessionDuration(session, turns)
 	result.FirstChangeAt = firstChange
 	result.FirstVerificationAt = firstVerification

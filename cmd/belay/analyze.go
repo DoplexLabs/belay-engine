@@ -27,6 +27,20 @@ var (
 			localapp.RunInstalledSemanticHarness,
 		)
 	}
+	runHabitDebriefs = func(
+		ctx context.Context,
+		store *local.Store,
+		harness localapp.SemanticHarness,
+	) (localapp.HabitAnalysisReport, error) {
+		service, err := localapp.NewHabitDebriefService(
+			store,
+			localapp.WithHabitDebriefPreferredHarness(string(harness)),
+		)
+		if err != nil {
+			return localapp.HabitAnalysisReport{}, err
+		}
+		return service.AnalyzeHabitSessionsOnce(ctx, 0)
+	}
 	runExperienceSemanticProjects = func(
 		ctx context.Context,
 		store *local.Store,
@@ -116,7 +130,13 @@ func runSemanticProjectAnalyses(
 	if ctx.Err() != nil {
 		return report, errors.Join(legacyErr, experienceErr, ctx.Err())
 	}
-	return report, errors.Join(legacyErr, experienceErr)
+	var habitErr error
+	if store != nil {
+		habitReport, err := runHabitDebriefs(ctx, store, harness)
+		report.Habits = &habitReport
+		habitErr = err
+	}
+	return report, errors.Join(legacyErr, experienceErr, habitErr)
 }
 
 func selectSemanticHarness(

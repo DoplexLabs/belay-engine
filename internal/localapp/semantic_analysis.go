@@ -90,23 +90,24 @@ type semanticRawHarnessResult struct {
 }
 
 type SemanticAnalysisReport struct {
-	Projects                     int      `json:"projects"`
-	Skipped                      int      `json:"skipped"`
-	Clusters                     int      `json:"clusters"`
-	Fixes                        int      `json:"fixes"`
-	SanitizedProjects            int      `json:"sanitized_projects"`
-	DroppedClusters              int      `json:"dropped_clusters"`
-	DroppedFixes                 int      `json:"dropped_fixes"`
-	ExperienceProjectsConsidered int      `json:"experience_projects_considered"`
-	ExperienceProjectsCompiled   int      `json:"experience_projects_compiled"`
-	ExperienceProjectsAnalyzed   int      `json:"experience_projects_analyzed"`
-	ExperienceProjectFailures    int      `json:"experience_project_failures"`
-	ExperienceFailureDetails     []string `json:"experience_failure_details,omitempty"`
-	ExperienceCandidatesInserted int      `json:"experience_candidates_inserted"`
-	ExperienceCandidatesReplayed int      `json:"experience_candidates_replayed"`
-	ExperienceProposals          int      `json:"experience_proposals"`
-	ExperienceRejections         int      `json:"experience_rejections"`
-	ExperienceDefers             int      `json:"experience_defers"`
+	Projects                     int                  `json:"projects"`
+	Skipped                      int                  `json:"skipped"`
+	Clusters                     int                  `json:"clusters"`
+	Fixes                        int                  `json:"fixes"`
+	SanitizedProjects            int                  `json:"sanitized_projects"`
+	DroppedClusters              int                  `json:"dropped_clusters"`
+	DroppedFixes                 int                  `json:"dropped_fixes"`
+	ExperienceProjectsConsidered int                  `json:"experience_projects_considered"`
+	ExperienceProjectsCompiled   int                  `json:"experience_projects_compiled"`
+	ExperienceProjectsAnalyzed   int                  `json:"experience_projects_analyzed"`
+	ExperienceProjectFailures    int                  `json:"experience_project_failures"`
+	ExperienceFailureDetails     []string             `json:"experience_failure_details,omitempty"`
+	ExperienceCandidatesInserted int                  `json:"experience_candidates_inserted"`
+	ExperienceCandidatesReplayed int                  `json:"experience_candidates_replayed"`
+	ExperienceProposals          int                  `json:"experience_proposals"`
+	ExperienceRejections         int                  `json:"experience_rejections"`
+	ExperienceDefers             int                  `json:"experience_defers"`
+	Habits                       *HabitAnalysisReport `json:"habits,omitempty"`
 }
 
 func (report *SemanticAnalysisReport) AddExperience(

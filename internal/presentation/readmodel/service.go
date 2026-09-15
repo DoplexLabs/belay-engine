@@ -116,6 +116,8 @@ type Service struct {
 	insightRepository         InsightRepository
 	reportRepository          UsageReportRepository
 	userInsightRepository     UserInsightRepository
+	habitDebriefRepository    HabitDebriefRepository
+	userInsightHarness        func() (string, bool)
 	initializationProvider    initialization.Provider
 	now                       func() time.Time
 }
