@@ -45,6 +45,20 @@ func (repository userInsightsHTTPRepository) QueryTranscriptTurns(
 func newUserInsightsTestServer(t *testing.T) *Server {
 	t.Helper()
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	service := readmodel.New(
+		testRepository{},
+		readmodel.WithClock(func() time.Time { return now }),
+		readmodel.WithTranscriptRepository(userInsightsHTTPFixture()),
+	)
+	server, err := New(service, "launch-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func userInsightsHTTPFixture() userInsightsHTTPRepository {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	start := now.Add(-time.Hour)
 	zero := 0
 	turn := func(index int, role transcript.Role, minute int) transcript.Turn {
@@ -80,31 +94,22 @@ func newUserInsightsTestServer(t *testing.T) *Server {
 	result.Payload.ToolCallID = "call-1"
 	result.Payload.ExitCode = &zero
 
-	service := readmodel.New(
-		testRepository{},
-		readmodel.WithClock(func() time.Time { return now }),
-		readmodel.WithTranscriptRepository(userInsightsHTTPRepository{
-			sessions: []transcript.Session{{
-				SessionKey:      "ses_http",
-				Agent:           "claude-code",
-				ProjectPath:     "/Users/private/project",
-				ProjectIdentity: "/Users/private/project",
-				StartedAt:       start,
-				EndedAt:         start.Add(30 * time.Minute),
-				WallDurationMS:  (30 * time.Minute).Milliseconds(),
-				Coverage:        transcript.CoverageComplete,
-				UserTurnCount:   2,
-			}},
-			turns: map[string][]transcript.Turn{
-				"ses_http": {prompt, edit, edit2, edit3, done, correction, check, result},
-			},
-		}),
-	)
-	server, err := New(service, "launch-secret")
-	if err != nil {
-		t.Fatal(err)
+	return userInsightsHTTPRepository{
+		sessions: []transcript.Session{{
+			SessionKey:      "ses_http",
+			Agent:           "claude-code",
+			ProjectPath:     "/Users/private/project",
+			ProjectIdentity: "/Users/private/project",
+			StartedAt:       start,
+			EndedAt:         start.Add(30 * time.Minute),
+			WallDurationMS:  (30 * time.Minute).Milliseconds(),
+			Coverage:        transcript.CoverageComplete,
+			UserTurnCount:   2,
+		}},
+		turns: map[string][]transcript.Turn{
+			"ses_http": {prompt, edit, edit2, edit3, done, correction, check, result},
+		},
 	}
-	return server
 }
 
 func TestUserInsightsRouteReturnsSafeDebriefs(t *testing.T) {

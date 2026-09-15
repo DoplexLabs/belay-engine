@@ -516,6 +516,8 @@
     habitsList: document.querySelector("#habits-list"),
     habitsAbout: document.querySelector("#habits-about"),
     habitsLimitations: document.querySelector("#habits-limitations"),
+    habitsWindow: document.querySelector("#habits-window"),
+    habitsDebriefAll: document.querySelector("#habits-debrief-all"),
     attentionListPane: document.querySelector("#attention-list-pane"),
     attentionModeIssues: document.querySelector("#attention-mode-issues"),
     attentionModeSafety: document.querySelector("#attention-mode-safety"),
@@ -2617,6 +2619,9 @@
     });
     elements.habitsRetry.addEventListener("click", () => {
       void loadUserInsights();
+    });
+    elements.habitsDebriefAll.addEventListener("click", () => {
+      void generateAllHabitsDebriefs();
     });
     elements.briefRetry.addEventListener("click", () => {
       void loadDeveloperBrief();
@@ -10377,6 +10382,9 @@
 
   const habitsErrorFallback =
     "Belay could not prepare your debriefs. Report, Patterns, and Sessions remain available.";
+  const habitsGenerating = new Set();
+  const habitsCardErrors = new Map();
+  let habitsBatchRunning = false;
 
   async function loadUserInsights() {
     const generation = ++state.habitsRequestGeneration;
@@ -10414,15 +10422,42 @@
       .filter(isRecord)
       .map((session) => ({
         ...session,
-        findings: Array.isArray(session.findings)
-          ? session.findings.filter(isRecord).slice(0, 3)
-          : [],
-        baseline: isRecord(session.baseline) ? session.baseline : null,
+        debrief: requireHabitsDebrief(session.debrief),
+        debrief_status: readText(session.debrief_status) || "missing",
       }));
     const limitations = Array.isArray(response.limitations)
       ? response.limitations.filter((note) => typeof note === "string" && note)
       : [];
-    return { ...response, sessions, limitations };
+    const harness = isRecord(response.harness)
+      ? { available: response.harness.available === true, name: readText(response.harness.name) }
+      : { available: false, name: "" };
+    return { ...response, sessions, limitations, harness };
+  }
+
+  function requireHabitsDebrief(value) {
+    if (!isRecord(value) || !isRecord(value.debrief)) return null;
+    const debrief = value.debrief;
+    if (!readText(debrief.headline)) return null;
+    return {
+      ...value,
+      debrief: {
+        ...debrief,
+        phases: Array.isArray(debrief.phases) ? debrief.phases.filter(isRecord).slice(0, 6) : [],
+        insights: Array.isArray(debrief.insights) ? debrief.insights.filter(isRecord).slice(0, 5) : [],
+        keep_doing: Array.isArray(debrief.keep_doing) ? debrief.keep_doing.filter(isRecord).slice(0, 3) : [],
+        prompt_length_read: isRecord(debrief.prompt_length_read) ? debrief.prompt_length_read : null,
+      },
+      sanitization: Array.isArray(value.sanitization)
+        ? value.sanitization.filter((note) => typeof note === "string")
+        : [],
+    };
+  }
+
+  function habitsHarnessLabel(name) {
+    const value = readText(name).toLowerCase();
+    if (value === "claude" || value === "claude-code") return "Claude Code";
+    if (value === "codex") return "Codex";
+    return "your agent";
   }
 
   function renderUserInsights() {
@@ -10436,20 +10471,34 @@
       state.habitsError || habitsErrorFallback;
     if (!insights) {
       elements.habitsStatus.textContent = "";
+      elements.habitsDebriefAll.hidden = true;
       return;
     }
     const count = insights.sessions.length;
+    const missing = insights.sessions.filter(
+      (session) => !session.debrief || session.debrief_status !== "ready",
+    );
     elements.habitsHeading.textContent =
       count === 0
         ? "No finished sessions to debrief yet"
         : count === 1
           ? "Your last session, debriefed"
           : `Your last ${count} sessions, debriefed`;
+    elements.habitsWindow.textContent = insights.harness.available
+      ? `Written by your own ${habitsHarnessLabel(insights.harness.name)} from your local history. Nothing is compared with other people.`
+      : "Belay writes each debrief with your own Claude Code or Codex. Install one to generate debriefs.";
     elements.habitsStatus.textContent = habitsCoverageText(insights.coverage);
     elements.habitsEmpty.hidden = count > 0;
+    elements.habitsDebriefAll.hidden = !insights.harness.available || missing.length === 0;
+    elements.habitsDebriefAll.disabled = habitsBatchRunning;
+    elements.habitsDebriefAll.textContent = habitsBatchRunning
+      ? "Debriefing…"
+      : missing.length === 1
+        ? "Debrief the remaining session"
+        : `Debrief all ${missing.length} remaining sessions`;
     const cards = document.createDocumentFragment();
     insights.sessions.forEach((session) => {
-      cards.appendChild(renderHabitsSession(session));
+      cards.appendChild(renderHabitsSession(session, insights.harness));
     });
     elements.habitsList.replaceChildren(cards);
     const notes = document.createDocumentFragment();
@@ -10464,7 +10513,7 @@
     const evaluated = Number(coverage.evaluated_sessions);
     const candidates = Number(coverage.candidate_sessions);
     if (!Number.isFinite(evaluated) || !Number.isFinite(candidates)) return "";
-    const parts = [`${evaluated} of ${candidates} recent sessions debriefed`];
+    const parts = [`${evaluated} of ${candidates} recent sessions shown`];
     const inProgress = Number(coverage.skipped_incomplete);
     if (Number.isFinite(inProgress) && inProgress > 0) {
       parts.push(`${inProgress} still in progress`);
@@ -10472,9 +10521,59 @@
     return parts.join(" · ");
   }
 
-  function renderHabitsSession(session) {
+  async function generateHabitsDebrief(sessionKey, refresh) {
+    const key = readText(sessionKey);
+    if (!key || habitsGenerating.has(key)) return false;
+    habitsGenerating.add(key);
+    habitsCardErrors.delete(key);
+    renderUserInsights();
+    try {
+      const path = `/v1/user-insights/${encodeURIComponent(key)}/debrief?generate=1${refresh ? "&refresh=1" : ""}`;
+      const response = await apiGet(path);
+      const record = isRecord(response) ? requireHabitsDebrief(response.data) : null;
+      if (!record) throw new Error("Local API returned an invalid debrief.");
+      if (state.userInsights) {
+        state.userInsights.sessions = state.userInsights.sessions.map((session) =>
+          readText(session.session_key) === key
+            ? { ...session, debrief: record, debrief_status: "ready" }
+            : session,
+        );
+      }
+      return true;
+    } catch (error) {
+      habitsCardErrors.set(
+        key,
+        customerErrorMessage(error, "Your harness did not return a debrief. Try again."),
+      );
+      return false;
+    } finally {
+      habitsGenerating.delete(key);
+      renderUserInsights();
+    }
+  }
+
+  async function generateAllHabitsDebriefs() {
+    if (habitsBatchRunning || !state.userInsights) return;
+    habitsBatchRunning = true;
+    renderUserInsights();
+    try {
+      const pending = state.userInsights.sessions
+        .filter((session) => !session.debrief || session.debrief_status !== "ready")
+        .map((session) => readText(session.session_key));
+      for (const key of pending) {
+        if (state.activeView !== "habits") break;
+        await generateHabitsDebrief(key, false);
+      }
+    } finally {
+      habitsBatchRunning = false;
+      renderUserInsights();
+    }
+  }
+
+  function renderHabitsSession(session, harness) {
+    const key = readText(session.session_key);
     const card = createElement("article", "habits-card");
-    card.dataset.sessionKey = readText(session.session_key);
+    card.dataset.sessionKey = key;
     const header = createElement("header", "habits-card-header");
     const identity = createElement("div");
     identity.appendChild(
@@ -10499,96 +10598,316 @@
       ),
     );
     card.appendChild(header);
-    card.appendChild(createElement("p", "habits-verdict", readText(session.verdict)));
-    if (!session.findings.length) {
-      card.appendChild(
-        createElement("p", "habits-quiet", "Nothing stood out in this session."),
+
+    const generating = habitsGenerating.has(key);
+    const record = session.debrief;
+    if (generating) {
+      const wait = createElement("div", "habits-generating");
+      wait.appendChild(createElement("span", "spinner"));
+      wait.appendChild(
+        createElement(
+          "p",
+          "",
+          `Your ${habitsHarnessLabel(harness.name)} is reading this session. This usually takes one to three minutes.`,
+        ),
       );
+      card.appendChild(wait);
+      return card;
     }
-    session.findings.forEach((finding) => {
-      card.appendChild(renderHabitsFinding(finding));
-    });
-    const opener = readText(session.opener);
-    if (opener) {
-      const block = createElement("div", "habits-opener");
-      block.appendChild(
-        createElement("h4", "", "Ready-made opening for your next session"),
+    const cardError = habitsCardErrors.get(key);
+    if (cardError) {
+      card.appendChild(createElement("p", "habits-card-error", cardError));
+    }
+    if (record) {
+      renderHabitsDebrief(card, session, record, harness);
+      return card;
+    }
+    card.appendChild(createElement("p", "habits-quick", habitsQuickFacts(session)));
+    const actions = createElement("div", "habits-actions");
+    if (harness.available) {
+      const button = createElement(
+        "button",
+        "primary-button",
+        `Debrief this session with ${habitsHarnessLabel(harness.name)}`,
       );
-      block.appendChild(createElement("p", "habits-opener-text", opener));
-      const actions = createElement("div", "habits-actions");
-      const copy = createElement("button", "secondary-button", "Copy opening");
-      copy.type = "button";
-      copy.addEventListener("click", () => {
-        void copyText(opener, copy);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        void generateHabitsDebrief(key, false);
       });
-      actions.appendChild(copy);
-      block.appendChild(actions);
-      card.appendChild(block);
+      actions.appendChild(button);
+    } else {
+      actions.appendChild(
+        createElement(
+          "p",
+          "habits-quiet",
+          "Install Claude Code or Codex on this machine to write a debrief for this session.",
+        ),
+      );
     }
+    card.appendChild(actions);
     return card;
   }
 
-  function renderHabitsFinding(finding) {
-    const tone = readText(finding.tone) === "keep" ? "keep" : "improve";
-    const block = createElement("section", `habits-finding habits-finding-${tone}`);
-    const heading = createElement("h4");
-    heading.appendChild(createElement("span", "", readText(finding.title)));
-    const cost = habitsCostLabel(finding);
-    if (cost) heading.appendChild(createElement("span", "habits-cost", cost));
-    block.appendChild(heading);
-    block.appendChild(createElement("p", "", readText(finding.summary)));
-    const next = createElement("p", "habits-next");
-    next.appendChild(
-      createElement("strong", "", tone === "keep" ? "Keep it up: " : "Next time: "),
-    );
-    next.appendChild(document.createTextNode(readText(finding.next_time)));
-    block.appendChild(next);
-    const evidence = Array.isArray(finding.evidence)
-      ? finding.evidence.filter((line) => typeof line === "string" && line.trim())
-      : [];
-    if (evidence.length) {
-      const details = createElement("details", "habits-evidence");
-      details.appendChild(createElement("summary", "", "How Belay knows"));
+  function habitsQuickFacts(session) {
+    const m = isRecord(session.measurements) ? session.measurements : {};
+    const parts = [];
+    const user = Number(m.user_turns);
+    if (Number.isFinite(user) && user > 0) parts.push(`${user} messages from you`);
+    const edits = Number(m.file_change_turns);
+    parts.push(edits > 0 ? `${edits} file edits` : "no file edits seen");
+    const checks = Number(m.verification_runs);
+    parts.push(checks > 0 ? `${checks} checks run` : "no checks run");
+    const corrections = Number(m.corrections);
+    if (Number.isFinite(corrections) && corrections > 0) parts.push(`${corrections} corrections`);
+    return `${parts.join(" · ")}. Not debriefed yet.`;
+  }
+
+  function renderHabitsDebrief(card, session, record, harness) {
+    const debrief = record.debrief;
+    if (session.debrief_status === "stale") {
+      card.appendChild(
+        createElement(
+          "p",
+          "habits-stale",
+          "This debrief was written with an older version of Belay's prompt. Regenerate it for the current one.",
+        ),
+      );
+    }
+    card.appendChild(createElement("h4", "habits-headline", readText(debrief.headline)));
+    if (readText(debrief.task_summary)) {
+      card.appendChild(createElement("p", "habits-task", readText(debrief.task_summary)));
+    }
+    if (debrief.phases.length) {
+      card.appendChild(renderHabitsPhases(debrief.phases, session));
+    }
+    debrief.insights.forEach((insight, index) => {
+      card.appendChild(renderHabitsInsight(insight, index + 1));
+    });
+    if (debrief.prompt_length_read) {
+      card.appendChild(renderHabitsPromptLength(debrief.prompt_length_read));
+    }
+    if (debrief.keep_doing.length) {
+      const keep = createElement("section", "habits-keep");
+      keep.appendChild(createElement("h5", "", "What you did well"));
       const list = createElement("ul");
-      evidence.forEach((line) => {
-        list.appendChild(createElement("li", "", line));
+      debrief.keep_doing.forEach((item) => {
+        const line = createElement("li");
+        line.appendChild(createElement("strong", "", readText(item.title)));
+        if (readText(item.why)) line.appendChild(document.createTextNode(` ${readText(item.why)}`));
+        list.appendChild(line);
       });
+      keep.appendChild(list);
+      card.appendChild(keep);
+    }
+    const opener = readText(debrief.next_session_opener);
+    if (opener) {
+      const block = createElement("div", "habits-opener");
+      block.appendChild(createElement("h5", "", "Open your next session in this project with"));
+      block.appendChild(createElement("p", "habits-opener-text", opener));
+      block.appendChild(habitsCopyActions(opener, "Copy opening"));
+      card.appendChild(block);
+    }
+    const footer = createElement("footer", "habits-provenance");
+    const generated = parseDate(record.generated_at);
+    const provenance = [
+      `Written by your ${habitsHarnessLabel(record.harness)}`,
+      readText(record.model),
+      generated ? formatRelativeTime(generated) : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    footer.appendChild(createElement("span", "", provenance));
+    if (harness.available) {
+      const again = createElement("button", "text-button", "Regenerate");
+      again.type = "button";
+      again.addEventListener("click", () => {
+        void generateHabitsDebrief(readText(session.session_key), true);
+      });
+      footer.appendChild(again);
+    }
+    card.appendChild(footer);
+    if (record.sanitization.length) {
+      const details = createElement("details", "habits-evidence");
+      details.appendChild(createElement("summary", "", "What Belay adjusted"));
+      const list = createElement("ul");
+      record.sanitization.forEach((note) => list.appendChild(createElement("li", "", note)));
       details.appendChild(list);
-      if (readText(finding.evidence_class) === "judgment") {
-        details.appendChild(
-          createElement(
-            "p",
-            "habits-judgment",
-            "This one is partly a judgment call. If the time was spent on purpose, ignore it.",
-          ),
-        );
+      card.appendChild(details);
+    }
+  }
+
+  function renderHabitsPhases(phases, session) {
+    const block = createElement("section", "habits-phases");
+    const bar = createElement("div", "habits-phase-bar");
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", "How the session's time was spent");
+    const total = phases.reduce((sum, phase) => {
+      const span = Number(phase.to_minute) - Number(phase.from_minute);
+      return sum + (Number.isFinite(span) && span > 0 ? span : 0);
+    }, 0);
+    const list = createElement("ol", "habits-phase-list");
+    phases.forEach((phase) => {
+      const from = Number(phase.from_minute);
+      const to = Number(phase.to_minute);
+      const span = Number.isFinite(to - from) && to > from ? to - from : 0;
+      const verdict = habitsPhaseVerdict(phase.verdict);
+      const segment = createElement("span", `habits-phase-segment habits-phase-${verdict}`);
+      segment.style.flexGrow = String(total > 0 ? Math.max(span, total * 0.03) : 1);
+      segment.title = `${readText(phase.label)} · ${habitsMinutes(span)}`;
+      bar.appendChild(segment);
+      const item = createElement("li", `habits-phase-item habits-phase-${verdict}`);
+      const head = createElement("div", "habits-phase-head");
+      head.appendChild(createElement("strong", "", readText(phase.label)));
+      head.appendChild(
+        createElement("span", "habits-phase-time", `${habitsMinutes(span)} · ${habitsPhaseLabel(verdict)}`),
+      );
+      item.appendChild(head);
+      if (readText(phase.what_happened)) {
+        item.appendChild(createElement("p", "", readText(phase.what_happened)));
       }
-      block.appendChild(details);
+      list.appendChild(item);
+    });
+    block.appendChild(bar);
+    block.appendChild(list);
+    return block;
+  }
+
+  function renderHabitsInsight(insight, number) {
+    const block = createElement("section", `habits-insight habits-insight-${habitsInsightKind(insight.kind)}`);
+    const heading = createElement("h5");
+    heading.appendChild(createElement("span", "habits-insight-number", String(number)));
+    heading.appendChild(createElement("span", "", readText(insight.title)));
+    heading.appendChild(createElement("span", "habits-kind", habitsInsightLabel(insight.kind)));
+    block.appendChild(heading);
+    const rows = [
+      ["What you did", insight.what_you_did],
+      ["What it cost", insight.what_it_cost],
+      ["What an expert would have done", insight.ideal_path],
+    ];
+    rows.forEach(([label, value]) => {
+      const text = readText(value);
+      if (!text) return;
+      const row = createElement("div", "habits-row");
+      row.appendChild(createElement("span", "habits-row-label", label));
+      row.appendChild(createElement("p", "", text));
+      block.appendChild(row);
+    });
+    const message = readText(insight.say_this_instead);
+    if (message) {
+      const quote = createElement("div", "habits-say");
+      quote.appendChild(createElement("span", "habits-row-label", "Say this instead"));
+      quote.appendChild(createElement("p", "habits-say-text", message));
+      quote.appendChild(habitsCopyActions(message, "Copy message"));
+      block.appendChild(quote);
+    }
+    const turns = Array.isArray(insight.evidence_turns)
+      ? insight.evidence_turns.filter((value) => Number.isFinite(Number(value)))
+      : [];
+    const confidence = Number(insight.confidence);
+    const foot = [];
+    if (turns.length) foot.push(`Based on turns ${turns.join(", ")}`);
+    if (Number.isFinite(confidence) && confidence > 0) {
+      foot.push(`${Math.round(confidence * 100)}% confident`);
+    }
+    if (foot.length) block.appendChild(createElement("p", "habits-insight-foot", foot.join(" · ")));
+    return block;
+  }
+
+  function renderHabitsPromptLength(read) {
+    const block = createElement("section", "habits-length");
+    const verdict = readText(read.verdict);
+    const label =
+      verdict === "over_specified"
+        ? "Your first message said more than the agent needed"
+        : verdict === "under_specified"
+          ? "Your first message left out what the agent needed"
+          : "Your first message was about the right length";
+    block.appendChild(createElement("h5", "", label));
+    if (readText(read.explanation)) {
+      block.appendChild(createElement("p", "", readText(read.explanation)));
+    }
+    const rewrite = readText(read.rewrite);
+    if (rewrite && verdict !== "about_right") {
+      const quote = createElement("div", "habits-say");
+      quote.appendChild(createElement("span", "habits-row-label", "The version that would have worked"));
+      quote.appendChild(createElement("p", "habits-say-text", rewrite));
+      quote.appendChild(habitsCopyActions(rewrite, "Copy rewrite"));
+      block.appendChild(quote);
     }
     return block;
   }
 
-  function habitsCostLabel(finding) {
-    const parts = [];
-    const milliseconds = Number(finding.time_cost_ms);
-    if (Number.isFinite(milliseconds) && milliseconds >= 60000) {
-      parts.push(`~${habitsDuration(milliseconds)}`);
+  function habitsCopyActions(value, label) {
+    const actions = createElement("div", "habits-actions");
+    const copy = createElement("button", "secondary-button", label);
+    copy.type = "button";
+    copy.addEventListener("click", () => {
+      void copyText(value, copy);
+    });
+    actions.appendChild(copy);
+    return actions;
+  }
+
+  function habitsPhaseVerdict(value) {
+    const verdict = readText(value);
+    return ["productive", "partly_wasted", "wasted", "unclear"].includes(verdict)
+      ? verdict.replace(/_/g, "-")
+      : "unclear";
+  }
+
+  function habitsPhaseLabel(verdict) {
+    switch (verdict) {
+      case "productive":
+        return "productive";
+      case "partly-wasted":
+        return "partly wasted";
+      case "wasted":
+        return "wasted";
+      default:
+        return "unclear";
     }
-    const dollars = Number(finding.dollar_cost);
-    if (Number.isFinite(dollars) && dollars >= 0.5) {
-      parts.push(`~${formatReportDollars(dollars)}`);
+  }
+
+  function habitsInsightKind(value) {
+    const kind = readText(value);
+    return ["prompting", "scoping", "verification", "delegation", "context", "workflow", "review"].includes(kind)
+      ? kind
+      : "workflow";
+  }
+
+  function habitsInsightLabel(value) {
+    switch (habitsInsightKind(value)) {
+      case "prompting":
+        return "Prompting";
+      case "scoping":
+        return "Scoping";
+      case "verification":
+        return "Verification";
+      case "delegation":
+        return "Delegation";
+      case "context":
+        return "Context";
+      case "review":
+        return "Review";
+      default:
+        return "Workflow";
     }
-    return parts.join(" · ");
+  }
+
+  function habitsMinutes(value) {
+    const minutes = Number(value);
+    if (!Number.isFinite(minutes) || minutes <= 0) return "under a minute";
+    const rounded = Math.round(minutes);
+    if (rounded < 1) return "under a minute";
+    const hours = Math.floor(rounded / 60);
+    if (hours) return `${hours}h ${rounded % 60}m`;
+    return `${rounded}m`;
   }
 
   function habitsDuration(value) {
     const milliseconds = Number(value);
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "";
-    const minutes = Math.round(milliseconds / 60000);
-    if (minutes < 1) return "under a minute";
-    const hours = Math.floor(minutes / 60);
-    if (hours) return `${hours}h ${minutes % 60}m`;
-    return `${minutes}m`;
+    return habitsMinutes(milliseconds / 60000);
   }
 
   function habitsDollars(value) {
@@ -10606,7 +10925,7 @@
       case "unverified_changes":
         return "Unchecked changes";
       case "no_changes":
-        return "No file changes";
+        return "No file changes seen";
       default:
         return "Outcome not reported";
     }

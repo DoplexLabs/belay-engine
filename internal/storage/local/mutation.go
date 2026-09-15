@@ -35,6 +35,7 @@ const (
 	mutationMissionPackReceipt     mutationPurpose = "mission_pack_receipt"
 	mutationExperienceImpact       mutationPurpose = "experience_impact"
 	mutationTrajectoryDerivation   mutationPurpose = "trajectory_derivation"
+	mutationHabitDebrief           mutationPurpose = "habit_debrief"
 	guardedSQLiteDriverName                        = "belay_local_sqlite"
 )
 
@@ -164,7 +165,46 @@ func initializeMutationConnection(
 			return errors.New("install connection-local trajectory derivation mutation guards")
 		}
 	}
+	habitDebriefReady, err := habitDebriefMutationTablesReady(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if habitDebriefReady {
+		if _, err := connection.ExecContext(
+			ctx,
+			habitDebriefMutationTriggerSQL,
+			nil,
+		); err != nil {
+			return errors.New("install connection-local habit debrief mutation guards")
+		}
+	}
 	return nil
+}
+
+func habitDebriefMutationTablesReady(
+	ctx context.Context,
+	connection driver.QueryerContext,
+) (bool, error) {
+	rows, err := connection.QueryContext(ctx, `
+		SELECT COUNT(*)
+		FROM main.sqlite_schema
+		WHERE type = 'table'
+			AND name = 'habit_debriefs'`,
+		nil,
+	)
+	if err != nil {
+		return false, errors.New("inspect habit debrief mutation schema")
+	}
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	if err := rows.Next(values); err != nil {
+		return false, errors.New("inspect habit debrief mutation schema")
+	}
+	count, ok := values[0].(int64)
+	if !ok {
+		return false, errors.New("inspect habit debrief mutation schema")
+	}
+	return count == 1, nil
 }
 
 func mutationTablesReady(
@@ -521,6 +561,9 @@ func (s *Store) installMutationGuards(ctx context.Context) error {
 	); err != nil {
 		return errors.New("install connection-local trajectory derivation mutation guards")
 	}
+	if _, err := connection.ExecContext(ctx, habitDebriefMutationTriggerSQL); err != nil {
+		return errors.New("install connection-local habit debrief mutation guards")
+	}
 	return nil
 }
 
@@ -577,7 +620,8 @@ const mutationAuthorizationTableSQL = `
 					'mission_pack_preview',
 					'mission_pack_receipt',
 					'experience_impact',
-					'trajectory_derivation'
+					'trajectory_derivation',
+					'habit_debrief'
 				)
 			)
 	) WITHOUT ROWID;
@@ -1590,4 +1634,35 @@ const issueSummaryMutationTriggerSQL = `
 	BEFORE DELETE ON main.issue_summary_metadata
 	BEGIN
 		SELECT RAISE(ABORT, 'issue summary metadata cannot be deleted');
+	END;`
+
+const habitDebriefMutationTriggerSQL = `
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_habit_debriefs_insert
+	BEFORE INSERT ON main.habit_debriefs
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'habit_debrief'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'habit debrief insertion is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_habit_debriefs_update
+	BEFORE UPDATE ON main.habit_debriefs
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose = 'habit_debrief'
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'habit debrief mutation is not authorized');
+	END;
+
+	CREATE TEMP TRIGGER IF NOT EXISTS belay_guard_habit_debriefs_delete
+	BEFORE DELETE ON main.habit_debriefs
+	WHEN NOT EXISTS (
+		SELECT 1 FROM belay_mutation_authorization
+		WHERE purpose IN ('habit_debrief', 'transcript_retention', 'retention_prune')
+	)
+	BEGIN
+		SELECT RAISE(ABORT, 'habit debrief deletion is not authorized');
 	END;`

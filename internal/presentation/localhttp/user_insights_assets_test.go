@@ -23,6 +23,7 @@ func TestHabitsBrowserShellIsSeparateAndHiddenByDefault(t *testing.T) {
 		`id="habits-list"`,
 		`id="habits-about" hidden`,
 		`id="habits-limitations"`,
+		`id="habits-debrief-all" type="button" hidden`,
 		`Nothing here is compared with other people, and nothing here is sent to your agent.`,
 	} {
 		if !strings.Contains(index, required) {
@@ -60,13 +61,18 @@ func TestHabitsBrowserContractReadsOnlyItsOwnRoute(t *testing.T) {
 		`await apiGet("/v1/user-insights")`,
 		`"belay.user-insights.v1"`,
 		`.slice(0, 25)`,
-		`session.findings.filter(isRecord).slice(0, 3)`,
+		`debrief.insights.filter(isRecord).slice(0, 5)`,
 		`if (state.activeView === "habits") {`,
-		`"How Belay knows"`,
-		`"Ready-made opening for your next session"`,
+		`/debrief?generate=1`,
+		`encodeURIComponent(key)`,
+		`"Say this instead"`,
+		`"What an expert would have done"`,
 		`"Copy opening"`,
-		`readText(finding.evidence_class) === "judgment"`,
+		`"Copy message"`,
+		`"Regenerate"`,
+		`session.debrief_status === "stale"`,
 		`"Outcome not reported"`,
+		`Install Claude Code or Codex on this machine`,
 	} {
 		if !strings.Contains(app, required) {
 			t.Errorf("Habits browser contract is missing %q", required)
@@ -98,9 +104,10 @@ func TestHabitsBrowserContractReadsOnlyItsOwnRoute(t *testing.T) {
 	}
 	for _, required := range []string{
 		".habits-card {",
-		".habits-finding-keep {",
+		".habits-insight {",
+		".habits-say {",
+		".habits-phase-bar {",
 		".habits-opener {",
-		".habits-evidence summary {",
 	} {
 		if !strings.Contains(styles, required) {
 			t.Errorf("Habits styles are missing %q", required)

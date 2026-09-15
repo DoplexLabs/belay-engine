@@ -951,12 +951,18 @@ func newLocalHTTPServer(
 	if err != nil {
 		return nil, err
 	}
+	habits, err := localapp.NewHabitDebriefService(store)
+	if err != nil {
+		return nil, err
+	}
 	readOptions := []readmodel.Option{
 		readmodel.WithIssueRepository(store),
 		readmodel.WithIssueCursorCodec(store),
 		readmodel.WithFixMonitoringRepository(store),
 		readmodel.WithTranscriptRepository(store),
 		readmodel.WithUserInsightRepository(store),
+		readmodel.WithHabitDebriefRepository(store),
+		readmodel.WithUserInsightHarness(habits.Harness),
 		readmodel.WithCostIssueRepository(store),
 	}
 	if len(providers) > 0 && providers[0] != nil {
@@ -971,6 +977,7 @@ func newLocalHTTPServer(
 		localhttp.WithFixService(actions),
 		localhttp.WithCostIssueFixService(costFixes),
 		localhttp.WithMissionPackService(missionPacks),
+		localhttp.WithHabitDebriefService(habits),
 		localhttp.WithExperience(experience),
 	)
 }

@@ -1311,15 +1311,20 @@
                 <p class="eyebrow" id="habits-eyebrow">Belay Habits</p>
                 <h1 id="habits-heading" tabindex="-1">How you work with your agent</h1>
                 <p id="habits-window">
-                  Plain-language debriefs of your recent sessions, compared only with your own history
+                  Debriefs of your recent sessions, written by your own Claude Code or Codex from your local history
                 </p>
               </div>
-              <p
-                class="brief-status"
-                id="habits-status"
-                role="status"
-                aria-live="polite"
-              ></p>
+              <div class="habits-header-actions">
+                <p
+                  class="brief-status"
+                  id="habits-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+                <button class="primary-button" id="habits-debrief-all" type="button" hidden>
+                  Debrief all remaining sessions
+                </button>
+              </div>
             </header>
 
             <div class="brief-loading" id="habits-loading">
@@ -1341,7 +1346,7 @@
               <div class="brief-empty" id="habits-empty" hidden>
                 <p>No finished sessions to debrief yet</p>
                 <small>
-                  Belay debriefs a session once its transcript is complete and it has at least two of your messages.
+                  Belay can debrief a session once its transcript is complete and it has at least two of your messages.
                 </small>
               </div>
               <div class="habits-list" id="habits-list"></div>
@@ -1349,7 +1354,7 @@
                 <summary>About this data</summary>
                 <ul id="habits-limitations"></ul>
                 <p>
-                  Belay only reads your own encrypted local history. Nothing here is compared with other people, and nothing here is sent to your agent.
+                  Each debrief is written by the Claude Code or Codex installed on this machine, reading a scrubbed copy of one session from your encrypted local history. Nothing here is compared with other people, and nothing here is sent to your agent.
                 </p>
               </details>
             </div>
