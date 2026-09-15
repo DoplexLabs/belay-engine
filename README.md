@@ -10,8 +10,7 @@ proposed change to a project.
 
 This repository is MIT-licensed and developed in the open. Issues, design
 discussions, and pull requests are welcome; see `CONTRIBUTING.md` for the
-boundaries that keep Belay local-only and fail-open. Belay Teams is a separate
-product and is not included in this Local alpha.
+boundaries that keep Belay local-only and fail-open.
 
 ## Belay Local Developer Alpha
 
@@ -58,8 +57,8 @@ Alpha scope:
 
 Intel macOS builds remain possible for engineering validation, but Intel is not
 part of the alpha support claim until it passes the clean-machine checklist.
-Linux, Windows, Teams, enforcement, command execution, arbitrary MCP writes,
-and automatic remediation are out of scope.
+Linux, Windows, hosted services, enforcement, command execution, arbitrary MCP
+writes, and automatic remediation are out of scope.
 
 The Attention Inbox turns the private deterministic issue projection into a
 browser triage surface. It groups only exact compatible fingerprints, links
@@ -81,8 +80,8 @@ tag.
 
 Start with the current code and contracts, not historical design assumptions.
 Belay Local now deliberately retains secret-scrubbed full transcript content in
-its encrypted on-device store. Data minimization moves to a future Teams upload
-boundary. The current product direction is documented in
+its encrypted on-device store. Data minimization is deferred to any future
+upload boundary. The current product direction is documented in
 [`docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md`](docs/product/belay-product-bets-and-alpha-recommendation-2026-09-09.md).
 
 ### Repository boundaries
